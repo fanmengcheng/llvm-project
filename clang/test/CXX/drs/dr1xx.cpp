@@ -9,7 +9,7 @@ namespace dr100 { // dr100: yes
   B<"bar"> b; // expected-error {{does not refer to any declaration}}
 }
 
-namespace dr101 { // dr101: 3.5
+namespace dr101 { // dr101: yes
   extern "C" void dr101_f();
   typedef unsigned size_t;
   namespace X {
@@ -18,8 +18,6 @@ namespace dr101 { // dr101: 3.5
   }
   using X::dr101_f;
   using X::size_t;
-  extern "C" void dr101_f();
-  typedef unsigned size_t;
 }
 
 namespace dr102 { // dr102: yes
@@ -40,13 +38,13 @@ namespace dr102 { // dr102: yes
 namespace dr106 { // dr106: sup 540
   typedef int &r1;
   typedef r1 &r1;
-  typedef const r1 r1; // expected-warning {{has no effect}}
-  typedef const r1 &r1; // expected-warning {{has no effect}}
+  typedef const r1 r1;
+  typedef const r1 &r1;
 
   typedef const int &r2;
   typedef r2 &r2;
-  typedef const r2 r2; // expected-warning {{has no effect}}
-  typedef const r2 &r2; // expected-warning {{has no effect}}
+  typedef const r2 r2;
+  typedef const r2 &r2;
 }
 
 namespace dr107 { // dr107: yes
@@ -66,7 +64,7 @@ namespace dr108 { // dr108: yes
 namespace dr109 { // dr109: yes
   struct A { template<typename T> void f(T); };
   template<typename T> struct B : T {
-    using T::template f; // expected-error {{using declaration cannot refer to a template}}
+    using T::template f; // expected-error {{using declaration can not refer to a template}}
     void g() { this->f<int>(123); } // expected-error {{use 'template'}}
   };
 }
@@ -594,8 +592,6 @@ namespace dr155 { // dr155: dup 632
   struct S { int n; } s = { { 1 } }; // expected-warning {{braces around scalar initializer}}
 }
 
-// dr158 FIXME write codegen test
-
 namespace dr159 { // dr159: 3.5
   namespace X { void f(); }
   void f();
@@ -722,9 +718,9 @@ namespace dr169 { // dr169: yes
   };
   struct D : A<int>, B {
     using A<int>::n;
-    using B::C<int>; // expected-error {{using declaration cannot refer to a template specialization}}
-    using B::f<int>; // expected-error {{using declaration cannot refer to a template specialization}}
-    using B::n<int>; // expected-error {{using declaration cannot refer to a template specialization}}
+    using B::C<int>; // expected-error {{using declaration can not refer to a template specialization}}
+    using B::f<int>; // expected-error {{using declaration can not refer to a template specialization}}
+    using B::n<int>; // expected-error {{using declaration can not refer to a template specialization}}
   };
 }
 

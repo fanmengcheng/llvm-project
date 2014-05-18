@@ -62,7 +62,7 @@ namespace clang {
     Stmt** I;
   public:
     ExprIterator(Stmt** i) : I(i) {}
-    ExprIterator() : I(nullptr) {}
+    ExprIterator() : I(0) {}
     ExprIterator& operator++() { ++I; return *this; }
     ExprIterator operator-(size_t i) { return I-i; }
     ExprIterator operator+(size_t i) { return I+i; }
@@ -81,7 +81,7 @@ namespace clang {
     const Stmt * const *I;
   public:
     ConstExprIterator(const Stmt * const *i) : I(i) {}
-    ConstExprIterator() : I(nullptr) {}
+    ConstExprIterator() : I(0) {}
     ConstExprIterator& operator++() { ++I; return *this; }
     ConstExprIterator operator+(size_t i) const { return I+i; }
     ConstExprIterator operator-(size_t i) const { return I-i; }
@@ -485,13 +485,7 @@ public:
 
   typedef DeclGroupRef::iterator decl_iterator;
   typedef DeclGroupRef::const_iterator const_decl_iterator;
-  typedef llvm::iterator_range<decl_iterator> decl_range;
-  typedef llvm::iterator_range<const_decl_iterator> decl_const_range;
 
-  decl_range decls() { return decl_range(decl_begin(), decl_end()); }
-  decl_const_range decls() const {
-    return decl_const_range(decl_begin(), decl_end());
-  }
   decl_iterator decl_begin() { return DG.begin(); }
   decl_iterator decl_end() { return DG.end(); }
   const_decl_iterator decl_begin() const { return DG.begin(); }
@@ -555,13 +549,13 @@ public:
 
   // \brief Build an empty compound statement with a location.
   explicit CompoundStmt(SourceLocation Loc)
-    : Stmt(CompoundStmtClass), Body(nullptr), LBracLoc(Loc), RBracLoc(Loc) {
+    : Stmt(CompoundStmtClass), Body(0), LBracLoc(Loc), RBracLoc(Loc) {
     CompoundStmtBits.NumStmts = 0;
   }
 
   // \brief Build an empty compound statement.
   explicit CompoundStmt(EmptyShell Empty)
-    : Stmt(CompoundStmtClass, Empty), Body(nullptr) {
+    : Stmt(CompoundStmtClass, Empty), Body(0) {
     CompoundStmtBits.NumStmts = 0;
   }
 
@@ -571,12 +565,9 @@ public:
   unsigned size() const { return CompoundStmtBits.NumStmts; }
 
   typedef Stmt** body_iterator;
-  typedef llvm::iterator_range<body_iterator> body_range;
-
-  body_range body() { return body_range(body_begin(), body_end()); }
   body_iterator body_begin() { return Body; }
   body_iterator body_end() { return Body + size(); }
-  Stmt *body_back() { return !body_empty() ? Body[size()-1] : nullptr; }
+  Stmt *body_back() { return !body_empty() ? Body[size()-1] : 0; }
 
   void setLastStmt(Stmt *S) {
     assert(!body_empty() && "setLastStmt");
@@ -584,16 +575,9 @@ public:
   }
 
   typedef Stmt* const * const_body_iterator;
-  typedef llvm::iterator_range<const_body_iterator> body_const_range;
-
-  body_const_range body() const {
-    return body_const_range(body_begin(), body_end());
-  }
   const_body_iterator body_begin() const { return Body; }
   const_body_iterator body_end() const { return Body + size(); }
-  const Stmt *body_back() const {
-    return !body_empty() ? Body[size() - 1] : nullptr;
-  }
+  const Stmt *body_back() const { return !body_empty() ? Body[size()-1] : 0; }
 
   typedef std::reverse_iterator<body_iterator> reverse_body_iterator;
   reverse_body_iterator body_rbegin() {
@@ -628,11 +612,11 @@ public:
 
   // Iterators
   child_range children() {
-    return child_range(Body, Body + CompoundStmtBits.NumStmts);
+    return child_range(&Body[0], &Body[0]+CompoundStmtBits.NumStmts);
   }
 
   const_child_range children() const {
-    return child_range(Body, Body + CompoundStmtBits.NumStmts);
+    return child_range(&Body[0], &Body[0]+CompoundStmtBits.NumStmts);
   }
 };
 
@@ -646,11 +630,10 @@ protected:
   SourceLocation ColonLoc;
 
   SwitchCase(StmtClass SC, SourceLocation KWLoc, SourceLocation ColonLoc)
-    : Stmt(SC), NextSwitchCase(nullptr), KeywordLoc(KWLoc), ColonLoc(ColonLoc) {
-  }
+    : Stmt(SC), NextSwitchCase(0), KeywordLoc(KWLoc), ColonLoc(ColonLoc) {}
 
   SwitchCase(StmtClass SC, EmptyShell)
-    : Stmt(SC), NextSwitchCase(nullptr) {}
+    : Stmt(SC), NextSwitchCase(0) {}
 
 public:
   const SwitchCase *getNextSwitchCase() const { return NextSwitchCase; }
@@ -687,7 +670,7 @@ public:
   CaseStmt(Expr *lhs, Expr *rhs, SourceLocation caseLoc,
            SourceLocation ellipsisLoc, SourceLocation colonLoc)
     : SwitchCase(CaseStmtClass, caseLoc, colonLoc) {
-    SubExprs[SUBSTMT] = nullptr;
+    SubExprs[SUBSTMT] = 0;
     SubExprs[LHS] = reinterpret_cast<Stmt*>(lhs);
     SubExprs[RHS] = reinterpret_cast<Stmt*>(rhs);
     EllipsisLoc = ellipsisLoc;
@@ -869,8 +852,7 @@ class IfStmt : public Stmt {
 
 public:
   IfStmt(const ASTContext &C, SourceLocation IL, VarDecl *var, Expr *cond,
-         Stmt *then, SourceLocation EL = SourceLocation(),
-         Stmt *elsev = nullptr);
+         Stmt *then, SourceLocation EL = SourceLocation(), Stmt *elsev = 0);
 
   /// \brief Build an empty if/then/else statement
   explicit IfStmt(EmptyShell Empty) : Stmt(IfStmtClass, Empty) { }
@@ -1338,8 +1320,7 @@ class ReturnStmt : public Stmt {
 
 public:
   ReturnStmt(SourceLocation RL)
-    : Stmt(ReturnStmtClass), RetExpr(nullptr), RetLoc(RL),
-      NRVOCandidate(nullptr) {}
+    : Stmt(ReturnStmtClass), RetExpr(0), RetLoc(RL), NRVOCandidate(0) { }
 
   ReturnStmt(SourceLocation RL, Expr *E, const VarDecl *NRVOCandidate)
     : Stmt(ReturnStmtClass), RetExpr((Stmt*) E), RetLoc(RL),
@@ -1408,7 +1389,7 @@ protected:
 public:
   /// \brief Build an empty inline-assembly statement.
   explicit AsmStmt(StmtClass SC, EmptyShell Empty) :
-    Stmt(SC, Empty), Exprs(nullptr) { }
+    Stmt(SC, Empty), Exprs(0) { }
 
   SourceLocation getAsmLoc() const { return AsmLoc; }
   void setAsmLoc(SourceLocation L) { AsmLoc = L; }
@@ -1536,7 +1517,7 @@ public:
 
   /// \brief Build an empty inline-assembly statement.
   explicit GCCAsmStmt(EmptyShell Empty) : AsmStmt(GCCAsmStmtClass, Empty),
-    Constraints(nullptr), Clobbers(nullptr), Names(nullptr) { }
+    Constraints(0), Clobbers(0), Names(0) { }
 
   SourceLocation getRParenLoc() const { return RParenLoc; }
   void setRParenLoc(SourceLocation L) { RParenLoc = L; }
@@ -1712,7 +1693,7 @@ public:
 
   /// \brief Build an empty MS-style inline-assembly statement.
   explicit MSAsmStmt(EmptyShell Empty) : AsmStmt(MSAsmStmtClass, Empty),
-    NumAsmToks(0), AsmToks(nullptr), Constraints(nullptr), Clobbers(nullptr) { }
+    NumAsmToks(0), AsmToks(0), Constraints(0), Clobbers(0) { }
 
   SourceLocation getLBraceLoc() const { return LBraceLoc; }
   void setLBraceLoc(SourceLocation L) { LBraceLoc = L; }
@@ -1947,12 +1928,11 @@ public:
     ///
     /// \param Var The variable being captured, or null if capturing this.
     ///
-    Capture(SourceLocation Loc, VariableCaptureKind Kind,
-            VarDecl *Var = nullptr)
+    Capture(SourceLocation Loc, VariableCaptureKind Kind, VarDecl *Var = 0)
       : VarAndKind(Var, Kind), Loc(Loc) {
       switch (Kind) {
       case VCK_This:
-        assert(!Var && "'this' capture cannot have a variable!");
+        assert(Var == 0 && "'this' capture cannot have a variable!");
         break;
       case VCK_ByRef:
         assert(Var && "capturing by reference must have a variable!");
@@ -2062,15 +2042,6 @@ public:
   /// \brief An iterator that walks over the captures.
   typedef Capture *capture_iterator;
   typedef const Capture *const_capture_iterator;
-  typedef llvm::iterator_range<capture_iterator> capture_range;
-  typedef llvm::iterator_range<const_capture_iterator> capture_const_range;
-
-  capture_range captures() {
-    return capture_range(capture_begin(), capture_end());
-  }
-  capture_const_range captures() const {
-    return capture_const_range(capture_begin(), capture_end());
-  }
 
   /// \brief Retrieve an iterator pointing to the first capture.
   capture_iterator capture_begin() { return getStoredCaptures(); }
@@ -2087,11 +2058,6 @@ public:
 
   /// \brief Iterator that walks over the capture initialization arguments.
   typedef Expr **capture_init_iterator;
-  typedef llvm::iterator_range<capture_init_iterator> capture_init_range;
-
-  capture_init_range capture_inits() const {
-    return capture_init_range(capture_init_begin(), capture_init_end());
-  }
 
   /// \brief Retrieve the first initialization argument.
   capture_init_iterator capture_init_begin() const {

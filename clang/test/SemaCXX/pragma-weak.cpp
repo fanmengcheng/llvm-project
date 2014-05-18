@@ -6,6 +6,3 @@ extern "C" {
   void foo() {
   };
 }
-
-extern "C" int Test;
-#pragma weak test = Test

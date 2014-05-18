@@ -22,10 +22,10 @@
 #include "clang/Frontend/TextDiagnosticPrinter.h"
 #include "clang/Frontend/Utils.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/OwningPtr.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Config/config.h"
 #include "llvm/Option/ArgList.h"
 #include "llvm/Option/OptTable.h"
 #include "llvm/Option/Option.h"
@@ -46,7 +46,6 @@
 #include "llvm/Support/Timer.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/system_error.h"
-#include <memory>
 using namespace clang;
 using namespace clang::driver;
 using namespace llvm::opt;
@@ -170,7 +169,7 @@ static void ApplyQAOverride(SmallVectorImpl<const char*> &Args,
     OS = &llvm::nulls();
   }
 
-  *OS << "### CCC_OVERRIDE_OPTIONS: " << OverrideStr << "\n";
+  *OS << "### QA_OVERRIDE_GCC3_OPTIONS: " << OverrideStr << "\n";
 
   // This does not need to be efficient.
 
@@ -228,11 +227,8 @@ static void ParseProgName(SmallVectorImpl<const char *> &ArgVector,
     { "++",        "--driver-mode=g++" },
   };
   std::string ProgName(llvm::sys::path::stem(ArgVector[0]));
-#ifdef LLVM_ON_WIN32
-  // Transform to lowercase for case insensitive file systems.
   std::transform(ProgName.begin(), ProgName.end(), ProgName.begin(),
                  toLowercase);
-#endif
   StringRef ProgNameRef(ProgName);
   StringRef Prefix;
 
@@ -285,7 +281,7 @@ namespace {
   class StringSetSaver : public llvm::cl::StringSaver {
   public:
     StringSetSaver(std::set<std::string> &Storage) : Storage(Storage) {}
-    const char *SaveString(const char *Str) override {
+    const char *SaveString(const char *Str) LLVM_OVERRIDE {
       return SaveStringInSet(Storage, Str);
     }
   private:
@@ -334,9 +330,9 @@ int main(int argc_, const char **argv_) {
     }
   }
 
-  // Handle CCC_OVERRIDE_OPTIONS, used for editing a command line behind the
-  // scenes.
-  if (const char *OverrideStr = ::getenv("CCC_OVERRIDE_OPTIONS")) {
+  // Handle QA_OVERRIDE_GCC3_OPTIONS and CCC_ADD_ARGS, used for editing a
+  // command line behind the scenes.
+  if (const char *OverrideStr = ::getenv("QA_OVERRIDE_GCC3_OPTIONS")) {
     // FIXME: Driver shouldn't take extra initial argument.
     ApplyQAOverride(argv, OverrideStr, SavedStrings);
   }
@@ -345,10 +341,11 @@ int main(int argc_, const char **argv_) {
 
   IntrusiveRefCntPtr<DiagnosticOptions> DiagOpts = new DiagnosticOptions;
   {
-    std::unique_ptr<OptTable> Opts(createDriverOptTable());
+    OwningPtr<OptTable> Opts(createDriverOptTable());
     unsigned MissingArgIndex, MissingArgCount;
-    std::unique_ptr<InputArgList> Args(Opts->ParseArgs(
-        argv.begin() + 1, argv.end(), MissingArgIndex, MissingArgCount));
+    OwningPtr<InputArgList> Args(Opts->ParseArgs(argv.begin()+1, argv.end(),
+                                                 MissingArgIndex,
+                                                 MissingArgCount));
     // We ignore MissingArgCount and the return value of ParseDiagnosticArgs.
     // Any errors that would be diagnosed here will also be diagnosed later,
     // when the DiagnosticsEngine actually exists.
@@ -411,7 +408,7 @@ int main(int argc_, const char **argv_) {
   if (TheDriver.CCLogDiagnostics)
     TheDriver.CCLogDiagnosticsFilename = ::getenv("CC_LOG_DIAGNOSTICS_FILE");
 
-  std::unique_ptr<Compilation> C(TheDriver.BuildCompilation(argv));
+  OwningPtr<Compilation> C(TheDriver.BuildCompilation(argv));
   int Res = 0;
   SmallVector<std::pair<int, const Command *>, 4> FailingCommands;
   if (C.get())
@@ -446,7 +443,7 @@ int main(int argc_, const char **argv_) {
   
   llvm::llvm_shutdown();
 
-#ifdef LLVM_ON_WIN32
+#ifdef _WIN32
   // Exit status should not be negative on Win32, unless abnormal termination.
   // Once abnormal termiation was caught, negative status should not be
   // propagated.

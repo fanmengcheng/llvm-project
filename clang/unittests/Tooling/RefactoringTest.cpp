@@ -252,9 +252,7 @@ public:
     // descriptor, which might not see the changes made.
     // FIXME: Figure out whether there is a way to get the SourceManger to
     // reopen the file.
-    std::unique_ptr<const llvm::MemoryBuffer> FileBuffer(
-        Context.Files.getBufferForFile(Path, NULL));
-    return FileBuffer->getBuffer();
+    return Context.Files.getBufferForFile(Path, NULL)->getBuffer();
   }
 
   llvm::StringMap<std::string> TemporaryFiles;

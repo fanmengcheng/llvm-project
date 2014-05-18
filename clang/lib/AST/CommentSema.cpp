@@ -68,12 +68,8 @@ void Sema::actOnBlockCommandFinish(BlockCommandComment *Command,
   Command->setParagraph(Paragraph);
   checkBlockCommandEmptyParagraph(Command);
   checkBlockCommandDuplicate(Command);
-  if (ThisDeclInfo) {
-    // These checks only make sense if the comment is attached to a
-    // declaration.
-    checkReturnsCommand(Command);
-    checkDeprecatedCommand(Command);
-  }
+  checkReturnsCommand(Command);
+  checkDeprecatedCommand(Command);
 }
 
 ParamCommandComment *Sema::actOnParamCommandStart(
@@ -482,7 +478,6 @@ HTMLEndTagComment *Sema::actOnHTMLEndTag(SourceLocation LocBegin,
   if (isHTMLEndTagForbidden(TagName)) {
     Diag(HET->getLocation(), diag::warn_doc_html_end_forbidden)
       << TagName << HET->getSourceRange();
-    HET->setIsMalformed();
     return HET;
   }
 
@@ -498,19 +493,14 @@ HTMLEndTagComment *Sema::actOnHTMLEndTag(SourceLocation LocBegin,
   if (!FoundOpen) {
     Diag(HET->getLocation(), diag::warn_doc_html_end_unbalanced)
       << HET->getSourceRange();
-    HET->setIsMalformed();
     return HET;
   }
 
   while (!HTMLOpenTags.empty()) {
-    HTMLStartTagComment *HST = HTMLOpenTags.pop_back_val();
+    const HTMLStartTagComment *HST = HTMLOpenTags.pop_back_val();
     StringRef LastNotClosedTagName = HST->getTagName();
-    if (LastNotClosedTagName == TagName) {
-      // If the start tag is malformed, end tag is malformed as well.
-      if (HST->isMalformed())
-        HET->setIsMalformed();
+    if (LastNotClosedTagName == TagName)
       break;
-    }
 
     if (isHTMLEndTagOptional(LastNotClosedTagName))
       continue;
@@ -524,18 +514,16 @@ HTMLEndTagComment *Sema::actOnHTMLEndTag(SourceLocation LocBegin,
                                                 HET->getLocation(),
                                                 &CloseLineInvalid);
 
-    if (OpenLineInvalid || CloseLineInvalid || OpenLine == CloseLine) {
+    if (OpenLineInvalid || CloseLineInvalid || OpenLine == CloseLine)
       Diag(HST->getLocation(), diag::warn_doc_html_start_end_mismatch)
         << HST->getTagName() << HET->getTagName()
         << HST->getSourceRange() << HET->getSourceRange();
-      HST->setIsMalformed();
-    } else {
+    else {
       Diag(HST->getLocation(), diag::warn_doc_html_start_end_mismatch)
         << HST->getTagName() << HET->getTagName()
         << HST->getSourceRange();
       Diag(HET->getLocation(), diag::note_doc_html_end_tag)
         << HET->getSourceRange();
-      HST->setIsMalformed();
     }
   }
 
@@ -546,18 +534,6 @@ FullComment *Sema::actOnFullComment(
                               ArrayRef<BlockContentComment *> Blocks) {
   FullComment *FC = new (Allocator) FullComment(Blocks, ThisDeclInfo);
   resolveParamCommandIndexes(FC);
-
-  // Complain about HTML tags that are not closed.
-  while (!HTMLOpenTags.empty()) {
-    HTMLStartTagComment *HST = HTMLOpenTags.pop_back_val();
-    if (isHTMLEndTagOptional(HST->getTagName()))
-      continue;
-
-    Diag(HST->getLocation(), diag::warn_doc_html_missing_end_tag)
-      << HST->getTagName() << HST->getSourceRange();
-    HST->setIsMalformed();
-  }
-
   return FC;
 }
 
@@ -582,11 +558,8 @@ void Sema::checkBlockCommandEmptyParagraph(BlockCommandComment *Command) {
 void Sema::checkReturnsCommand(const BlockCommandComment *Command) {
   if (!Traits.getCommandInfo(Command->getCommandID())->IsReturnsCommand)
     return;
-
-  assert(ThisDeclInfo && "should not call this check on a bare comment");
-
   if (isFunctionDecl()) {
-    if (ThisDeclInfo->ReturnType->isVoidType()) {
+    if (ThisDeclInfo->ResultType->isVoidType()) {
       unsigned DiagKind;
       switch (ThisDeclInfo->CommentDecl->getKind()) {
       default:
@@ -662,8 +635,6 @@ void Sema::checkBlockCommandDuplicate(const BlockCommandComment *Command) {
 void Sema::checkDeprecatedCommand(const BlockCommandComment *Command) {
   if (!Traits.getCommandInfo(Command->getCommandID())->IsDeprecatedCommand)
     return;
-
-  assert(ThisDeclInfo && "should not call this check on a bare comment");
 
   const Decl *D = ThisDeclInfo->CommentDecl;
   if (!D)
@@ -812,14 +783,11 @@ bool Sema::isAnyFunctionDecl() {
 }
 
 bool Sema::isFunctionOrMethodVariadic() {
-  if (!isAnyFunctionDecl() && !isObjCMethodDecl() && !isFunctionTemplateDecl())
+  if (!isAnyFunctionDecl() && !isObjCMethodDecl())
     return false;
   if (const FunctionDecl *FD =
         dyn_cast<FunctionDecl>(ThisDeclInfo->CurrentDecl))
     return FD->isVariadic();
-  if (const FunctionTemplateDecl *FTD =
-        dyn_cast<FunctionTemplateDecl>(ThisDeclInfo->CurrentDecl))
-    return FTD->getTemplatedDecl()->isVariadic();
   if (const ObjCMethodDecl *MD =
         dyn_cast<ObjCMethodDecl>(ThisDeclInfo->CurrentDecl))
     return MD->isVariadic();

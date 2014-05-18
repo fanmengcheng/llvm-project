@@ -18,10 +18,10 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
+#include "llvm/ADT/OwningPtr.h"
 #include "llvm/ADT/StringRef.h"
 #include <cassert>
 #include <list>
-#include <memory>
 #include <string>
 #include <utility>
 
@@ -75,9 +75,6 @@ class CompilerInstance : public ModuleLoader {
   /// The target being compiled for.
   IntrusiveRefCntPtr<TargetInfo> Target;
 
-  /// The virtual file system.
-  IntrusiveRefCntPtr<vfs::FileSystem> VirtualFileSystem;
-
   /// The file manager.
   IntrusiveRefCntPtr<FileManager> FileMgr;
 
@@ -91,22 +88,19 @@ class CompilerInstance : public ModuleLoader {
   IntrusiveRefCntPtr<ASTContext> Context;
 
   /// The AST consumer.
-  std::unique_ptr<ASTConsumer> Consumer;
+  OwningPtr<ASTConsumer> Consumer;
 
   /// The code completion consumer.
-  std::unique_ptr<CodeCompleteConsumer> CompletionConsumer;
+  OwningPtr<CodeCompleteConsumer> CompletionConsumer;
 
   /// \brief The semantic analysis object.
-  std::unique_ptr<Sema> TheSema;
+  OwningPtr<Sema> TheSema;
 
   /// \brief The frontend timer
-  std::unique_ptr<llvm::Timer> FrontendTimer;
+  OwningPtr<llvm::Timer> FrontendTimer;
 
-  /// \brief The ASTReader, if one exists.
-  IntrusiveRefCntPtr<ASTReader> ModuleManager;
-
-  /// \brief The dependency file generator.
-  std::unique_ptr<DependencyFileGenerator> TheDependencyFileGenerator;
+  /// \brief Non-owning reference to the ASTReader, if one exists.
+  ASTReader *ModuleManager;
 
   /// \brief The set of top-level modules that has already been loaded,
   /// along with the module map
@@ -123,9 +117,6 @@ class CompilerInstance : public ModuleLoader {
   /// \brief Whether we should (re)build the global module index once we
   /// have finished with this translation unit.
   bool BuildGlobalModuleIndex;
-
-  /// \brief We have a full global module index, with all modules.
-  bool HaveFullGlobalModuleIndex;
 
   /// \brief One or more modules failed to build.
   bool ModuleBuildFailed;
@@ -151,7 +142,7 @@ class CompilerInstance : public ModuleLoader {
   CompilerInstance(const CompilerInstance &) LLVM_DELETED_FUNCTION;
   void operator=(const CompilerInstance &) LLVM_DELETED_FUNCTION;
 public:
-  explicit CompilerInstance(bool BuildingModule = false);
+  CompilerInstance();
   ~CompilerInstance();
 
   /// @name High-Level Operations
@@ -193,7 +184,7 @@ public:
   /// @name Compiler Invocation and Options
   /// {
 
-  bool hasInvocation() const { return Invocation != nullptr; }
+  bool hasInvocation() const { return Invocation != 0; }
 
   CompilerInvocation &getInvocation() {
     assert(Invocation && "Compiler instance has no invocation!");
@@ -291,7 +282,7 @@ public:
   /// @name Diagnostics Engine
   /// {
 
-  bool hasDiagnostics() const { return Diagnostics != nullptr; }
+  bool hasDiagnostics() const { return Diagnostics != 0; }
 
   /// Get the current diagnostics engine.
   DiagnosticsEngine &getDiagnostics() const {
@@ -312,7 +303,7 @@ public:
   /// @name Target Info
   /// {
 
-  bool hasTarget() const { return Target != nullptr; }
+  bool hasTarget() const { return Target != 0; }
 
   TargetInfo &getTarget() const {
     assert(Target && "Compiler instance has no target!");
@@ -323,30 +314,10 @@ public:
   void setTarget(TargetInfo *Value);
 
   /// }
-  /// @name Virtual File System
-  /// {
-
-  bool hasVirtualFileSystem() const { return VirtualFileSystem != nullptr; }
-
-  vfs::FileSystem &getVirtualFileSystem() const {
-    assert(hasVirtualFileSystem() &&
-           "Compiler instance has no virtual file system");
-    return *VirtualFileSystem;
-  }
-
-  /// \brief Replace the current virtual file system.
-  ///
-  /// \note Most clients should use setFileManager, which will implicitly reset
-  /// the virtual file system to the one contained in the file manager.
-  void setVirtualFileSystem(IntrusiveRefCntPtr<vfs::FileSystem> FS) {
-    VirtualFileSystem = FS;
-  }
-
-  /// }
   /// @name File Manager
   /// {
 
-  bool hasFileManager() const { return FileMgr != nullptr; }
+  bool hasFileManager() const { return FileMgr != 0; }
 
   /// Return the current file manager to the caller.
   FileManager &getFileManager() const {
@@ -359,14 +330,14 @@ public:
     FileMgr.resetWithoutRelease();
   }
 
-  /// \brief Replace the current file manager and virtual file system.
+  /// setFileManager - Replace the current file manager.
   void setFileManager(FileManager *Value);
 
   /// }
   /// @name Source Manager
   /// {
 
-  bool hasSourceManager() const { return SourceMgr != nullptr; }
+  bool hasSourceManager() const { return SourceMgr != 0; }
 
   /// Return the current source manager.
   SourceManager &getSourceManager() const {
@@ -386,7 +357,7 @@ public:
   /// @name Preprocessor
   /// {
 
-  bool hasPreprocessor() const { return PP != nullptr; }
+  bool hasPreprocessor() const { return PP != 0; }
 
   /// Return the current preprocessor.
   Preprocessor &getPreprocessor() const {
@@ -406,7 +377,7 @@ public:
   /// @name ASTContext
   /// {
 
-  bool hasASTContext() const { return Context != nullptr; }
+  bool hasASTContext() const { return Context != 0; }
 
   ASTContext &getASTContext() const {
     assert(Context && "Compiler instance has no AST context!");
@@ -429,7 +400,7 @@ public:
   /// @name ASTConsumer
   /// {
 
-  bool hasASTConsumer() const { return (bool)Consumer; }
+  bool hasASTConsumer() const { return Consumer.isValid(); }
 
   ASTConsumer &getASTConsumer() const {
     assert(Consumer && "Compiler instance has no AST consumer!");
@@ -438,7 +409,7 @@ public:
 
   /// takeASTConsumer - Remove the current AST consumer and give ownership to
   /// the caller.
-  ASTConsumer *takeASTConsumer() { return Consumer.release(); }
+  ASTConsumer *takeASTConsumer() { return Consumer.take(); }
 
   /// setASTConsumer - Replace the current AST consumer; the compiler instance
   /// takes ownership of \p Value.
@@ -447,28 +418,29 @@ public:
   /// }
   /// @name Semantic analysis
   /// {
-  bool hasSema() const { return (bool)TheSema; }
-
+  bool hasSema() const { return TheSema.isValid(); }
+  
   Sema &getSema() const { 
     assert(TheSema && "Compiler instance has no Sema object!");
     return *TheSema;
   }
-
-  Sema *takeSema() { return TheSema.release(); }
-  void resetAndLeakSema() { BuryPointer(TheSema.release()); }
-
+  
+  Sema *takeSema() { return TheSema.take(); }
+  
   /// }
   /// @name Module Management
   /// {
 
-  IntrusiveRefCntPtr<ASTReader> getModuleManager() const;
-  void setModuleManager(IntrusiveRefCntPtr<ASTReader> Reader);
+  ASTReader *getModuleManager() const { return ModuleManager; }
+  void setModuleManager(ASTReader *Reader) { ModuleManager = Reader; }
 
   /// }
   /// @name Code Completion
   /// {
 
-  bool hasCodeCompletionConsumer() const { return (bool)CompletionConsumer; }
+  bool hasCodeCompletionConsumer() const {
+    return CompletionConsumer.isValid();
+  }
 
   CodeCompleteConsumer &getCodeCompletionConsumer() const {
     assert(CompletionConsumer &&
@@ -479,7 +451,7 @@ public:
   /// takeCodeCompletionConsumer - Remove the current code completion consumer
   /// and give ownership to the caller.
   CodeCompleteConsumer *takeCodeCompletionConsumer() {
-    return CompletionConsumer.release();
+    return CompletionConsumer.take();
   }
 
   /// setCodeCompletionConsumer - Replace the current code completion consumer;
@@ -490,7 +462,7 @@ public:
   /// @name Frontend timer
   /// {
 
-  bool hasFrontendTimer() const { return (bool)FrontendTimer; }
+  bool hasFrontendTimer() const { return FrontendTimer.isValid(); }
 
   llvm::Timer &getFrontendTimer() const {
     assert(FrontendTimer && "Compiler instance has no frontend timer!");
@@ -528,7 +500,7 @@ public:
   ///
   /// \param ShouldOwnClient If Client is non-NULL, specifies whether 
   /// the diagnostic object should take ownership of the client.
-  void createDiagnostics(DiagnosticConsumer *Client = nullptr,
+  void createDiagnostics(DiagnosticConsumer *Client = 0,
                          bool ShouldOwnClient = true);
 
   /// Create a DiagnosticsEngine object with a the TextDiagnosticPrinter.
@@ -551,9 +523,9 @@ public:
   /// \return The new object on success, or null on failure.
   static IntrusiveRefCntPtr<DiagnosticsEngine>
   createDiagnostics(DiagnosticOptions *Opts,
-                    DiagnosticConsumer *Client = nullptr,
+                    DiagnosticConsumer *Client = 0,
                     bool ShouldOwnClient = true,
-                    const CodeGenOptions *CodeGenOpts = nullptr);
+                    const CodeGenOptions *CodeGenOpts = 0);
 
   /// Create the file manager and replace any existing one with it.
   void createFileManager();
@@ -563,7 +535,7 @@ public:
 
   /// Create the preprocessor, using the invocation, file, and source managers,
   /// and replace any existing one with it.
-  void createPreprocessor(TranslationUnitKind TUKind);
+  void createPreprocessor();
 
   /// Create the AST context.
   void createASTContext();
@@ -686,24 +658,21 @@ public:
                 const FrontendOptions &Opts);
 
   /// }
+  
+  virtual ModuleLoadResult loadModule(SourceLocation ImportLoc,
+                                      ModuleIdPath Path,
+                                      Module::NameVisibilityKind Visibility,
+                                      bool IsInclusionDirective);
 
-  // Create module manager.
-  void createModuleManager();
-
-  ModuleLoadResult loadModule(SourceLocation ImportLoc, ModuleIdPath Path,
-                              Module::NameVisibilityKind Visibility,
-                              bool IsInclusionDirective) override;
-
-  void makeModuleVisible(Module *Mod, Module::NameVisibilityKind Visibility,
-                         SourceLocation ImportLoc, bool Complain) override;
+  virtual void makeModuleVisible(Module *Mod,
+                                 Module::NameVisibilityKind Visibility,
+                                 SourceLocation ImportLoc,
+                                 bool Complain);
 
   bool hadModuleLoaderFatalFailure() const {
     return ModuleLoader::HadFatalFailure;
   }
 
-  GlobalModuleIndex *loadGlobalModuleIndex(SourceLocation TriggerLoc) override;
-
-  bool lookupMissingImports(StringRef Name, SourceLocation TriggerLoc) override;
 };
 
 } // end namespace clang

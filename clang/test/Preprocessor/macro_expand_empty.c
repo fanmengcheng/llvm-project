@@ -1,5 +1,4 @@
-// RUN: %clang_cc1 -E %s | FileCheck --strict-whitespace %s
-
+// RUN: %clang_cc1 -fsyntax-only %s
 // Check that this doesn't crash
 
 #define IDENTITY1(x) x
@@ -13,9 +12,3 @@
 #define IDENTITY9(x) IDENTITY8(x) IDENTITY8(x) IDENTITY8(x) IDENTITY8(x)
 #define IDENTITY0(x) IDENTITY9(x) IDENTITY9(x) IDENTITY9(x) IDENTITY9(x)
 IDENTITY0()
-
-#define FOO() BAR() second
-#define BAR()
-first // CHECK: {{^}}first{{$}}
-FOO() // CHECK: {{^}} second{{$}}
-third // CHECK: {{^}}third{{$}}

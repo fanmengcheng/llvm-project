@@ -30,33 +30,29 @@ struct DD {
   typedef int n;
 };
 
-PD pd();
-DD dd();
-
 struct A {
-  decltype(pd()) s; // ok
-  decltype(pd())::n n; // ok
-  decltype(dd()) *p = new decltype(dd()); // ok
+  decltype(PD()) s; // ok
+  decltype(PD())::n n; // ok
+  decltype(DD()) *p = new decltype(DD()); // ok
 };
-A a();
 
 // Two errors here: one for the decltype, one for the variable.
 decltype(
-    pd(), // expected-error {{private destructor}}
-    pd()) pd1; // expected-error {{private destructor}}
-decltype(dd(), // expected-error {{deleted function}}
-         dd()) dd1;
-decltype(a(),
-         dd()) dd2; // expected-error {{deleted function}}
+    PD(), // expected-error {{private destructor}}
+    PD()) pd1; // expected-error {{private destructor}}
+decltype(DD(), // expected-error {{deleted function}}
+         DD()) dd1;
+decltype(A(),
+         DD()) dd2; // expected-error {{deleted function}}
 decltype(
-    pd(), // expected-error {{temporary of type 'PD' has private destructor}}
+    PD(), // expected-error {{temporary of type 'PD' has private destructor}}
     0) pd2;
 
-decltype(((13, ((dd())))))::n dd_parens; // ok
-decltype(((((42)), pd())))::n pd_parens_comma; // ok
+decltype(((13, ((DD())))))::n dd_parens; // ok
+decltype(((((42)), PD())))::n pd_parens_comma; // ok
 
 // Ensure parens aren't stripped from a decltype node.
-extern decltype(pd()) pd_ref; // ok
+extern decltype(PD()) pd_ref; // ok
 decltype((pd_ref)) pd_ref3 = pd_ref; // ok, PD &
 decltype(pd_ref) pd_ref2 = pd_ref; // expected-error {{private destructor}}
 
@@ -111,7 +107,7 @@ namespace RequireCompleteType {
 
 namespace Overload {
   DD operator+(PD &a, PD &b);
-  decltype(pd()) *pd_ptr;
+  decltype(PD()) *pd_ptr;
   decltype(*pd_ptr + *pd_ptr) *dd_ptr; // ok
 
   decltype(0, *pd_ptr) pd_ref2 = pd_ref; // ok

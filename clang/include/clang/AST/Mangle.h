@@ -31,10 +31,9 @@ namespace clang {
   class FunctionDecl;
   class NamedDecl;
   class ObjCMethodDecl;
-  class StringLiteral;
+  class VarDecl;
   struct ThisAdjustment;
   struct ThunkInfo;
-  class VarDecl;
 
 /// MangleBuffer - a convenient class for storing a name which is
 /// either the result of a mangling or is a constant string with
@@ -81,7 +80,6 @@ private:
 
   llvm::DenseMap<const BlockDecl*, unsigned> GlobalBlockIds;
   llvm::DenseMap<const BlockDecl*, unsigned> LocalBlockIds;
-  llvm::DenseMap<const TagDecl*, uint64_t> AnonStructIds;
 
 public:
   ManglerKind getKind() const { return Kind; }
@@ -106,19 +104,12 @@ public:
       Result = BlockIds.insert(std::make_pair(BD, BlockIds.size()));
     return Result.first->second;
   }
-
-  uint64_t getAnonymousStructId(const TagDecl *TD) {
-    std::pair<llvm::DenseMap<const TagDecl *, uint64_t>::iterator, bool>
-        Result = AnonStructIds.insert(std::make_pair(TD, AnonStructIds.size()));
-    return Result.first->second;
-  }
-
+  
   /// @name Mangler Entry Points
   /// @{
 
   bool shouldMangleDeclName(const NamedDecl *D);
   virtual bool shouldMangleCXXName(const NamedDecl *D) = 0;
-  virtual bool shouldMangleStringLiteral(const StringLiteral *SL) = 0;
 
   // FIXME: consider replacing raw_ostream & with something like SmallString &.
   void mangleName(const NamedDecl *D, raw_ostream &);
@@ -130,7 +121,6 @@ public:
                                   const ThisAdjustment &ThisAdjustment,
                                   raw_ostream &) = 0;
   virtual void mangleReferenceTemporary(const VarDecl *D,
-                                        unsigned ManglingNumber,
                                         raw_ostream &) = 0;
   virtual void mangleCXXRTTI(QualType T, raw_ostream &) = 0;
   virtual void mangleCXXRTTIName(QualType T, raw_ostream &) = 0;
@@ -138,7 +128,6 @@ public:
                              raw_ostream &) = 0;
   virtual void mangleCXXDtor(const CXXDestructorDecl *D, CXXDtorType Type,
                              raw_ostream &) = 0;
-  virtual void mangleStringLiteral(const StringLiteral *SL, raw_ostream &) = 0;
 
   void mangleGlobalBlock(const BlockDecl *BD,
                          const NamedDecl *ID,
@@ -211,6 +200,7 @@ public:
                                 raw_ostream &Out) = 0;
 
   virtual void mangleVirtualMemPtrThunk(const CXXMethodDecl *MD,
+                                        uint64_t OffsetInVFTable,
                                         raw_ostream &) = 0;
 
   static bool classof(const MangleContext *C) {

@@ -10,20 +10,14 @@ set( LLVM_LINK_COMPONENTS
   MCParser
   ObjCARCOpts
   Option
-  ProfileData
   ScalarOpts
   Support
   TransformUtils
   Vectorize
   )
 
-option(CLANG_PLUGIN_SUPPORT "Build clang with plugin support" ON)
-
-# Support plugins. This must be before add_clang_executable as it reads
-# LLVM_NO_DEAD_STRIP.
-if(CLANG_PLUGIN_SUPPORT)
-  set(LLVM_NO_DEAD_STRIP 1)
-endif()
+# Support plugins.
+set(LLVM_NO_DEAD_STRIP 1)
 
 add_clang_executable(clang
   driver.cpp
@@ -38,12 +32,29 @@ target_link_libraries(clang
   clangFrontendTool
   )
 
-set_target_properties(clang PROPERTIES VERSION ${CLANG_EXECUTABLE_VERSION})
-
-# Support plugins.
-if(CLANG_PLUGIN_SUPPORT)
-  set_target_properties(clang PROPERTIES ENABLE_EXPORTS 1)
+if(CLANG_ENABLE_STATIC_ANALYZER)
+  target_link_libraries(clang
+    clangStaticAnalyzerFrontend
+    clangStaticAnalyzerCheckers
+    clangStaticAnalyzerCore
+    )
 endif()
+
+if(CLANG_ENABLE_ARCMT)
+  target_link_libraries(clang
+    clangARCMigrate
+    )
+endif()
+
+if(CLANG_ENABLE_REWRITER)
+  target_link_libraries(clang
+    clangRewriteCore
+    clangRewriteFrontend
+    )
+endif()
+
+set_target_properties(clang PROPERTIES VERSION ${CLANG_EXECUTABLE_VERSION})
+set_target_properties(clang PROPERTIES ENABLE_EXPORTS 1)
 
 add_dependencies(clang clang-headers)
 
@@ -53,23 +64,23 @@ if(UNIX)
   set(clang_binary "clang${CMAKE_EXECUTABLE_SUFFIX}")
 else()
   set(CLANGXX_LINK_OR_COPY copy)
-  set(clang_binary "${LLVM_RUNTIME_OUTPUT_INTDIR}/clang${CMAKE_EXECUTABLE_SUFFIX}")
+  set(clang_binary "${CLANG_RUNTIME_OUTPUT_INTDIR}/clang${CMAKE_EXECUTABLE_SUFFIX}")
 endif()
 
 # Create the clang++ symlink in the build directory.
-set(clang_pp "${LLVM_RUNTIME_OUTPUT_INTDIR}/clang++${CMAKE_EXECUTABLE_SUFFIX}")
+set(clang_pp "${CLANG_RUNTIME_OUTPUT_INTDIR}/clang++${CMAKE_EXECUTABLE_SUFFIX}")
 add_custom_command(TARGET clang POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E ${CLANGXX_LINK_OR_COPY} "${clang_binary}" "${clang_pp}"
-    WORKING_DIRECTORY "${LLVM_RUNTIME_OUTPUT_INTDIR}")
+    WORKING_DIRECTORY "${CLANG_RUNTIME_OUTPUT_INTDIR}")
 
 set_property(DIRECTORY APPEND
   PROPERTY ADDITIONAL_MAKE_CLEAN_FILES ${clang_pp})
 
 # Create the clang-cl symlink in the build directory.
-set(clang_cl "${LLVM_RUNTIME_OUTPUT_INTDIR}/clang-cl${CMAKE_EXECUTABLE_SUFFIX}")
+set(clang_cl "${CLANG_RUNTIME_OUTPUT_INTDIR}/clang-cl${CMAKE_EXECUTABLE_SUFFIX}")
 add_custom_command(TARGET clang POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E ${CLANGXX_LINK_OR_COPY} "${clang_binary}" "${clang_cl}"
-    WORKING_DIRECTORY "${LLVM_RUNTIME_OUTPUT_INTDIR}")
+    WORKING_DIRECTORY "${CLANG_RUNTIME_OUTPUT_INTDIR}")
 
 set_property(DIRECTORY APPEND
   PROPERTY ADDITIONAL_MAKE_CLEAN_FILES ${clang_cl})
@@ -111,11 +122,3 @@ if(CLANG_ORDER_FILE)
   target_link_libraries(clang "-Wl,-order_file,${CLANG_ORDER_FILE}")
 endif()
 
-if(WITH_POLLY AND LINK_POLLY_INTO_TOOLS)
-  target_link_libraries(clang Polly)
-  if(POLLY_LINK_LIBS)
-    foreach(lib ${POLLY_LINK_LIBS})
-      target_link_libraries(clang ${lib})
-    endforeach(lib)
-  endif(POLLY_LINK_LIBS)
-endif(WITH_POLLY AND LINK_POLLY_INTO_TOOLS)

@@ -146,14 +146,14 @@ public:
                                       const LocationContext *LCtx,
                                       QualType type,
                                       unsigned visitCount,
-                                      const void *symbolTag = nullptr) {
+                                      const void *symbolTag = 0) {
     return SymMgr.conjureSymbol(stmt, LCtx, type, visitCount, symbolTag);
   }
 
   const SymbolConjured* conjureSymbol(const Expr *expr,
                                       const LocationContext *LCtx,
                                       unsigned visitCount,
-                                      const void *symbolTag = nullptr) {
+                                      const void *symbolTag = 0) {
     return SymMgr.conjureSymbol(expr, LCtx, visitCount, symbolTag);
   }
 

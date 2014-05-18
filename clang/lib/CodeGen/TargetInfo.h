@@ -56,11 +56,6 @@ namespace clang {
     virtual void SetTargetAttributes(const Decl *D, llvm::GlobalValue *GV,
                                      CodeGen::CodeGenModule &M) const { }
 
-    /// EmitTargetMD - Provides a convenient hook to handle extra
-    /// target-specific metadata for the given global.
-    virtual void emitTargetMD(const Decl *D, llvm::GlobalValue *GV,
-                              CodeGen::CodeGenModule &M) const { }
-
     /// Determines the size of struct _Unwind_Exception on this platform,
     /// in 8-bit units.  The Itanium ABI defines this as:
     ///   struct _Unwind_Exception {
@@ -127,10 +122,6 @@ namespace clang {
                                             llvm::Type* Ty) const {
       return Ty;
     }
-
-    /// doesReturnSlotInterfereWithArgs - Return true if the target uses an
-    /// argument slot for an 'sret' type.
-    virtual bool doesReturnSlotInterfereWithArgs() const { return true; }
 
     /// Retrieve the address of a function to call immediately before
     /// calling objc_retainAutoreleasedReturnValue.  The

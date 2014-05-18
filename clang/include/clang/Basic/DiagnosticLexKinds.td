@@ -151,8 +151,7 @@ def warn_ucn_not_valid_in_c89_literal : ExtWarn<
 // Literal
 def ext_nonstandard_escape : Extension<
   "use of non-standard escape character '\\%0'">;
-def ext_unknown_escape : ExtWarn<"unknown escape sequence '\\%0'">,
-  InGroup<DiagGroup<"unknown-escape-sequence">>;
+def ext_unknown_escape : ExtWarn<"unknown escape sequence '\\%0'">;
 def err_invalid_decimal_digit : Error<"invalid digit '%0' in decimal constant">;
 def err_invalid_binary_digit : Error<"invalid digit '%0' in binary constant">;
 def err_invalid_octal_digit : Error<"invalid digit '%0' in octal constant">;
@@ -316,7 +315,7 @@ def ext_pp_extra_tokens_at_eol : ExtWarn<
 def ext_pp_comma_expr : Extension<"comma operator in operand of #if">;
 def ext_pp_bad_vaargs_use : Extension<
   "__VA_ARGS__ can only appear in the expansion of a C99 variadic macro">;
-def ext_pp_macro_redef : ExtWarn<"%0 macro redefined">, InGroup<MacroRedefined>;
+def ext_pp_macro_redef : ExtWarn<"%0 macro redefined">;
 def ext_variadic_macro : Extension<"variadic macros are a C99 feature">,
   InGroup<VariadicMacros>;
 def warn_cxx98_compat_variadic_macro : Warning<
@@ -403,9 +402,6 @@ def warn_has_warning_invalid_option :
    ExtWarn<"__has_warning expected option name (e.g. \"-Wundef\")">,
    InGroup<MalformedWarningCheck>;
 
-def err_pp_identifier_arg_not_identifier : Error<
-  "cannot convert %0 token to an identifier">;
-
 def warn_pragma_include_alias_mismatch_angle :
    ExtWarn<"angle-bracketed include <%0> cannot be aliased to double-quoted "
    "include \"%1\"">, InGroup<UnknownPragmas>;
@@ -441,8 +437,7 @@ def err_pragma_message_malformed : Error<
 def err_pragma_push_pop_macro_malformed : Error<
    "pragma %0 requires a parenthesized string">;
 def warn_pragma_pop_macro_no_push : Warning<
-   "pragma pop_macro could not pop '%0', no matching push_macro">,
-  InGroup<IgnoredPragmas>;
+   "pragma pop_macro could not pop '%0', no matching push_macro">;
 def warn_pragma_message : Warning<"%0">,
    InGroup<PoundPragmaMessage>, DefaultWarnNoWerror;
 def err_pragma_message : Error<"%0">;
@@ -477,7 +472,7 @@ def warn_pragma_diagnostic_unknown_warning :
    InGroup<UnknownPragmas>;
 // - #pragma __debug
 def warn_pragma_debug_unexpected_command : Warning<
-  "unexpected debug command '%0'">, InGroup<IgnoredPragmas>;
+  "unexpected debug command '%0'">;
 
 def err_defined_macro_name : Error<"'defined' cannot be used as a macro name">;
 def err_paste_at_start : Error<
@@ -498,7 +493,7 @@ def err_too_few_args_in_macro_invoc : Error<
   "too few arguments provided to function-like macro invocation">;
 def err_pp_bad_paste : Error<
   "pasting formed '%0', an invalid preprocessing token">;
-def ext_pp_bad_paste_ms : ExtWarn<
+def err_pp_bad_paste_ms : Warning<
   "pasting formed '%0', an invalid preprocessing token">, DefaultError,
   InGroup<DiagGroup<"invalid-token-paste">>;
 def err_pp_operator_used_as_macro_name : Error<
@@ -610,7 +605,7 @@ def warn_auto_module_import : Warning<
   "import of module '%1'">, InGroup<AutoImport>, DefaultIgnore;
 def warn_uncovered_module_header : Warning<
   "umbrella header for module '%0' does not include header '%1'">, 
-  InGroup<IncompleteUmbrella>;
+  InGroup<IncompleteUmbrella>, DefaultIgnore;
 def warn_forgotten_module_header : Warning<
   "header '%0' is included in module '%1' but not listed in module map">,
   InGroup<IncompleteModule>, DefaultIgnore;
@@ -620,14 +615,6 @@ def error_use_of_private_header_outside_module : Error<
   "use of private header from outside its module: '%0'">;
 def error_undeclared_use_of_module : Error<
   "module %0 does not depend on a module exporting '%1'">;
-def warn_non_modular_include_in_framework_module : Warning<
-  "include of non-modular header inside framework module '%0'">,
-  InGroup<NonModularIncludeInFrameworkModule>, DefaultIgnore;
-def warn_non_modular_include_in_module : Warning<
-  "include of non-modular header inside module '%0'">,
-  InGroup<NonModularIncludeInModule>, DefaultIgnore;
-def warn_non_modular_include : Warning<
-  "include of non-modular header">, InGroup<NonModularInclude>, DefaultIgnore;
 
 def warn_header_guard : Warning<
   "%0 is used as a header guard here, followed by #define of a different macro">,

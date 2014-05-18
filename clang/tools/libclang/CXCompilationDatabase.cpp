@@ -40,8 +40,9 @@ struct AllocatedCXCompileCommands
 {
   std::vector<CompileCommand> CCmd;
 
-  AllocatedCXCompileCommands(std::vector<CompileCommand> Cmd)
-      : CCmd(std::move(Cmd)) {}
+  AllocatedCXCompileCommands(const std::vector<CompileCommand>& Cmd)
+    : CCmd(Cmd)
+  { }
 };
 
 CXCompileCommands
@@ -49,9 +50,10 @@ clang_CompilationDatabase_getCompileCommands(CXCompilationDatabase CDb,
                                              const char *CompleteFileName)
 {
   if (CompilationDatabase *db = static_cast<CompilationDatabase *>(CDb)) {
-    std::vector<CompileCommand> CCmd(db->getCompileCommands(CompleteFileName));
+    const std::vector<CompileCommand>
+      CCmd(db->getCompileCommands(CompleteFileName));
     if (!CCmd.empty())
-      return new AllocatedCXCompileCommands(std::move(CCmd));
+      return new AllocatedCXCompileCommands( CCmd );
   }
 
   return 0;
@@ -60,9 +62,9 @@ clang_CompilationDatabase_getCompileCommands(CXCompilationDatabase CDb,
 CXCompileCommands
 clang_CompilationDatabase_getAllCompileCommands(CXCompilationDatabase CDb) {
   if (CompilationDatabase *db = static_cast<CompilationDatabase *>(CDb)) {
-    std::vector<CompileCommand> CCmd(db->getAllCompileCommands());
+    const std::vector<CompileCommand> CCmd(db->getAllCompileCommands());
     if (!CCmd.empty())
-      return new AllocatedCXCompileCommands(std::move(CCmd));
+      return new AllocatedCXCompileCommands( CCmd );
   }
 
   return 0;

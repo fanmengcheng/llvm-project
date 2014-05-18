@@ -65,17 +65,16 @@ static FrontendAction *CreateFrontendBaseAction(CompilerInstance &CI) {
   case InitOnly:               return new InitOnlyAction();
   case ParseSyntaxOnly:        return new SyntaxOnlyAction();
   case ModuleFileInfo:         return new DumpModuleInfoAction();
-  case VerifyPCH:              return new VerifyPCHAction();
 
   case PluginAction: {
     for (FrontendPluginRegistry::iterator it =
            FrontendPluginRegistry::begin(), ie = FrontendPluginRegistry::end();
          it != ie; ++it) {
       if (it->getName() == CI.getFrontendOpts().ActionName) {
-        std::unique_ptr<PluginASTAction> P(it->instantiate());
+        OwningPtr<PluginASTAction> P(it->instantiate());
         if (!P->ParseArgs(CI, CI.getFrontendOpts().PluginArgs))
           return 0;
-        return P.release();
+        return P.take();
       }
     }
 
@@ -181,7 +180,7 @@ static FrontendAction *CreateFrontendAction(CompilerInstance &CI) {
 bool clang::ExecuteCompilerInvocation(CompilerInstance *Clang) {
   // Honor -help.
   if (Clang->getFrontendOpts().ShowHelp) {
-    std::unique_ptr<OptTable> Opts(driver::createDriverOptTable());
+    OwningPtr<OptTable> Opts(driver::createDriverOptTable());
     Opts->PrintHelp(llvm::outs(), "clang -cc1",
                     "LLVM 'Clang' Compiler: http://clang.llvm.org",
                     /*Include=*/ driver::options::CC1Option, /*Exclude=*/ 0);
@@ -212,12 +211,12 @@ bool clang::ExecuteCompilerInvocation(CompilerInstance *Clang) {
   // This should happen AFTER plugins have been loaded!
   if (!Clang->getFrontendOpts().LLVMArgs.empty()) {
     unsigned NumArgs = Clang->getFrontendOpts().LLVMArgs.size();
-    auto Args = llvm::make_unique<const char*[]>(NumArgs + 2);
+    const char **Args = new const char*[NumArgs + 2];
     Args[0] = "clang (LLVM option parsing)";
     for (unsigned i = 0; i != NumArgs; ++i)
       Args[i + 1] = Clang->getFrontendOpts().LLVMArgs[i].c_str();
     Args[NumArgs + 1] = 0;
-    llvm::cl::ParseCommandLineOptions(NumArgs + 1, Args.get());
+    llvm::cl::ParseCommandLineOptions(NumArgs + 1, Args);
   }
 
 #ifdef CLANG_ENABLE_STATIC_ANALYZER
@@ -233,11 +232,11 @@ bool clang::ExecuteCompilerInvocation(CompilerInstance *Clang) {
   if (Clang->getDiagnostics().hasErrorOccurred())
     return false;
   // Create and execute the frontend action.
-  std::unique_ptr<FrontendAction> Act(CreateFrontendAction(*Clang));
+  OwningPtr<FrontendAction> Act(CreateFrontendAction(*Clang));
   if (!Act)
     return false;
   bool Success = Clang->ExecuteAction(*Act);
   if (Clang->getFrontendOpts().DisableFree)
-    BuryPointer(Act.release());
+    BuryPointer(Act.take());
   return Success;
 }

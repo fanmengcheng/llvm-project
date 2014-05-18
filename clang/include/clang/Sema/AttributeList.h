@@ -218,7 +218,7 @@ private:
       ScopeLoc(scopeLoc), EllipsisLoc(ellipsisLoc), NumArgs(numArgs),
       SyntaxUsed(syntaxUsed), Invalid(false), UsedAsTypeAttr(false),
       IsAvailability(false), IsTypeTagForDatatype(false), IsProperty(false),
-      HasParsedType(false), NextInPosition(nullptr), NextInPool(nullptr) {
+      HasParsedType(false), NextInPosition(0), NextInPool(0) {
     if (numArgs) memcpy(getArgsBuffer(), args, numArgs * sizeof(ArgsUnion));
     AttrKind = getKind(getName(), getScopeName(), syntaxUsed);
   }
@@ -237,7 +237,7 @@ private:
       Invalid(false), UsedAsTypeAttr(false), IsAvailability(true),
       IsTypeTagForDatatype(false), IsProperty(false), HasParsedType(false),
       UnavailableLoc(unavailable), MessageExpr(messageExpr),
-      NextInPosition(nullptr), NextInPool(nullptr) {
+      NextInPosition(0), NextInPool(0) {
     ArgsUnion PVal(Parm);
     memcpy(getArgsBuffer(), &PVal, sizeof(ArgsUnion));
     new (&getAvailabilitySlot(IntroducedSlot)) AvailabilityChange(introduced);
@@ -257,7 +257,7 @@ private:
     ScopeLoc(scopeLoc), EllipsisLoc(), NumArgs(3), SyntaxUsed(syntaxUsed),
     Invalid(false), UsedAsTypeAttr(false), IsAvailability(false),
     IsTypeTagForDatatype(false), IsProperty(false), HasParsedType(false),
-    NextInPosition(nullptr), NextInPool(nullptr) {
+    NextInPosition(0), NextInPool(0) {
     ArgsVector Args;
     Args.push_back(Parm1);
     Args.push_back(Parm2);
@@ -275,7 +275,7 @@ private:
       ScopeLoc(scopeLoc), EllipsisLoc(), NumArgs(1), SyntaxUsed(syntaxUsed),
       Invalid(false), UsedAsTypeAttr(false), IsAvailability(false),
       IsTypeTagForDatatype(true), IsProperty(false), HasParsedType(false),
-      NextInPosition(nullptr), NextInPool(nullptr) {
+      NextInPosition(NULL), NextInPool(NULL) {
     ArgsUnion PVal(ArgKind);
     memcpy(getArgsBuffer(), &PVal, sizeof(ArgsUnion));
     TypeTagForDatatypeData &ExtraData = getTypeTagForDatatypeDataSlot();
@@ -293,7 +293,7 @@ private:
         ScopeLoc(scopeLoc), EllipsisLoc(), NumArgs(0), SyntaxUsed(syntaxUsed),
         Invalid(false), UsedAsTypeAttr(false), IsAvailability(false),
         IsTypeTagForDatatype(false), IsProperty(false), HasParsedType(true),
-        NextInPosition(nullptr), NextInPool(nullptr) {
+        NextInPosition(0), NextInPool(0) {
     new (&getTypeBuffer()) ParsedType(typeArg);
     AttrKind = getKind(getName(), getScopeName(), syntaxUsed);
   }
@@ -307,7 +307,7 @@ private:
       ScopeLoc(scopeLoc), EllipsisLoc(), NumArgs(0), SyntaxUsed(syntaxUsed),
       Invalid(false), UsedAsTypeAttr(false), IsAvailability(false),
       IsTypeTagForDatatype(false), IsProperty(true), HasParsedType(false),
-      NextInPosition(nullptr), NextInPool(nullptr) {
+      NextInPosition(0), NextInPool(0) {
     new (&getPropertyDataBuffer()) PropertyData(getterId, setterId);
     AttrKind = getKind(getName(), getScopeName(), syntaxUsed);
   }
@@ -389,6 +389,44 @@ public:
     return getArg(Arg).get<IdentifierLoc*>();
   }
 
+  class arg_iterator {
+    ArgsUnion const *X;
+    unsigned Idx;
+  public:
+    arg_iterator(ArgsUnion const *x, unsigned idx) : X(x), Idx(idx) {}
+
+    arg_iterator& operator++() {
+      ++Idx;
+      return *this;
+    }
+
+    bool operator==(const arg_iterator& I) const {
+      assert (X == I.X &&
+              "compared arg_iterators are for different argument lists");
+      return Idx == I.Idx;
+    }
+
+    bool operator!=(const arg_iterator& I) const {
+      return !operator==(I);
+    }
+
+    ArgsUnion operator*() const {
+      return X[Idx];
+    }
+
+    unsigned getArgNum() const {
+      return Idx+1;
+    }
+  };
+
+  arg_iterator arg_begin() const {
+    return arg_iterator(getArgsBuffer(), 0);
+  }
+
+  arg_iterator arg_end() const {
+    return arg_iterator(getArgsBuffer(), NumArgs);
+  }
+
   const AvailabilityChange &getAvailabilityIntroduced() const {
     assert(getKind() == AT_Availability && "Not an availability attribute");
     return getAvailabilitySlot(IntroducedSlot);
@@ -455,15 +493,7 @@ public:
   unsigned getMaxArgs() const;
   bool diagnoseAppertainsTo(class Sema &S, const Decl *D) const;
   bool diagnoseLangOpts(class Sema &S) const;
-  bool existsInTarget(const llvm::Triple &T) const;
-  bool isKnownToGCC() const;
-
-  /// \brief If the parsed attribute has a semantic equivalent, and it would
-  /// have a semantic Spelling enumeration (due to having semantically-distinct
-  /// spelling variations), return the value of that semantic spelling. If the
-  /// parsed attribute does not have a semantic equivalent, or would not have
-  /// a Spelling enumeration, the value UINT_MAX is returned.
-  unsigned getSemanticSpelling() const;
+  bool existsInTarget(llvm::Triple T) const;
 };
 
 /// A factory, from which one makes pools, from which one creates
@@ -546,11 +576,11 @@ class AttributePool {
 
 public:
   /// Create a new pool for a factory.
-  AttributePool(AttributeFactory &factory) : Factory(factory), Head(nullptr) {}
+  AttributePool(AttributeFactory &factory) : Factory(factory), Head(0) {}
 
   /// Move the given pool's allocations to this pool.
   AttributePool(AttributePool &pool) : Factory(pool.Factory), Head(pool.Head) {
-    pool.Head = nullptr;
+    pool.Head = 0;
   }
 
   AttributeFactory &getFactory() const { return Factory; }
@@ -558,7 +588,7 @@ public:
   void clear() {
     if (Head) {
       Factory.reclaimPool(Head);
-      Head = nullptr;
+      Head = 0;
     }
   }
 
@@ -566,7 +596,7 @@ public:
   void takeAllFrom(AttributePool &pool) {
     if (pool.Head) {
       takePool(pool.Head);
-      pool.Head = nullptr;
+      pool.Head = 0;
     }
   }
 
@@ -618,6 +648,9 @@ public:
                                           syntax));
   }
 
+  AttributeList *createIntegerAttribute(ASTContext &C, IdentifierInfo *Name,
+                                        SourceLocation TokLoc, int Arg);
+
   AttributeList *createTypeTagForDatatype(
                     IdentifierInfo *attrName, SourceRange attrRange,
                     IdentifierInfo *scopeName, SourceLocation scopeLoc,
@@ -655,6 +688,40 @@ public:
   }
 };
 
+/// addAttributeLists - Add two AttributeLists together
+/// The right-hand list is appended to the left-hand list, if any
+/// A pointer to the joined list is returned.
+/// Note: the lists are not left unmodified.
+inline AttributeList *addAttributeLists(AttributeList *Left,
+                                        AttributeList *Right) {
+  if (!Left)
+    return Right;
+
+  AttributeList *next = Left, *prev;
+  do {
+    prev = next;
+    next = next->getNext();
+  } while (next);
+  prev->setNext(Right);
+  return Left;
+}
+
+/// CXX11AttributeList - A wrapper around a C++11 attribute list.
+/// Stores, in addition to the list proper, whether or not an actual list was
+/// (as opposed to an empty list, which may be ill-formed in some places) and
+/// the source range of the list.
+struct CXX11AttributeList { 
+  AttributeList *AttrList;
+  SourceRange Range;
+  bool HasAttr;
+  CXX11AttributeList (AttributeList *attrList, SourceRange range, bool hasAttr)
+    : AttrList(attrList), Range(range), HasAttr (hasAttr) {
+  }
+  CXX11AttributeList ()
+    : AttrList(0), Range(), HasAttr(false) {
+  }
+};
+
 /// ParsedAttributes - A collection of parsed attributes.  Currently
 /// we don't differentiate between the various attribute syntaxes,
 /// which is basically silly.
@@ -664,18 +731,21 @@ public:
 class ParsedAttributes {
 public:
   ParsedAttributes(AttributeFactory &factory)
-    : pool(factory), list(nullptr) {
+    : pool(factory), list(0) {
   }
 
-  ParsedAttributes(const ParsedAttributes &) LLVM_DELETED_FUNCTION;
+  ParsedAttributes(ParsedAttributes &attrs)
+    : pool(attrs.pool), list(attrs.list) {
+    attrs.list = 0;
+  }
 
   AttributePool &getPool() const { return pool; }
 
-  bool empty() const { return list == nullptr; }
+  bool empty() const { return list == 0; }
 
   void add(AttributeList *newAttr) {
     assert(newAttr);
-    assert(newAttr->getNext() == nullptr);
+    assert(newAttr->getNext() == 0);
     newAttr->setNext(list);
     list = newAttr;
   }
@@ -697,11 +767,11 @@ public:
 
   void takeAllFrom(ParsedAttributes &attrs) {
     addAll(attrs.list);
-    attrs.list = nullptr;
+    attrs.list = 0;
     pool.takeAllFrom(attrs.pool);
   }
 
-  void clear() { list = nullptr; pool.clear(); }
+  void clear() { list = 0; pool.clear(); }
   AttributeList *getList() const { return list; }
 
   /// Returns a reference to the attribute list.  Try not to introduce
@@ -793,6 +863,15 @@ public:
     return attr;
   }
 
+  AttributeList *addNewInteger(ASTContext &C, IdentifierInfo *name,
+                               SourceLocation loc, int arg) {
+    AttributeList *attr =
+      pool.createIntegerAttribute(C, name, loc, arg);
+    add(attr);
+    return attr;
+  }
+
+
 private:
   mutable AttributePool pool;
   AttributeList *list;
@@ -838,8 +917,7 @@ enum AttributeDeclKind {
   ExpectedObjCInterfaceDeclInitMethod,
   ExpectedFunctionVariableOrClass,
   ExpectedObjectiveCProtocol,
-  ExpectedFunctionGlobalVarMethodOrProperty,
-  ExpectedStructOrTypedef
+  ExpectedFunctionGlobalVarMethodOrProperty
 };
 
 }  // end namespace clang

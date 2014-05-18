@@ -528,7 +528,7 @@ static void destroyOptimisticNormalEntry(CodeGenFunction &CGF,
   llvm::BasicBlock *unreachableBB = CGF.getUnreachableBlock();
   for (llvm::BasicBlock::use_iterator
          i = entry->use_begin(), e = entry->use_end(); i != e; ) {
-    llvm::Use &use = *i;
+    llvm::Use &use = i.getUse();
     ++i;
 
     use.set(unreachableBB);
@@ -860,9 +860,7 @@ void CodeGenFunction::PopCleanupBlock(bool FallthroughIsBranchThrough) {
 
   // Emit the EH cleanup if required.
   if (RequiresEHCleanup) {
-    CGDebugInfo *DI = getDebugInfo();
-    SaveAndRestoreLocation AutoRestoreLocation(*this, Builder);
-    if (DI)
+    if (CGDebugInfo *DI = getDebugInfo())
       DI->EmitLocation(Builder, CurEHLocation);
 
     CGBuilderTy::InsertPoint SavedIP = Builder.saveAndClearIP();

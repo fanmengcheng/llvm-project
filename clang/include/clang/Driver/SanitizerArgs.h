@@ -42,16 +42,14 @@ class SanitizerArgs {
     NeedsLeakDetection = Leak,
     NeedsUbsanRt = Undefined | Integer,
     NotAllowedWithTrap = Vptr,
-    HasZeroBaseShadow = Thread | Memory | DataFlow,
-    NeedsUnwindTables = Address | Thread | Memory | DataFlow
+    HasZeroBaseShadow = Thread | Memory | DataFlow
   };
   unsigned Kind;
 
   std::string BlacklistFile;
-  int MsanTrackOrigins;
+  bool MsanTrackOrigins;
   bool AsanZeroBaseShadow;
   bool UbsanTrapOnError;
-  bool AsanSharedRuntime;
 
  public:
   SanitizerArgs();
@@ -59,7 +57,6 @@ class SanitizerArgs {
   SanitizerArgs(const ToolChain &TC, const llvm::opt::ArgList &Args);
 
   bool needsAsanRt() const { return Kind & NeedsAsanRt; }
-  bool needsSharedAsanRt() const { return AsanSharedRuntime; }
   bool needsTsanRt() const { return Kind & NeedsTsanRt; }
   bool needsMsanRt() const { return Kind & NeedsMsanRt; }
   bool needsLeakDetection() const { return Kind & NeedsLeakDetection; }
@@ -76,7 +73,6 @@ class SanitizerArgs {
   bool hasZeroBaseShadow() const {
     return (Kind & HasZeroBaseShadow) || AsanZeroBaseShadow;
   }
-  bool needsUnwindTables() const { return Kind & NeedsUnwindTables; }
   void addArgs(const llvm::opt::ArgList &Args,
                llvm::opt::ArgStringList &CmdArgs) const;
 
@@ -102,7 +98,7 @@ class SanitizerArgs {
 
   /// Produce an argument string from ArgList \p Args, which shows how it
   /// provides a sanitizer kind in \p Mask. For example, the argument list
-  /// "-fsanitize=thread,vptr -fsanitize=address" with mask \c NeedsUbsanRt
+  /// "-fsanitize=thread,vptr -faddress-sanitizer" with mask \c NeedsUbsanRt
   /// would produce "-fsanitize=vptr".
   static std::string lastArgumentForKind(const Driver &D,
                                          const llvm::opt::ArgList &Args,

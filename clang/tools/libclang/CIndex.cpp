@@ -15,6 +15,7 @@
 #include "CIndexer.h"
 #include "CIndexDiagnostic.h"
 #include "CLog.h"
+#include "CXComment.h"
 #include "CXCursor.h"
 #include "CXSourceLocation.h"
 #include "CXString.h"
@@ -24,8 +25,6 @@
 #include "clang/AST/Attr.h"
 #include "clang/AST/StmtVisitor.h"
 #include "clang/Basic/Diagnostic.h"
-#include "clang/Basic/DiagnosticCategories.h"
-#include "clang/Basic/DiagnosticIDs.h"
 #include "clang/Basic/Version.h"
 #include "clang/Frontend/ASTUnit.h"
 #include "clang/Frontend/CompilerInstance.h"
@@ -35,7 +34,6 @@
 #include "clang/Lex/Lexer.h"
 #include "clang/Lex/PreprocessingRecord.h"
 #include "clang/Lex/Preprocessor.h"
-#include "clang/Serialization/SerializationDiagnostic.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringSwitch.h"
@@ -64,7 +62,6 @@ using namespace clang::cxindex;
 CXTranslationUnit cxtu::MakeCXTranslationUnit(CIndexer *CIdx, ASTUnit *AU) {
   if (!AU)
     return 0;
-  assert(CIdx);
   CXTranslationUnit D = new CXTranslationUnitImpl();
   D->CIdx = CIdx;
   D->TheASTUnit = AU;
@@ -73,18 +70,6 @@ CXTranslationUnit cxtu::MakeCXTranslationUnit(CIndexer *CIdx, ASTUnit *AU) {
   D->OverridenCursorsPool = createOverridenCXCursorsPool();
   D->CommentToXML = 0;
   return D;
-}
-
-bool cxtu::isASTReadError(ASTUnit *AU) {
-  for (ASTUnit::stored_diag_iterator D = AU->stored_diag_begin(),
-                                     DEnd = AU->stored_diag_end();
-       D != DEnd; ++D) {
-    if (D->getLevel() >= DiagnosticsEngine::Error &&
-        DiagnosticIDs::getCategoryNumberForDiag(D->getID()) ==
-            diag::DiagCat_AST_Deserialization_Issue)
-      return true;
-  }
-  return false;
 }
 
 cxtu::CXTUOwner::~CXTUOwner() {
@@ -313,7 +298,7 @@ bool CursorVisitor::visitDeclsFromFileRegion(FileID File,
     if (Outer.isInvalid())
       return false;
 
-    std::tie(File, Offset) = SM.getDecomposedExpansionLoc(Outer);
+    llvm::tie(File, Offset) = SM.getDecomposedExpansionLoc(Outer);
     Length = 0;
     Unit->findFileRegionDecls(File, Offset, Length, Decls);
   }
@@ -784,7 +769,7 @@ bool CursorVisitor::VisitFunctionDecl(FunctionDecl *ND) {
     // If we have a function declared directly (without the use of a typedef),
     // visit just the return type. Otherwise, just visit the function's type
     // now.
-    if ((FTL && !isa<CXXConversionDecl>(ND) && Visit(FTL.getReturnLoc())) ||
+    if ((FTL && !isa<CXXConversionDecl>(ND) && Visit(FTL.getResultLoc())) ||
         (!FTL && Visit(TL)))
       return true;
     
@@ -794,9 +779,8 @@ bool CursorVisitor::VisitFunctionDecl(FunctionDecl *ND) {
         return true;
     
     // Visit the declaration name.
-    if (!isa<CXXDestructorDecl>(ND))
-      if (VisitDeclarationNameInfo(ND->getNameInfo()))
-        return true;
+    if (VisitDeclarationNameInfo(ND->getNameInfo()))
+      return true;
     
     // FIXME: Visit explicitly-specified template arguments!
     
@@ -811,11 +795,13 @@ bool CursorVisitor::VisitFunctionDecl(FunctionDecl *ND) {
     if (CXXConstructorDecl *Constructor = dyn_cast<CXXConstructorDecl>(ND)) {
       // Find the initializers that were written in the source.
       SmallVector<CXXCtorInitializer *, 4> WrittenInits;
-      for (auto *I : Constructor->inits()) {
-        if (!I->isWritten())
+      for (CXXConstructorDecl::init_iterator I = Constructor->init_begin(),
+                                          IEnd = Constructor->init_end();
+           I != IEnd; ++I) {
+        if (!(*I)->isWritten())
           continue;
       
-        WrittenInits.push_back(I);
+        WrittenInits.push_back(*I);
       }
       
       // Sort the initializers in source order
@@ -909,12 +895,14 @@ bool CursorVisitor::VisitTemplateTemplateParmDecl(TemplateTemplateParmDecl *D) {
 }
 
 bool CursorVisitor::VisitObjCMethodDecl(ObjCMethodDecl *ND) {
-  if (TypeSourceInfo *TSInfo = ND->getReturnTypeSourceInfo())
+  if (TypeSourceInfo *TSInfo = ND->getResultTypeSourceInfo())
     if (Visit(TSInfo->getTypeLoc()))
       return true;
 
-  for (const auto *P : ND->params()) {
-    if (Visit(MakeCXCursor(P, TU, RegionOfInterest)))
+  for (ObjCMethodDecl::param_iterator P = ND->param_begin(),
+       PEnd = ND->param_end();
+       P != PEnd; ++P) {
+    if (Visit(MakeCXCursor(*P, TU, RegionOfInterest)))
       return true;
   }
 
@@ -944,6 +932,19 @@ static void addRangedDeclsInContainer(DeclIt *DI_current, DeclIt DE_current,
     }
     break;
   }
+}
+
+namespace {
+  struct ContainerDeclsSort {
+    SourceManager &SM;
+    ContainerDeclsSort(SourceManager &sm) : SM(sm) {}
+    bool operator()(Decl *A, Decl *B) {
+      SourceLocation L_A = A->getLocStart();
+      SourceLocation L_B = B->getLocStart();
+      assert(L_A.isValid() && L_B.isValid());
+      return SM.isBeforeInTranslationUnit(L_A, L_B);
+    }
+  };
 }
 
 bool CursorVisitor::VisitObjCContainerDecl(ObjCContainerDecl *D) {
@@ -977,21 +978,18 @@ bool CursorVisitor::VisitObjCContainerDecl(ObjCContainerDecl *D) {
 
   // Get all the Decls in the DeclContext, and sort them with the
   // additional ones we've collected.  Then visit them.
-  for (auto *SubDecl : D->decls()) {
-    if (!SubDecl || SubDecl->getLexicalDeclContext() != D ||
-        SubDecl->getLocStart().isInvalid())
+  for (DeclContext::decl_iterator I = D->decls_begin(), E = D->decls_end();
+       I!=E; ++I) {
+    Decl *subDecl = *I;
+    if (!subDecl || subDecl->getLexicalDeclContext() != D ||
+        subDecl->getLocStart().isInvalid())
       continue;
-    DeclsInContainer.push_back(SubDecl);
+    DeclsInContainer.push_back(subDecl);
   }
 
   // Now sort the Decls so that they appear in lexical order.
   std::sort(DeclsInContainer.begin(), DeclsInContainer.end(),
-            [&SM](Decl *A, Decl *B) {
-    SourceLocation L_A = A->getLocStart();
-    SourceLocation L_B = B->getLocStart();
-    assert(L_A.isValid() && L_B.isValid());
-    return SM.isBeforeInTranslationUnit(L_A, L_B);
-  });
+            ContainerDeclsSort(SM));
 
   // Now visit the decls.
   for (SmallVectorImpl<Decl*>::iterator I = DeclsInContainer.begin(),
@@ -1519,11 +1517,11 @@ bool CursorVisitor::VisitAttributedTypeLoc(AttributedTypeLoc TL) {
 
 bool CursorVisitor::VisitFunctionTypeLoc(FunctionTypeLoc TL, 
                                          bool SkipResultType) {
-  if (!SkipResultType && Visit(TL.getReturnLoc()))
+  if (!SkipResultType && Visit(TL.getResultLoc()))
     return true;
 
-  for (unsigned I = 0, N = TL.getNumParams(); I != N; ++I)
-    if (Decl *D = TL.getParam(I))
+  for (unsigned I = 0, N = TL.getNumArgs(); I != N; ++I)
+    if (Decl *D = TL.getArg(I))
       if (Visit(MakeCXCursor(D, TU, RegionOfInterest)))
         return true;
 
@@ -1657,8 +1655,9 @@ bool CursorVisitor::VisitCXXRecordDecl(CXXRecordDecl *D) {
       return true;
 
   if (D->isCompleteDefinition()) {
-    for (const auto &I : D->bases()) {
-      if (Visit(cxcursor::MakeCursorCXXBaseSpecifier(&I, TU)))
+    for (CXXRecordDecl::base_class_iterator I = D->bases_begin(),
+         E = D->bases_end(); I != E; ++I) {
+      if (Visit(cxcursor::MakeCursorCXXBaseSpecifier(I, TU)))
         return true;
     }
   }
@@ -1667,8 +1666,9 @@ bool CursorVisitor::VisitCXXRecordDecl(CXXRecordDecl *D) {
 }
 
 bool CursorVisitor::VisitAttributes(Decl *D) {
-  for (const auto *I : D->attrs())
-    if (Visit(MakeCXCursor(I, D, TU)))
+  for (AttrVec::const_iterator i = D->attr_begin(), e = D->attr_end();
+       i != e; ++i)
+    if (Visit(MakeCXCursor(*i, D, TU)))
         return true;
 
   return false;
@@ -1850,7 +1850,6 @@ public:
   void VisitLambdaExpr(const LambdaExpr *E);
   void VisitOMPExecutableDirective(const OMPExecutableDirective *D);
   void VisitOMPParallelDirective(const OMPParallelDirective *D);
-  void VisitOMPSimdDirective(const OMPSimdDirective *D);
 
 private:
   void AddDeclarationNameInfo(const Stmt *S);
@@ -1923,26 +1922,14 @@ public:
 #include "clang/Basic/OpenMPKinds.def"
 };
 
-void OMPClauseEnqueue::VisitOMPIfClause(const OMPIfClause *C) {
-  Visitor->AddStmt(C->getCondition());
-}
-
-void OMPClauseEnqueue::VisitOMPNumThreadsClause(const OMPNumThreadsClause *C) {
-  Visitor->AddStmt(C->getNumThreads());
-}
-
-void OMPClauseEnqueue::VisitOMPSafelenClause(const OMPSafelenClause *C) {
-  Visitor->AddStmt(C->getSafelen());
-}
-
 void OMPClauseEnqueue::VisitOMPDefaultClause(const OMPDefaultClause *C) { }
-
-void OMPClauseEnqueue::VisitOMPProcBindClause(const OMPProcBindClause *C) { }
 
 template<typename T>
 void OMPClauseEnqueue::VisitOMPClauseList(T *Node) {
-  for (const auto *I : Node->varlists())
-    Visitor->AddStmt(I);
+  for (typename T::varlist_const_iterator I = Node->varlist_begin(),
+                                          E = Node->varlist_end();
+         I != E; ++I)
+    Visitor->AddStmt(*I);
 }
 
 void OMPClauseEnqueue::VisitOMPPrivateClause(const OMPPrivateClause *C) {
@@ -1953,13 +1940,6 @@ void OMPClauseEnqueue::VisitOMPFirstprivateClause(
   VisitOMPClauseList(C);
 }
 void OMPClauseEnqueue::VisitOMPSharedClause(const OMPSharedClause *C) {
-  VisitOMPClauseList(C);
-}
-void OMPClauseEnqueue::VisitOMPLinearClause(const OMPLinearClause *C) {
-  VisitOMPClauseList(C);
-  Visitor->AddStmt(C->getStep());
-}
-void OMPClauseEnqueue::VisitOMPCopyinClause(const OMPCopyinClause *C) {
   VisitOMPClauseList(C);
 }
 }
@@ -2084,8 +2064,9 @@ void EnqueueVisitor::VisitDependentScopeDeclRefExpr(
 void EnqueueVisitor::VisitDeclStmt(const DeclStmt *S) {
   unsigned size = WL.size();
   bool isFirst = true;
-  for (const auto *D : S->decls()) {
-    AddDecl(D, isFirst);
+  for (DeclStmt::const_decl_iterator D = S->decl_begin(), DEnd = S->decl_end();
+       D != DEnd; ++D) {
+    AddDecl(*D, isFirst);
     isFirst = false;
   }
   if (size == WL.size())
@@ -2252,10 +2233,6 @@ void EnqueueVisitor::VisitOMPExecutableDirective(
 }
 
 void EnqueueVisitor::VisitOMPParallelDirective(const OMPParallelDirective *D) {
-  VisitOMPExecutableDirective(D);
-}
-
-void EnqueueVisitor::VisitOMPSimdDirective(const OMPSimdDirective *D) {
   VisitOMPExecutableDirective(D);
 }
 
@@ -2460,12 +2437,12 @@ bool CursorVisitor::RunVisitorWorkList(VisitorWorkList &WL) {
                          TL.getAs<FunctionProtoTypeLoc>()) {
             if (E->hasExplicitParameters()) {
               // Visit parameters.
-              for (unsigned I = 0, N = Proto.getNumParams(); I != N; ++I)
-                if (Visit(MakeCXCursor(Proto.getParam(I), TU)))
+              for (unsigned I = 0, N = Proto.getNumArgs(); I != N; ++I)
+                if (Visit(MakeCXCursor(Proto.getArg(I), TU)))
                   return true;
             } else {
               // Visit result type.
-              if (Visit(Proto.getReturnLoc()))
+              if (Visit(Proto.getResultLoc()))
                 return true;
             }
           }
@@ -2611,26 +2588,11 @@ void clang_toggleCrashRecovery(unsigned isEnabled) {
   else
     llvm::CrashRecoveryContext::Disable();
 }
-
+  
 CXTranslationUnit clang_createTranslationUnit(CXIndex CIdx,
                                               const char *ast_filename) {
-  CXTranslationUnit TU;
-  enum CXErrorCode Result =
-      clang_createTranslationUnit2(CIdx, ast_filename, &TU);
-  (void)Result;
-  assert((TU && Result == CXError_Success) ||
-         (!TU && Result != CXError_Success));
-  return TU;
-}
-
-enum CXErrorCode clang_createTranslationUnit2(CXIndex CIdx,
-                                              const char *ast_filename,
-                                              CXTranslationUnit *out_TU) {
-  if (out_TU)
-    *out_TU = NULL;
-
-  if (!CIdx || !ast_filename || !out_TU)
-    return CXError_InvalidArguments;
+  if (!CIdx || !ast_filename)
+    return 0;
 
   LOG_FUNC_SECTION {
     *Log << ast_filename;
@@ -2640,20 +2602,20 @@ enum CXErrorCode clang_createTranslationUnit2(CXIndex CIdx,
   FileSystemOptions FileSystemOpts;
 
   IntrusiveRefCntPtr<DiagnosticsEngine> Diags;
-  ASTUnit *AU = ASTUnit::LoadFromASTFile(ast_filename, Diags, FileSystemOpts,
-                                         CXXIdx->getOnlyLocalDecls(), None,
-                                         /*CaptureDiagnostics=*/true,
-                                         /*AllowPCHWithCompilerErrors=*/true,
-                                         /*UserFilesAreVolatile=*/true);
-  *out_TU = MakeCXTranslationUnit(CXXIdx, AU);
-  return *out_TU ? CXError_Success : CXError_Failure;
+  ASTUnit *TU = ASTUnit::LoadFromASTFile(ast_filename, Diags, FileSystemOpts,
+                                  CXXIdx->getOnlyLocalDecls(),
+                                  0, 0,
+                                  /*CaptureDiagnostics=*/true,
+                                  /*AllowPCHWithCompilerErrors=*/true,
+                                  /*UserFilesAreVolatile=*/true);
+  return MakeCXTranslationUnit(CXXIdx, TU);
 }
 
 unsigned clang_defaultEditingTranslationUnitOptions() {
   return CXTranslationUnit_PrecompiledPreamble | 
          CXTranslationUnit_CacheCompletionResults;
 }
-
+  
 CXTranslationUnit
 clang_createTranslationUnitFromSourceFile(CXIndex CIdx,
                                           const char *source_filename,
@@ -2676,8 +2638,7 @@ struct ParseTranslationUnitInfo {
   struct CXUnsavedFile *unsaved_files;
   unsigned num_unsaved_files;
   unsigned options;
-  CXTranslationUnit *out_TU;
-  CXErrorCode result;
+  CXTranslationUnit result;
 };
 static void clang_parseTranslationUnit_Impl(void *UserData) {
   ParseTranslationUnitInfo *PTUI =
@@ -2689,19 +2650,10 @@ static void clang_parseTranslationUnit_Impl(void *UserData) {
   struct CXUnsavedFile *unsaved_files = PTUI->unsaved_files;
   unsigned num_unsaved_files = PTUI->num_unsaved_files;
   unsigned options = PTUI->options;
-  CXTranslationUnit *out_TU = PTUI->out_TU;
+  PTUI->result = 0;
 
-  // Set up the initial return values.
-  if (out_TU)
-    *out_TU = NULL;
-  PTUI->result = CXError_Failure;
-
-  // Check arguments.
-  if (!CIdx || !out_TU ||
-      (unsaved_files == NULL && num_unsaved_files != 0)) {
-    PTUI->result = CXError_InvalidArguments;
+  if (!CIdx)
     return;
-  }
 
   CIndexer *CXXIdx = static_cast<CIndexer *>(CIdx);
 
@@ -2728,8 +2680,8 @@ static void clang_parseTranslationUnit_Impl(void *UserData) {
     llvm::CrashRecoveryContextReleaseRefCleanup<DiagnosticsEngine> >
     DiagCleanup(Diags.getPtr());
 
-  std::unique_ptr<std::vector<ASTUnit::RemappedFile>> RemappedFiles(
-      new std::vector<ASTUnit::RemappedFile>());
+  OwningPtr<std::vector<ASTUnit::RemappedFile> >
+    RemappedFiles(new std::vector<ASTUnit::RemappedFile>());
 
   // Recover resources if we crash before exiting this function.
   llvm::CrashRecoveryContextCleanupRegistrar<
@@ -2743,8 +2695,8 @@ static void clang_parseTranslationUnit_Impl(void *UserData) {
                                             Buffer));
   }
 
-  std::unique_ptr<std::vector<const char *>> Args(
-      new std::vector<const char *>());
+  OwningPtr<std::vector<const char *> >
+    Args(new std::vector<const char*>());
 
   // Recover resources if we crash before exiting this method.
   llvm::CrashRecoveryContextCleanupRegistrar<std::vector<const char*> >
@@ -2784,15 +2736,27 @@ static void clang_parseTranslationUnit_Impl(void *UserData) {
   }
   
   unsigned NumErrors = Diags->getClient()->getNumErrors();
-  std::unique_ptr<ASTUnit> ErrUnit;
-  std::unique_ptr<ASTUnit> Unit(ASTUnit::LoadFromCommandLine(
-      Args->data(), Args->data() + Args->size(), Diags,
-      CXXIdx->getClangResourcesPath(), CXXIdx->getOnlyLocalDecls(),
-      /*CaptureDiagnostics=*/true, *RemappedFiles.get(),
-      /*RemappedFilesKeepOriginalName=*/true, PrecompilePreamble, TUKind,
-      CacheCodeCompletionResults, IncludeBriefCommentsInCodeCompletion,
-      /*AllowPCHWithCompilerErrors=*/true, SkipFunctionBodies,
-      /*UserFilesAreVolatile=*/true, ForSerialization, &ErrUnit));
+  OwningPtr<ASTUnit> ErrUnit;
+  OwningPtr<ASTUnit> Unit(
+    ASTUnit::LoadFromCommandLine(Args->size() ? &(*Args)[0] : 0 
+                                 /* vector::data() not portable */,
+                                 Args->size() ? (&(*Args)[0] + Args->size()) :0,
+                                 Diags,
+                                 CXXIdx->getClangResourcesPath(),
+                                 CXXIdx->getOnlyLocalDecls(),
+                                 /*CaptureDiagnostics=*/true,
+                                 RemappedFiles->size() ? &(*RemappedFiles)[0]:0,
+                                 RemappedFiles->size(),
+                                 /*RemappedFilesKeepOriginalName=*/true,
+                                 PrecompilePreamble,
+                                 TUKind,
+                                 CacheCodeCompletionResults,
+                                 IncludeBriefCommentsInCodeCompletion,
+                                 /*AllowPCHWithCompilerErrors=*/true,
+                                 SkipFunctionBodies,
+                                 /*UserFilesAreVolatile=*/true,
+                                 ForSerialization,
+                                 &ErrUnit));
 
   if (NumErrors != Diags->getClient()->getNumErrors()) {
     // Make sure to check that 'Unit' is non-NULL.
@@ -2800,41 +2764,15 @@ static void clang_parseTranslationUnit_Impl(void *UserData) {
       printDiagsToStderr(Unit ? Unit.get() : ErrUnit.get());
   }
 
-  if (isASTReadError(Unit ? Unit.get() : ErrUnit.get())) {
-    PTUI->result = CXError_ASTReadError;
-  } else {
-    *PTUI->out_TU = MakeCXTranslationUnit(CXXIdx, Unit.release());
-    PTUI->result = *PTUI->out_TU ? CXError_Success : CXError_Failure;
-  }
+  PTUI->result = MakeCXTranslationUnit(CXXIdx, Unit.take());
 }
-
-CXTranslationUnit
-clang_parseTranslationUnit(CXIndex CIdx,
-                           const char *source_filename,
-                           const char *const *command_line_args,
-                           int num_command_line_args,
-                           struct CXUnsavedFile *unsaved_files,
-                           unsigned num_unsaved_files,
-                           unsigned options) {
-  CXTranslationUnit TU;
-  enum CXErrorCode Result = clang_parseTranslationUnit2(
-      CIdx, source_filename, command_line_args, num_command_line_args,
-      unsaved_files, num_unsaved_files, options, &TU);
-  (void)Result;
-  assert((TU && Result == CXError_Success) ||
-         (!TU && Result != CXError_Success));
-  return TU;
-}
-
-enum CXErrorCode clang_parseTranslationUnit2(
-    CXIndex CIdx,
-    const char *source_filename,
-    const char *const *command_line_args,
-    int num_command_line_args,
-    struct CXUnsavedFile *unsaved_files,
-    unsigned num_unsaved_files,
-    unsigned options,
-    CXTranslationUnit *out_TU) {
+CXTranslationUnit clang_parseTranslationUnit(CXIndex CIdx,
+                                             const char *source_filename,
+                                         const char * const *command_line_args,
+                                             int num_command_line_args,
+                                            struct CXUnsavedFile *unsaved_files,
+                                             unsigned num_unsaved_files,
+                                             unsigned options) {
   LOG_FUNC_SECTION {
     *Log << source_filename << ": ";
     for (int i = 0; i != num_command_line_args; ++i)
@@ -2843,8 +2781,7 @@ enum CXErrorCode clang_parseTranslationUnit2(
 
   ParseTranslationUnitInfo PTUI = { CIdx, source_filename, command_line_args,
                                     num_command_line_args, unsaved_files,
-                                    num_unsaved_files, options, out_TU,
-                                    CXError_Failure };
+                                    num_unsaved_files, options, 0 };
   llvm::CrashRecoveryContext CRC;
 
   if (!RunSafely(CRC, clang_parseTranslationUnit_Impl, &PTUI)) {
@@ -2867,11 +2804,10 @@ enum CXErrorCode clang_parseTranslationUnit2(
     fprintf(stderr, "],\n");
     fprintf(stderr, "  'options' : %d,\n", options);
     fprintf(stderr, "}\n");
-
-    return CXError_Crashed;
+    
+    return 0;
   } else if (getenv("LIBCLANG_RESOURCE_USAGE")) {
-    if (CXTranslationUnit *TU = PTUI.out_TU)
-      PrintLibclangResourceUsage(*TU);
+    PrintLibclangResourceUsage(PTUI.result);
   }
   
   return PTUI.result;
@@ -2910,10 +2846,8 @@ int clang_saveTranslationUnit(CXTranslationUnit TU, const char *FileName,
     *Log << TU << ' ' << FileName;
   }
 
-  if (isNotUsableTU(TU)) {
-    LOG_BAD_TU(TU);
+  if (!TU)
     return CXSaveError_InvalidTU;
-  }
 
   ASTUnit *CXXUnit = cxtu::getASTUnit(TU);
   ASTUnit::ConcurrencyCheck Check(*CXXUnit);
@@ -2956,8 +2890,7 @@ void clang_disposeTranslationUnit(CXTranslationUnit CTUnit) {
   if (CTUnit) {
     // If the translation unit has been marked as unsafe to free, just discard
     // it.
-    ASTUnit *Unit = cxtu::getASTUnit(CTUnit);
-    if (Unit && Unit->isUnsafeToFree())
+    if (cxtu::getASTUnit(CTUnit)->isUnsafeToFree())
       return;
 
     delete cxtu::getASTUnit(CTUnit);
@@ -2984,28 +2917,19 @@ struct ReparseTranslationUnitInfo {
 static void clang_reparseTranslationUnit_Impl(void *UserData) {
   ReparseTranslationUnitInfo *RTUI =
     static_cast<ReparseTranslationUnitInfo*>(UserData);
-  RTUI->result = CXError_Failure;
-
   CXTranslationUnit TU = RTUI->TU;
-  unsigned num_unsaved_files = RTUI->num_unsaved_files;
-  struct CXUnsavedFile *unsaved_files = RTUI->unsaved_files;
-  unsigned options = RTUI->options;
-  (void) options;
-
-  // Check arguments.
-  if (isNotUsableTU(TU)) {
-    LOG_BAD_TU(TU);
-    RTUI->result = CXError_InvalidArguments;
+  if (!TU)
     return;
-  }
-  if (unsaved_files == NULL && num_unsaved_files != 0) {
-    RTUI->result = CXError_InvalidArguments;
-    return;
-  }
 
   // Reset the associated diagnostics.
   delete static_cast<CXDiagnosticSetImpl*>(TU->Diagnostics);
   TU->Diagnostics = 0;
+
+  unsigned num_unsaved_files = RTUI->num_unsaved_files;
+  struct CXUnsavedFile *unsaved_files = RTUI->unsaved_files;
+  unsigned options = RTUI->options;
+  (void) options;
+  RTUI->result = 1;
 
   CIndexer *CXXIdx = TU->CIdx;
   if (CXXIdx->isOptEnabled(CXGlobalOpt_ThreadBackgroundPriorityForEditing))
@@ -3013,10 +2937,10 @@ static void clang_reparseTranslationUnit_Impl(void *UserData) {
 
   ASTUnit *CXXUnit = cxtu::getASTUnit(TU);
   ASTUnit::ConcurrencyCheck Check(*CXXUnit);
-
-  std::unique_ptr<std::vector<ASTUnit::RemappedFile>> RemappedFiles(
-      new std::vector<ASTUnit::RemappedFile>());
-
+  
+  OwningPtr<std::vector<ASTUnit::RemappedFile> >
+    RemappedFiles(new std::vector<ASTUnit::RemappedFile>());
+  
   // Recover resources if we crash before exiting this function.
   llvm::CrashRecoveryContextCleanupRegistrar<
     std::vector<ASTUnit::RemappedFile> > RemappedCleanup(RemappedFiles.get());
@@ -3028,11 +2952,10 @@ static void clang_reparseTranslationUnit_Impl(void *UserData) {
     RemappedFiles->push_back(std::make_pair(unsaved_files[I].Filename,
                                             Buffer));
   }
-
-  if (!CXXUnit->Reparse(*RemappedFiles.get()))
-    RTUI->result = CXError_Success;
-  else if (isASTReadError(CXXUnit))
-    RTUI->result = CXError_ASTReadError;
+  
+  if (!CXXUnit->Reparse(RemappedFiles->size() ? &(*RemappedFiles)[0] : 0,
+                        RemappedFiles->size()))
+    RTUI->result = 0;
 }
 
 int clang_reparseTranslationUnit(CXTranslationUnit TU,
@@ -3044,7 +2967,7 @@ int clang_reparseTranslationUnit(CXTranslationUnit TU,
   }
 
   ReparseTranslationUnitInfo RTUI = { TU, num_unsaved_files, unsaved_files,
-                                      options, CXError_Failure };
+                                      options, 0 };
 
   if (getenv("LIBCLANG_NOTHREADS")) {
     clang_reparseTranslationUnit_Impl(&RTUI);
@@ -3056,7 +2979,7 @@ int clang_reparseTranslationUnit(CXTranslationUnit TU,
   if (!RunSafely(CRC, clang_reparseTranslationUnit_Impl, &RTUI)) {
     fprintf(stderr, "libclang: crash detected during reparsing\n");
     cxtu::getASTUnit(TU)->setUnsafeToFree(true);
-    return CXError_Crashed;
+    return 1;
   } else if (getenv("LIBCLANG_RESOURCE_USAGE"))
     PrintLibclangResourceUsage(TU);
 
@@ -3065,20 +2988,16 @@ int clang_reparseTranslationUnit(CXTranslationUnit TU,
 
 
 CXString clang_getTranslationUnitSpelling(CXTranslationUnit CTUnit) {
-  if (isNotUsableTU(CTUnit)) {
-    LOG_BAD_TU(CTUnit);
+  if (!CTUnit)
     return cxstring::createEmpty();
-  }
 
   ASTUnit *CXXUnit = cxtu::getASTUnit(CTUnit);
   return cxstring::createDup(CXXUnit->getOriginalSourceFileName());
 }
 
 CXCursor clang_getTranslationUnitCursor(CXTranslationUnit TU) {
-  if (isNotUsableTU(TU)) {
-    LOG_BAD_TU(TU);
+  if (!TU)
     return clang_getNullCursor();
-  }
 
   ASTUnit *CXXUnit = cxtu::getASTUnit(TU);
   return MakeCXCursor(CXXUnit->getASTContext().getTranslationUnitDecl(), TU);
@@ -3108,10 +3027,8 @@ time_t clang_getFileTime(CXFile SFile) {
 }
 
 CXFile clang_getFile(CXTranslationUnit TU, const char *file_name) {
-  if (isNotUsableTU(TU)) {
-    LOG_BAD_TU(TU);
+  if (!TU)
     return 0;
-  }
 
   ASTUnit *CXXUnit = cxtu::getASTUnit(TU);
 
@@ -3119,14 +3036,8 @@ CXFile clang_getFile(CXTranslationUnit TU, const char *file_name) {
   return const_cast<FileEntry *>(FMgr.getFile(file_name));
 }
 
-unsigned clang_isFileMultipleIncludeGuarded(CXTranslationUnit TU,
-                                            CXFile file) {
-  if (isNotUsableTU(TU)) {
-    LOG_BAD_TU(TU);
-    return 0;
-  }
-
-  if (!file)
+unsigned clang_isFileMultipleIncludeGuarded(CXTranslationUnit TU, CXFile file) {
+  if (!TU || !file)
     return 0;
 
   ASTUnit *CXXUnit = cxtu::getASTUnit(TU);
@@ -3392,22 +3303,6 @@ CXString clang_getCursorSpelling(CXCursor C) {
   }
 
   if (clang_isExpression(C.kind)) {
-    const Expr *E = getCursorExpr(C);
-
-    if (C.kind == CXCursor_ObjCStringLiteral ||
-        C.kind == CXCursor_StringLiteral) {
-      const StringLiteral *SLit;
-      if (const ObjCStringLiteral *OSL = dyn_cast<ObjCStringLiteral>(E)) {
-        SLit = OSL->getString();
-      } else {
-        SLit = cast<StringLiteral>(E);
-      }
-      SmallString<256> Buf;
-      llvm::raw_svector_ostream OS(Buf);
-      SLit->outputString(OS);
-      return cxstring::createDup(OS.str());
-    }
-
     const Decl *D = getDeclFromExpr(getCursorExpr(C));
     if (D)
       return getDeclSpelling(D);
@@ -3869,12 +3764,6 @@ CXString clang_getCursorKindSpelling(enum CXCursorKind Kind) {
     return cxstring::createRef("asm label");
   case CXCursor_PackedAttr:
     return cxstring::createRef("attribute(packed)");
-  case CXCursor_PureAttr:
-    return cxstring::createRef("attribute(pure)");
-  case CXCursor_ConstAttr:
-    return cxstring::createRef("attribute(const)");
-  case CXCursor_NoDuplicateAttr:
-    return cxstring::createRef("attribute(noduplicate)");
   case CXCursor_PreprocessingDirective:
     return cxstring::createRef("preprocessing directive");
   case CXCursor_MacroDefinition:
@@ -3924,9 +3813,7 @@ CXString clang_getCursorKindSpelling(enum CXCursorKind Kind) {
   case CXCursor_ModuleImportDecl:
     return cxstring::createRef("ModuleImport");
   case CXCursor_OMPParallelDirective:
-    return cxstring::createRef("OMPParallelDirective");
-  case CXCursor_OMPSimdDirective:
-    return cxstring::createRef("OMPSimdDirective");
+      return cxstring::createRef("OMPParallelDirective");
   }
 
   llvm_unreachable("Unhandled CXCursorKind");
@@ -4043,10 +3930,8 @@ static enum CXChildVisitResult GetCursorVisitor(CXCursor cursor,
 }
 
 CXCursor clang_getCursor(CXTranslationUnit TU, CXSourceLocation Loc) {
-  if (isNotUsableTU(TU)) {
-    LOG_BAD_TU(TU);
+  if (!TU)
     return clang_getNullCursor();
-  }
 
   ASTUnit *CXXUnit = cxtu::getASTUnit(TU);
   ASTUnit::ConcurrencyCheck Check(*CXXUnit);
@@ -5006,11 +4891,6 @@ CXString clang_getTokenSpelling(CXTranslationUnit TU, CXToken CXTok) {
     break;
   }
 
-  if (isNotUsableTU(TU)) {
-    LOG_BAD_TU(TU);
-    return cxstring::createEmpty();
-  }
-
   // We have to find the starting buffer pointer the hard way, by
   // deconstructing the source location.
   ASTUnit *CXXUnit = cxtu::getASTUnit(TU);
@@ -5030,11 +4910,6 @@ CXString clang_getTokenSpelling(CXTranslationUnit TU, CXToken CXTok) {
 }
 
 CXSourceLocation clang_getTokenLocation(CXTranslationUnit TU, CXToken CXTok) {
-  if (isNotUsableTU(TU)) {
-    LOG_BAD_TU(TU);
-    return clang_getNullLocation();
-  }
-
   ASTUnit *CXXUnit = cxtu::getASTUnit(TU);
   if (!CXXUnit)
     return clang_getNullLocation();
@@ -5044,11 +4919,6 @@ CXSourceLocation clang_getTokenLocation(CXTranslationUnit TU, CXToken CXTok) {
 }
 
 CXSourceRange clang_getTokenExtent(CXTranslationUnit TU, CXToken CXTok) {
-  if (isNotUsableTU(TU)) {
-    LOG_BAD_TU(TU);
-    return clang_getNullRange();
-  }
-
   ASTUnit *CXXUnit = cxtu::getASTUnit(TU);
   if (!CXXUnit)
     return clang_getNullRange();
@@ -5140,10 +5010,8 @@ void clang_tokenize(CXTranslationUnit TU, CXSourceRange Range,
   if (NumTokens)
     *NumTokens = 0;
 
-  if (isNotUsableTU(TU)) {
-    LOG_BAD_TU(TU);
+  if (!TU)
     return;
-  }
 
   ASTUnit *CXXUnit = cxtu::getASTUnit(TU);
   if (!CXXUnit || !Tokens || !NumTokens)
@@ -5357,8 +5225,10 @@ AnnotateTokensWorker::Visit(CXCursor cursor, CXCursor parent) {
         if (Method->getObjCDeclQualifier())
           HasContextSensitiveKeywords = true;
         else {
-          for (const auto *P : Method->params()) {
-            if (P->getObjCDeclQualifier()) {
+          for (ObjCMethodDecl::param_const_iterator P = Method->param_begin(),
+                                                 PEnd = Method->param_end();
+               P != PEnd; ++P) {
+            if ((*P)->getObjCDeclQualifier()) {
               HasContextSensitiveKeywords = true;
               break;
             }
@@ -5861,11 +5731,7 @@ extern "C" {
 void clang_annotateTokens(CXTranslationUnit TU,
                           CXToken *Tokens, unsigned NumTokens,
                           CXCursor *Cursors) {
-  if (isNotUsableTU(TU)) {
-    LOG_BAD_TU(TU);
-    return;
-  }
-  if (NumTokens == 0 || !Tokens || !Cursors) {
+  if (!TU || NumTokens == 0 || !Tokens || !Cursors) {
     LOG_FUNC_SECTION { *Log << "<null input>"; }
     return;
   }
@@ -6035,30 +5901,28 @@ static int getCursorPlatformAvailabilityForDecl(const Decl *D,
                                                 int availability_size) {
   bool HadAvailAttr = false;
   int N = 0;
-  for (auto A : D->attrs()) {
-    if (DeprecatedAttr *Deprecated = dyn_cast<DeprecatedAttr>(A)) {
+  for (Decl::attr_iterator A = D->attr_begin(), AEnd = D->attr_end(); A != AEnd;
+       ++A) {
+    if (DeprecatedAttr *Deprecated = dyn_cast<DeprecatedAttr>(*A)) {
       HadAvailAttr = true;
       if (always_deprecated)
         *always_deprecated = 1;
-      if (deprecated_message) {
-        clang_disposeString(*deprecated_message);
+      if (deprecated_message)
         *deprecated_message = cxstring::createDup(Deprecated->getMessage());
-      }
       continue;
     }
     
-    if (UnavailableAttr *Unavailable = dyn_cast<UnavailableAttr>(A)) {
+    if (UnavailableAttr *Unavailable = dyn_cast<UnavailableAttr>(*A)) {
       HadAvailAttr = true;
       if (always_unavailable)
         *always_unavailable = 1;
       if (unavailable_message) {
-        clang_disposeString(*unavailable_message);
         *unavailable_message = cxstring::createDup(Unavailable->getMessage());
       }
       continue;
     }
     
-    if (AvailabilityAttr *Avail = dyn_cast<AvailabilityAttr>(A)) {
+    if (AvailabilityAttr *Avail = dyn_cast<AvailabilityAttr>(*A)) {
       HadAvailAttr = true;
       if (N < availability_size) {
         availability[N].Platform
@@ -6319,6 +6183,17 @@ CXString clang_Cursor_getBriefCommentText(CXCursor C) {
   return cxstring::createNull();
 }
 
+CXComment clang_Cursor_getParsedComment(CXCursor C) {
+  if (!clang_isDeclaration(C.kind))
+    return cxcomment::createCXComment(NULL, NULL);
+
+  const Decl *D = getCursorDecl(C);
+  const ASTContext &Context = getCursorContext(C);
+  const comments::FullComment *FC = Context.getCommentForDecl(D, /*PP=*/ NULL);
+
+  return cxcomment::createCXComment(FC, getCursorTU(C));
+}
+
 CXModule clang_Cursor_getModule(CXCursor C) {
   if (C.kind == CXCursor_ModuleImportDecl) {
     if (const ImportDecl *ImportD =
@@ -6359,11 +6234,7 @@ CXString clang_Module_getFullName(CXModule CXMod) {
 
 unsigned clang_Module_getNumTopLevelHeaders(CXTranslationUnit TU,
                                             CXModule CXMod) {
-  if (isNotUsableTU(TU)) {
-    LOG_BAD_TU(TU);
-    return 0;
-  }
-  if (!CXMod)
+  if (!TU || !CXMod)
     return 0;
   Module *Mod = static_cast<Module*>(CXMod);
   FileManager &FileMgr = cxtu::getASTUnit(TU)->getFileManager();
@@ -6373,11 +6244,7 @@ unsigned clang_Module_getNumTopLevelHeaders(CXTranslationUnit TU,
 
 CXFile clang_Module_getTopLevelHeader(CXTranslationUnit TU,
                                       CXModule CXMod, unsigned Index) {
-  if (isNotUsableTU(TU)) {
-    LOG_BAD_TU(TU);
-    return 0;
-  }
-  if (!CXMod)
+  if (!TU || !CXMod)
     return 0;
   Module *Mod = static_cast<Module*>(CXMod);
   FileManager &FileMgr = cxtu::getASTUnit(TU)->getFileManager();
@@ -6400,29 +6267,27 @@ unsigned clang_CXXMethod_isPureVirtual(CXCursor C) {
   if (!clang_isDeclaration(C.kind))
     return 0;
 
+  const CXXMethodDecl *Method = 0;
   const Decl *D = cxcursor::getCursorDecl(C);
-  const CXXMethodDecl *Method =
-      D ? dyn_cast_or_null<CXXMethodDecl>(D->getAsFunction()) : 0;
+  if (const FunctionTemplateDecl *FunTmpl =
+          dyn_cast_or_null<FunctionTemplateDecl>(D))
+    Method = dyn_cast<CXXMethodDecl>(FunTmpl->getTemplatedDecl());
+  else
+    Method = dyn_cast_or_null<CXXMethodDecl>(D);
   return (Method && Method->isVirtual() && Method->isPure()) ? 1 : 0;
-}
-
-unsigned clang_CXXMethod_isConst(CXCursor C) {
-  if (!clang_isDeclaration(C.kind))
-    return 0;
-
-  const Decl *D = cxcursor::getCursorDecl(C);
-  const CXXMethodDecl *Method =
-      D ? dyn_cast_or_null<CXXMethodDecl>(D->getAsFunction()) : 0;
-  return (Method && (Method->getTypeQualifiers() & Qualifiers::Const)) ? 1 : 0;
 }
 
 unsigned clang_CXXMethod_isStatic(CXCursor C) {
   if (!clang_isDeclaration(C.kind))
     return 0;
   
+  const CXXMethodDecl *Method = 0;
   const Decl *D = cxcursor::getCursorDecl(C);
-  const CXXMethodDecl *Method =
-      D ? dyn_cast_or_null<CXXMethodDecl>(D->getAsFunction()) : 0;
+  if (const FunctionTemplateDecl *FunTmpl =
+          dyn_cast_or_null<FunctionTemplateDecl>(D))
+    Method = dyn_cast<CXXMethodDecl>(FunTmpl->getTemplatedDecl());
+  else
+    Method = dyn_cast_or_null<CXXMethodDecl>(D);
   return (Method && Method->isStatic()) ? 1 : 0;
 }
 
@@ -6430,9 +6295,13 @@ unsigned clang_CXXMethod_isVirtual(CXCursor C) {
   if (!clang_isDeclaration(C.kind))
     return 0;
   
+  const CXXMethodDecl *Method = 0;
   const Decl *D = cxcursor::getCursorDecl(C);
-  const CXXMethodDecl *Method =
-      D ? dyn_cast_or_null<CXXMethodDecl>(D->getAsFunction()) : 0;
+  if (const FunctionTemplateDecl *FunTmpl =
+          dyn_cast_or_null<FunctionTemplateDecl>(D))
+    Method = dyn_cast<CXXMethodDecl>(FunTmpl->getTemplatedDecl());
+  else
+    Method = dyn_cast_or_null<CXXMethodDecl>(D);
   return (Method && Method->isVirtual()) ? 1 : 0;
 }
 } // end: extern "C"
@@ -6518,14 +6387,13 @@ const char *clang_getTUResourceUsageName(CXTUResourceUsageKind kind) {
 }
 
 CXTUResourceUsage clang_getCXTUResourceUsage(CXTranslationUnit TU) {
-  if (isNotUsableTU(TU)) {
-    LOG_BAD_TU(TU);
+  if (!TU) {
     CXTUResourceUsage usage = { (void*) 0, 0, 0 };
     return usage;
   }
   
   ASTUnit *astUnit = cxtu::getASTUnit(TU);
-  std::unique_ptr<MemUsageEntries> entries(new MemUsageEntries());
+  OwningPtr<MemUsageEntries> entries(new MemUsageEntries());
   ASTContext &astContext = astUnit->getASTContext();
   
   // How much memory is used by AST nodes and types?
@@ -6606,7 +6474,7 @@ CXTUResourceUsage clang_getCXTUResourceUsage(CXTranslationUnit TU) {
   CXTUResourceUsage usage = { (void*) entries.get(),
                             (unsigned) entries->size(),
                             entries->size() ? &(*entries)[0] : 0 };
-  entries.release();
+  entries.take();
   return usage;
 }
 
@@ -6619,11 +6487,6 @@ CXSourceRangeList *clang_getSkippedRanges(CXTranslationUnit TU, CXFile file) {
   CXSourceRangeList *skipped = new CXSourceRangeList;
   skipped->count = 0;
   skipped->ranges = 0;
-
-  if (isNotUsableTU(TU)) {
-    LOG_BAD_TU(TU);
-    return skipped;
-  }
 
   if (!file)
     return skipped;
@@ -6719,7 +6582,7 @@ void cxindex::printDiagsToStderr(ASTUnit *Unit) {
   for (ASTUnit::stored_diag_iterator D = Unit->stored_diag_begin(), 
                                   DEnd = Unit->stored_diag_end();
        D != DEnd; ++D) {
-    CXStoredDiagnostic Diag(*D, Unit->getLangOpts());
+    CXStoredDiagnostic Diag(*D, Unit->getASTContext().getLangOpts());
     CXString Msg = clang_formatDiagnostic(&Diag,
                                 clang_defaultDiagnosticDisplayOptions());
     fprintf(stderr, "%s\n", clang_getCString(Msg));
@@ -6844,9 +6707,9 @@ Logger &cxindex::Logger::operator<<(CXTranslationUnit TU) {
         LogOS << " (" << Unit->getASTFileName() << ')';
       return *this;
     }
-  } else {
-    LogOS << "<NULL TU>";
   }
+
+  LogOS << "<NULL TU>";
   return *this;
 }
 

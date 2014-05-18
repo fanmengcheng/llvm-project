@@ -52,7 +52,7 @@ class RewriterTestContext {
       llvm::MemoryBuffer::getMemBuffer(Content);
     const FileEntry *Entry =
       Files.getVirtualFile(Name, Source->getBufferSize(), 0);
-    Sources.overrideFileContents(Entry, Source);
+    Sources.overrideFileContents(Entry, Source, true);
     assert(Entry != NULL);
     return Sources.createFileID(Entry, SourceLocation(), SrcMgr::C_User);
   }
@@ -102,9 +102,7 @@ class RewriterTestContext {
     // descriptor, which might not see the changes made.
     // FIXME: Figure out whether there is a way to get the SourceManger to
     // reopen the file.
-    std::unique_ptr<const llvm::MemoryBuffer> FileBuffer(
-        Files.getBufferForFile(Path, NULL));
-    return FileBuffer->getBuffer();
+    return Files.getBufferForFile(Path, NULL)->getBuffer();
   }
 
   IntrusiveRefCntPtr<DiagnosticOptions> DiagOpts;

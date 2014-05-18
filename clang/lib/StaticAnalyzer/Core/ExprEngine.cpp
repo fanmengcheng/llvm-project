@@ -13,6 +13,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#define DEBUG_TYPE "ExprEngine"
+
 #include "clang/StaticAnalyzer/Core/PathSensitive/ExprEngine.h"
 #include "PrettyStackTraceLocationContext.h"
 #include "clang/AST/CharUnits.h"
@@ -38,8 +40,6 @@ using namespace clang;
 using namespace ento;
 using llvm::APSInt;
 
-#define DEBUG_TYPE "ExprEngine"
-
 STATISTIC(NumRemoveDeadBindings,
             "The # of times RemoveDeadBindings is called");
 STATISTIC(NumMaxBlockCountReached,
@@ -54,8 +54,6 @@ STATISTIC(NumTimesRetriedWithoutInlining,
 //===----------------------------------------------------------------------===//
 // Engine construction and deletion.
 //===----------------------------------------------------------------------===//
-
-static const char* TagProviderName = "ExprEngine";
 
 ExprEngine::ExprEngine(AnalysisManager &mgr, bool gcEnabled,
                        SetOfConstDecls *VisitedCalleesIn,
@@ -368,7 +366,7 @@ void ExprEngine::removeDead(ExplodedNode *Pred, ExplodedNodeSet &Out,
 
   // Process any special transfer function for dead symbols.
   // A tag to track convenience transitions, which can be removed at cleanup.
-  static SimpleProgramPointTag cleanupTag(TagProviderName, "Clean Node");
+  static SimpleProgramPointTag cleanupTag("ExprEngine : Clean Node");
   if (!SymReaper.hasDeadSymbols()) {
     // Generate a CleanedNode that has the environment and store cleaned
     // up. Since no symbols are dead, we can optimize and not clean out
@@ -555,20 +553,12 @@ void ExprEngine::ProcessImplicitDtor(const CFGImplicitDtor D,
 
 void ExprEngine::ProcessNewAllocator(const CXXNewExpr *NE,
                                      ExplodedNode *Pred) {
+  //TODO: Implement VisitCXXNewAllocatorCall
   ExplodedNodeSet Dst;
-  AnalysisManager &AMgr = getAnalysisManager();
-  AnalyzerOptions &Opts = AMgr.options;
-  // TODO: We're not evaluating allocators for all cases just yet as
-  // we're not handling the return value correctly, which causes false
-  // positives when the alpha.cplusplus.NewDeleteLeaks check is on.
-  if (Opts.mayInlineCXXAllocator())
-    VisitCXXNewAllocatorCall(NE, Pred, Dst);
-  else {
-    NodeBuilder Bldr(Pred, Dst, *currBldrCtx);
-    const LocationContext *LCtx = Pred->getLocationContext();
-    PostImplicitCall PP(NE->getOperatorNew(), NE->getLocStart(), LCtx);
-    Bldr.generateNode(PP, Pred->getState(), Pred);
-  }
+  NodeBuilder Bldr(Pred, Dst, *currBldrCtx);
+  const LocationContext *LCtx = Pred->getLocationContext();
+  PostImplicitCall PP(NE->getOperatorNew(), NE->getLocStart(), LCtx);
+  Bldr.generateNode(PP, Pred->getState(), Pred);
   Engine.enqueue(Dst, currBldrCtx->getBlock(), currStmtIdx);
 }
 
@@ -731,7 +721,6 @@ void ExprEngine::Visit(const Stmt *S, ExplodedNode *Pred,
     case Expr::MSDependentExistsStmtClass:
     case Stmt::CapturedStmtClass:
     case Stmt::OMPParallelDirectiveClass:
-    case Stmt::OMPSimdDirectiveClass:
       llvm_unreachable("Stmt should not be in analyzer evaluation loop");
 
     case Stmt::ObjCSubscriptRefExprClass:
@@ -1276,7 +1265,7 @@ void ExprEngine::processCFGBlockEntrance(const BlockEdge &L,
 
   // FIXME: Refactor this into a checker.
   if (nodeBuilder.getContext().blockCount() >= AMgr.options.maxBlockVisitOnPath) {
-    static SimpleProgramPointTag tag(TagProviderName, "Block count exceeded");
+    static SimpleProgramPointTag tag("ExprEngine : Block count exceeded");
     const ExplodedNode *Sink =
                    nodeBuilder.generateSink(Pred->getState(), Pred, &tag);
 
@@ -1352,31 +1341,6 @@ static SVal RecoverCastedSymbol(ProgramStateManager& StateMgr,
   return state->getSVal(Ex, LCtx);
 }
 
-const Stmt *getRightmostLeaf(const Stmt *Condition) {
-  while (Condition) {
-    const BinaryOperator *BO = dyn_cast<BinaryOperator>(Condition);
-    if (!BO || !BO->isLogicalOp()) {
-      return Condition;
-    }
-    Condition = BO->getRHS()->IgnoreParens();
-  }
-  return nullptr;
-}
-
-// Returns the condition the branch at the end of 'B' depends on and whose value
-// has been evaluated within 'B'.
-// In most cases, the terminator condition of 'B' will be evaluated fully in
-// the last statement of 'B'; in those cases, the resolved condition is the
-// given 'Condition'.
-// If the condition of the branch is a logical binary operator tree, the CFG is
-// optimized: in that case, we know that the expression formed by all but the
-// rightmost leaf of the logical binary operator tree must be true, and thus
-// the branch condition is at this point equivalent to the truth value of that
-// rightmost leaf; the CFG block thus only evaluates this rightmost leaf
-// expression in its final statement. As the full condition in that case was
-// not evaluated, and is thus not in the SVal cache, we need to use that leaf
-// expression to evaluate the truth value of the condition in the current state
-// space.
 static const Stmt *ResolveCondition(const Stmt *Condition,
                                     const CFGBlock *B) {
   if (const Expr *Ex = dyn_cast<Expr>(Condition))
@@ -1385,12 +1349,6 @@ static const Stmt *ResolveCondition(const Stmt *Condition,
   const BinaryOperator *BO = dyn_cast<BinaryOperator>(Condition);
   if (!BO || !BO->isLogicalOp())
     return Condition;
-
-  // FIXME: This is a workaround until we handle temporary destructor branches
-  // correctly; currently, temporary destructor branches lead to blocks that
-  // only have a terminator (and no statements). These blocks violate the
-  // invariant this function assumes.
-  if (B->getTerminator().isTemporaryDtorsBranch()) return Condition;
 
   // For logical operations, we still have the case where some branches
   // use the traditional "merge" approach and others sink the branch
@@ -1406,9 +1364,18 @@ static const Stmt *ResolveCondition(const Stmt *Condition,
     Optional<CFGStmt> CS = Elem.getAs<CFGStmt>();
     if (!CS)
       continue;
-    const Stmt *LastStmt = CS->getStmt();
-    assert(LastStmt == Condition || LastStmt == getRightmostLeaf(Condition));
-    return LastStmt;
+    if (CS->getStmt() != Condition)
+      break;
+    return Condition;
+  }
+
+  assert(I != E);
+
+  while (Condition) {
+    BO = dyn_cast<BinaryOperator>(Condition);
+    if (!BO || !BO->isLogicalOp())
+      return Condition;
+    Condition = BO->getRHS()->IgnoreParens();
   }
   llvm_unreachable("could not resolve condition");
 }
@@ -1488,7 +1455,7 @@ void ExprEngine::processBranch(const Stmt *Condition, const Stmt *Term,
     DefinedSVal V = X.castAs<DefinedSVal>();
 
     ProgramStateRef StTrue, StFalse;
-    std::tie(StTrue, StFalse) = PrevState->assume(V);
+    tie(StTrue, StFalse) = PrevState->assume(V);
 
     // Process the true branch.
     if (builder.isFeasible(true)) {
@@ -1854,6 +1821,7 @@ void ExprEngine::VisitMemberExpr(const MemberExpr *M, ExplodedNode *Pred,
             dyn_cast<ImplicitCastExpr>((*I)->getParentMap().getParent(M));
           if (!PE || PE->getCastKind() != CK_ArrayToPointerDecay) {
             llvm_unreachable("should always be wrapped in ArrayToPointerDecay");
+            L = UnknownVal();
           }
         }
 
@@ -1884,7 +1852,7 @@ public:
   CollectReachableSymbolsCallback(ProgramStateRef State) {}
   const InvalidatedSymbols &getSymbols() const { return Symbols; }
 
-  bool VisitSymbol(SymbolRef Sym) override {
+  bool VisitSymbol(SymbolRef Sym) {
     Symbols.insert(Sym);
     return true;
   }
@@ -2091,7 +2059,7 @@ void ExprEngine::evalLoad(ExplodedNodeSet &Dst,
     QualType ValTy = TR->getValueType();
     if (const ReferenceType *RT = ValTy->getAs<ReferenceType>()) {
       static SimpleProgramPointTag
-             loadReferenceTag(TagProviderName, "Load Reference");
+             loadReferenceTag("ExprEngine : Load Reference");
       ExplodedNodeSet Tmp;
       evalLoadCommon(Tmp, NodeEx, BoundEx, Pred, state,
                      location, &loadReferenceTag,
@@ -2174,7 +2142,7 @@ void ExprEngine::evalLocation(ExplodedNodeSet &Dst,
     // instead "int *p" is noted as
     // "Variable 'p' initialized to a null pointer value"
     
-    static SimpleProgramPointTag tag(TagProviderName, "Location");
+    static SimpleProgramPointTag tag("ExprEngine: Location");
     Bldr.generateNode(NodeEx, Pred, state, &tag);
   }
   ExplodedNodeSet Tmp;
@@ -2186,10 +2154,8 @@ void ExprEngine::evalLocation(ExplodedNodeSet &Dst,
 std::pair<const ProgramPointTag *, const ProgramPointTag*>
 ExprEngine::geteagerlyAssumeBinOpBifurcationTags() {
   static SimpleProgramPointTag
-         eagerlyAssumeBinOpBifurcationTrue(TagProviderName,
-                                           "Eagerly Assume True"),
-         eagerlyAssumeBinOpBifurcationFalse(TagProviderName,
-                                            "Eagerly Assume False");
+         eagerlyAssumeBinOpBifurcationTrue("ExprEngine : Eagerly Assume True"),
+         eagerlyAssumeBinOpBifurcationFalse("ExprEngine : Eagerly Assume False");
   return std::make_pair(&eagerlyAssumeBinOpBifurcationTrue,
                         &eagerlyAssumeBinOpBifurcationFalse);
 }
@@ -2217,7 +2183,7 @@ void ExprEngine::evalEagerlyAssumeBinOpBifurcation(ExplodedNodeSet &Dst,
         geteagerlyAssumeBinOpBifurcationTags();
 
       ProgramStateRef StateTrue, StateFalse;
-      std::tie(StateTrue, StateFalse) = state->assume(*SEV);
+      tie(StateTrue, StateFalse) = state->assume(*SEV);
 
       // First assume that the condition is true.
       if (StateTrue) {
@@ -2571,7 +2537,7 @@ void ExprEngine::ViewGraph(ArrayRef<const ExplodedNode*> Nodes) {
   GraphPrintCheckerState = this;
   GraphPrintSourceManager = &getContext().getSourceManager();
 
-  std::unique_ptr<ExplodedGraph> TrimmedG(G.trim(Nodes));
+  OwningPtr<ExplodedGraph> TrimmedG(G.trim(Nodes));
 
   if (!TrimmedG.get())
     llvm::errs() << "warning: Trimmed ExplodedGraph is empty.\n";

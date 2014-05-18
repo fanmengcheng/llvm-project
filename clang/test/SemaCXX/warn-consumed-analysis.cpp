@@ -51,7 +51,7 @@ public:
 
 class CONSUMABLE(unconsumed) DestructorTester {
 public:
-  DestructorTester();
+  DestructorTester() RETURN_TYPESTATE(unconsumed);
   DestructorTester(int);
   
   void operator*() CALLABLE_WHEN("unconsumed");
@@ -82,21 +82,11 @@ ConsumableClass<int> returnsUnknown() RETURN_TYPESTATE(unknown);
 void testInitialization() {
   ConsumableClass<int> var0;
   ConsumableClass<int> var1 = ConsumableClass<int>();
-  ConsumableClass<int> var2(42);
-  ConsumableClass<int> var3(var2);  // copy constructor
-  ConsumableClass<int> var4(var0);  // copy consumed value
-
+  
+  var0 = ConsumableClass<int>();
+  
   *var0; // expected-warning {{invalid invocation of method 'operator*' on object 'var0' while it is in the 'consumed' state}}
   *var1; // expected-warning {{invalid invocation of method 'operator*' on object 'var1' while it is in the 'consumed' state}}
-  *var2;
-  *var3;
-  *var4; // expected-warning {{invalid invocation of method 'operator*' on object 'var4' while it is in the 'consumed' state}}
-
-  var0 = ConsumableClass<int>(42);
-  *var0;
-  
-  var0 = var1;
-  *var0; // expected-warning {{invalid invocation of method 'operator*' on object 'var0' while it is in the 'consumed' state}}
   
   if (var0.isValid()) {
     *var0;
@@ -108,16 +98,19 @@ void testInitialization() {
 }
 
 void testDestruction() {
-  DestructorTester D0(42), D1(42), D2;
+  DestructorTester D0(42), D1(42);
   
   *D0;
   *D1;
-  *D2; // expected-warning {{invalid invocation of method 'operator*' on object 'D2' while it is in the 'consumed' state}}
+  
+  DestructorTester D2;
+  *D2;
   
   D0.~DestructorTester(); // expected-warning {{invalid invocation of method '~DestructorTester' on object 'D0' while it is in the 'unconsumed' state}}
   
   return; // expected-warning {{invalid invocation of method '~DestructorTester' on object 'D0' while it is in the 'unconsumed' state}} \
-             expected-warning {{invalid invocation of method '~DestructorTester' on object 'D1' while it is in the 'unconsumed' state}}
+             expected-warning {{invalid invocation of method '~DestructorTester' on object 'D1' while it is in the 'unconsumed' state}} \
+             expected-warning {{invalid invocation of method '~DestructorTester' on object 'D2' while it is in the 'unconsumed' state}}
 }
 
 void testTempValue() {
@@ -434,29 +427,6 @@ void testParamTypestateCaller() {
   testParamTypestateCallee(Var0, Var1); // expected-warning {{argument not in expected state; expected 'consumed', observed 'unconsumed'}}
 }
 
-
-void consumeFunc(ConsumableClass<int> P PARAM_TYPESTATE(unconsumed));
-struct ParamTest {
-  static void consumeFuncStatic(ConsumableClass<int> P PARAM_TYPESTATE(unconsumed));
-  void consumeFuncMeth(ConsumableClass<int> P PARAM_TYPESTATE(unconsumed));
-  void operator<<(ConsumableClass<int> P PARAM_TYPESTATE(unconsumed));
-};
-
-void operator>>(ParamTest& pt, ConsumableClass<int> P PARAM_TYPESTATE(unconsumed));
-
-
-void testFunctionParams() {
-  // Make sure we handle the different kinds of functions.
-  ConsumableClass<int> P;
-
-  consumeFunc(P);                   // expected-warning {{argument not in expected state; expected 'unconsumed', observed 'consumed'}}
-  ParamTest::consumeFuncStatic(P);  // expected-warning {{argument not in expected state; expected 'unconsumed', observed 'consumed'}}
-  ParamTest pt;
-  pt.consumeFuncMeth(P);            // expected-warning {{argument not in expected state; expected 'unconsumed', observed 'consumed'}}
-  pt << P;                          // expected-warning {{argument not in expected state; expected 'unconsumed', observed 'consumed'}}
-  pt >> P;                          // expected-warning {{argument not in expected state; expected 'unconsumed', observed 'consumed'}}
-}
-
 void baf3(ConsumableClass<int> var) {
   *var;
 }
@@ -675,17 +645,12 @@ void read(bool sf) {
 } // end namespace ContinueICETest
 
 
-namespace StatusUseCaseTests {
+namespace InitializerAssertionFailTest {
 
-class CONSUMABLE(unconsumed)
-      __attribute__((consumable_auto_cast_state))
-      __attribute__((consumable_set_state_on_read))
-    Status {
+class CONSUMABLE(unconsumed) Status {
   int code;
 
 public:
-  static Status OK;
-
   Status() RETURN_TYPESTATE(consumed);
   Status(int c) RETURN_TYPESTATE(unconsumed);
 
@@ -694,8 +659,6 @@ public:
 
   Status& operator=(const Status &other) CALLABLE_WHEN("unknown", "consumed");
   Status& operator=(Status &&other) CALLABLE_WHEN("unknown", "consumed");
-
-  bool operator==(const Status &other) const SET_TYPESTATE(consumed);
 
   bool check()  const SET_TYPESTATE(consumed);
   void ignore() const SET_TYPESTATE(consumed);
@@ -710,14 +673,7 @@ public:
 bool   cond();
 Status doSomething();
 void   handleStatus(const Status& s RETURN_TYPESTATE(consumed));
-void   handleStatusRef(Status& s);
-void   handleStatusPtr(Status* s);
-void   handleStatusUnmarked(const Status& s);
-
-void   log(const char* msg);
-void   fail() __attribute__((noreturn));
-void   checkStat(const Status& s);
-
+void   handleStatusPtr(const Status* s);
 
 void testSimpleTemporaries0() {
   doSomething(); // expected-warning {{invalid invocation of method '~Status' on a temporary object while it is in the 'unconsumed' state}}
@@ -735,15 +691,6 @@ void testSimpleTemporaries3() {
   Status s = doSomething();
 }  // expected-warning {{invalid invocation of method '~Status' on object 's' while it is in the 'unconsumed' state}}
 
-Status testSimpleTemporariesReturn0() {
-  return doSomething();
-}
-
-Status testSimpleTemporariesReturn1() {
-  Status s = doSomething();
-  return s;
-}
-
 void testSimpleTemporaries4() {
   Status s = doSomething();
   s.check();
@@ -755,17 +702,8 @@ void testSimpleTemporaries5() {
 }
 
 void testSimpleTemporaries6() {
-  Status s1 = doSomething();
-  handleStatus(s1);
-
-  Status s2 = doSomething();
-  handleStatusRef(s2);
-
-  Status s3 = doSomething();
-  handleStatusPtr(&s3);
-
-  Status s4 = doSomething();
-  handleStatusUnmarked(s4);
+  Status s = doSomething();
+  handleStatus(s);
 }
 
 void testSimpleTemporaries7() {
@@ -807,58 +745,38 @@ void testTemporariesWithConditionals3() {
 }
 
 void testTemporariesAndConstructors0() {
-  Status s(doSomething());    // Test the copy constructor.
+  Status s(doSomething());
   s.check();
 }
 
-void testTemporariesAndConstructors1F() {
-  Status s1 = doSomething();  // Test the copy constructor.
-  Status s2 = s1;
-} // expected-warning {{invalid invocation of method '~Status' on object 's2' while it is in the 'unconsumed' state}}
-
-void testTemporariesAndConstructors1S() {
-  Status s1 = doSomething();  // Test the copy constructor.
+void testTemporariesAndConstructors1() {
+  // Test the copy constructor.
+  
+  Status s1 = doSomething();
   Status s2(s1);
   s2.check();
-}
+}  // expected-warning {{invalid invocation of method '~Status' on object 's1' while it is in the 'unconsumed' state}}
 
-void testTemporariesAndConstructors2F() {
+void testTemporariesAndConstructors2() {
   // Test the move constructor.
+  
   Status s1 = doSomething();
-  Status s2 = static_cast<Status&&>(s1);
-} // expected-warning {{invalid invocation of method '~Status' on object 's2' while it is in the 'unconsumed' state}}
-
-void testTemporariesAndConstructors2S() {
-  // Test the move constructor.
-  Status s1 = doSomething();
-  Status s2 = static_cast<Status&&>(s1);
+  Status s2(static_cast<Status&&>(s1));
   s2.check();
 }
 
-void testTemporariesAndOperators0F() {
+void testTemporariesAndOperators0() {
   // Test the assignment operator.
-  Status s1 = doSomething();
-  Status s2;
-  s2 = s1;
-} // expected-warning {{invalid invocation of method '~Status' on object 's2' while it is in the 'unconsumed' state}}
-
-void testTemporariesAndOperators0S() {
-  // Test the assignment operator.
+  
   Status s1 = doSomething();
   Status s2;
   s2 = s1;
   s2.check();
-}
+} // expected-warning {{invalid invocation of method '~Status' on object 's1' while it is in the 'unconsumed' state}}
 
-void testTemporariesAndOperators1F() {
+void testTemporariesAndOperators1() {
   // Test the move assignment operator.
-  Status s1 = doSomething();
-  Status s2;
-  s2 = static_cast<Status&&>(s1);
-} // expected-warning {{invalid invocation of method '~Status' on object 's2' while it is in the 'unconsumed' state}}
-
-void testTemporariesAndOperators1S() {
-  // Test the move assignment operator.
+  
   Status s1 = doSomething();
   Status s2;
   s2 = static_cast<Status&&>(s1);
@@ -872,35 +790,6 @@ void testTemporariesAndOperators2() {
   s1.check();
   s2.check();
 }
-
-Status testReturnAutocast() {
-  Status s = doSomething();
-  s.check();  // consume s
-  return s;   // should autocast back to unconsumed
-}
-
-
-namespace TestParens {
-
-void test3() {
-  checkStat((doSomething()));
-}
-
-void test4() {
-  Status s = (doSomething());
-  s.check();
-}
-
-void test5() {
-  (doSomething()).check();
-}
-
-void test6() {
-  if ((doSomething()) == Status::OK)
-    return;
-}
-
-} // end namespace TestParens
 
 } // end namespace InitializerAssertionFailTest
 
@@ -931,4 +820,3 @@ namespace PR18260 {
     std::__1::move(x);
   }
 } // end namespace PR18260
-

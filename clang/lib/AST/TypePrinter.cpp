@@ -608,7 +608,7 @@ void TypePrinter::printFunctionProtoBefore(const FunctionProtoType *T,
   } else {
     // If needed for precedence reasons, wrap the inner part in grouping parens.
     SaveAndRestore<bool> PrevPHIsEmpty(HasEmptyPlaceHolder, false);
-    printBefore(T->getReturnType(), OS);
+    printBefore(T->getResultType(), OS);
     if (!PrevPHIsEmpty.get())
       OS << '(';
   }
@@ -624,17 +624,17 @@ void TypePrinter::printFunctionProtoAfter(const FunctionProtoType *T,
   OS << '(';
   {
     ParamPolicyRAII ParamPolicy(Policy);
-    for (unsigned i = 0, e = T->getNumParams(); i != e; ++i) {
+    for (unsigned i = 0, e = T->getNumArgs(); i != e; ++i) {
       if (i) OS << ", ";
-      print(T->getParamType(i), OS, StringRef());
+      print(T->getArgType(i), OS, StringRef());
     }
   }
   
   if (T->isVariadic()) {
-    if (T->getNumParams())
+    if (T->getNumArgs())
       OS << ", ";
     OS << "...";
-  } else if (T->getNumParams() == 0 && !Policy.LangOpts.CPlusPlus) {
+  } else if (T->getNumArgs() == 0 && !Policy.LangOpts.CPlusPlus) {
     // Do not emit int() if we have a proto, emit 'int(void)'.
     OS << "void";
   }
@@ -684,6 +684,9 @@ void TypePrinter::printFunctionProtoAfter(const FunctionProtoType *T,
     case CC_X86_64SysV:
       OS << " __attribute__((sysv_abi))";
       break;
+    case CC_CheriCCall:
+      OS << " __attribute__((cheri_ccall))";
+      break;
     }
   }
 
@@ -713,17 +716,17 @@ void TypePrinter::printFunctionProtoAfter(const FunctionProtoType *T,
   T->printExceptionSpecification(OS, Policy);
 
   if (T->hasTrailingReturn()) {
-    OS << " -> ";
-    print(T->getReturnType(), OS, StringRef());
+    OS << " -> "; 
+    print(T->getResultType(), OS, StringRef());
   } else
-    printAfter(T->getReturnType(), OS);
+    printAfter(T->getResultType(), OS);
 }
 
 void TypePrinter::printFunctionNoProtoBefore(const FunctionNoProtoType *T, 
                                              raw_ostream &OS) { 
   // If needed for precedence reasons, wrap the inner part in grouping parens.
   SaveAndRestore<bool> PrevPHIsEmpty(HasEmptyPlaceHolder, false);
-  printBefore(T->getReturnType(), OS);
+  printBefore(T->getResultType(), OS);
   if (!PrevPHIsEmpty.get())
     OS << '(';
 }
@@ -737,7 +740,7 @@ void TypePrinter::printFunctionNoProtoAfter(const FunctionNoProtoType *T,
   OS << "()";
   if (T->getNoReturnAttr())
     OS << " __attribute__((noreturn))";
-  printAfter(T->getReturnType(), OS);
+  printAfter(T->getResultType(), OS);
 }
 
 void TypePrinter::printTypeSpec(const NamedDecl *D, raw_ostream &OS) {
@@ -848,7 +851,7 @@ void TypePrinter::AppendScope(DeclContext *DC, raw_ostream &OS) {
     if (NS->getIdentifier())
       OS << NS->getName() << "::";
     else
-      OS << "(anonymous namespace)::";
+      OS << "<anonymous>::";
   } else if (ClassTemplateSpecializationDecl *Spec
                = dyn_cast<ClassTemplateSpecializationDecl>(DC)) {
     IncludeStrongLifetimeRAII Strong(Policy);
@@ -900,13 +903,13 @@ void TypePrinter::printTag(TagDecl *D, raw_ostream &OS) {
     OS << Typedef->getIdentifier()->getName();
   } else {
     // Make an unambiguous representation for anonymous types, e.g.
-    //   (anonymous enum at /usr/include/string.h:120:9)
+    //   <anonymous enum at /usr/include/string.h:120:9>
     
     if (isa<CXXRecordDecl>(D) && cast<CXXRecordDecl>(D)->isLambda()) {
-      OS << "(lambda";
+      OS << "<lambda";
       HasKindDecoration = true;
     } else {
-      OS << "(anonymous";
+      OS << "<anonymous";
     }
     
     if (Policy.AnonymousTagLocations) {
@@ -925,7 +928,7 @@ void TypePrinter::printTag(TagDecl *D, raw_ostream &OS) {
       }
     }
     
-    OS << ')';
+    OS << '>';
   }
 
   // If this is a class template specialization, print the template
@@ -1259,12 +1262,13 @@ void TypePrinter::printObjCObjectBefore(const ObjCObjectType *T,
   print(T->getBaseType(), OS, StringRef());
   OS << '<';
   bool isFirst = true;
-  for (const auto *I : T->quals()) {
+  for (ObjCObjectType::qual_iterator
+         I = T->qual_begin(), E = T->qual_end(); I != E; ++I) {
     if (isFirst)
       isFirst = false;
     else
       OS << ',';
-    OS << I->getName();
+    OS << (*I)->getName();
   }
   OS << '>';
   spaceBeforePlaceHolder(OS);
@@ -1280,12 +1284,12 @@ void TypePrinter::printObjCObjectPointerBefore(const ObjCObjectPointerType *T,
   T->getPointeeType().getLocalQualifiers().print(OS, Policy,
                                                 /*appendSpaceIfNonEmpty=*/true);
 
-  assert(!T->isObjCSelType());
-
   if (T->isObjCIdType() || T->isObjCQualifiedIdType())
     OS << "id";
   else if (T->isObjCClassType() || T->isObjCQualifiedClassType())
     OS << "Class";
+  else if (T->isObjCSelType())
+    OS << "SEL";
   else
     OS << T->getInterfaceDecl()->getName();
   
@@ -1301,8 +1305,7 @@ void TypePrinter::printObjCObjectPointerBefore(const ObjCObjectPointerType *T,
     OS << '>';
   }
   
-  if (!T->isObjCIdType() && !T->isObjCQualifiedIdType() &&
-      !T->isObjCClassType() && !T->isObjCQualifiedClassType()) {
+  if (!T->isObjCIdType() && !T->isObjCQualifiedIdType()) {
     OS << " *"; // Don't forget the implicit pointer.
   } else {
     spaceBeforePlaceHolder(OS);

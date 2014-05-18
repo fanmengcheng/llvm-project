@@ -38,7 +38,10 @@ CodeGenTypes::CodeGenTypes(CodeGenModule &cgm)
 }
 
 CodeGenTypes::~CodeGenTypes() {
-  llvm::DeleteContainerSeconds(CGRecordLayouts);
+  for (llvm::DenseMap<const Type *, CGRecordLayout *>::iterator
+         I = CGRecordLayouts.begin(), E = CGRecordLayouts.end();
+      I != E; ++I)
+    delete I->second;
 
   for (llvm::FoldingSet<CGFunctionInfo>::iterator
        I = FunctionInfos.begin(), E = FunctionInfos.end(); I != E; )
@@ -131,15 +134,17 @@ isSafeToConvert(const RecordDecl *RD, CodeGenTypes &CGT,
   // when a class is translated, even though they aren't embedded by-value into
   // the class.
   if (const CXXRecordDecl *CRD = dyn_cast<CXXRecordDecl>(RD)) {
-    for (const auto &I : CRD->bases())
-      if (!isSafeToConvert(I.getType()->getAs<RecordType>()->getDecl(),
+    for (CXXRecordDecl::base_class_const_iterator I = CRD->bases_begin(),
+         E = CRD->bases_end(); I != E; ++I)
+      if (!isSafeToConvert(I->getType()->getAs<RecordType>()->getDecl(),
                            CGT, AlreadyChecked))
         return false;
   }
   
   // If this type would require laying out members that are currently being laid
   // out, don't do it.
-  for (const auto *I : RD->fields())
+  for (RecordDecl::field_iterator I = RD->field_begin(),
+       E = RD->field_end(); I != E; ++I)
     if (!isSafeToConvert(I->getType(), CGT, AlreadyChecked))
       return false;
   
@@ -181,12 +186,13 @@ static bool isSafeToConvert(const RecordDecl *RD, CodeGenTypes &CGT) {
   return isSafeToConvert(RD, CGT, AlreadyChecked);
 }
 
-/// isFuncParamTypeConvertible - Return true if the specified type in a
-/// function parameter or result position can be converted to an IR type at this
+
+/// isFuncTypeArgumentConvertible - Return true if the specified type in a 
+/// function argument or result position can be converted to an IR type at this
 /// point.  This boils down to being whether it is complete, as well as whether
 /// we've temporarily deferred expanding the type because we're in a recursive
 /// context.
-bool CodeGenTypes::isFuncParamTypeConvertible(QualType Ty) {
+bool CodeGenTypes::isFuncTypeArgumentConvertible(QualType Ty) {
   // If this isn't a tagged type, we can convert it!
   const TagType *TT = Ty->getAs<TagType>();
   if (TT == 0) return true;
@@ -211,17 +217,17 @@ bool CodeGenTypes::isFuncParamTypeConvertible(QualType Ty) {
 
 
 /// Code to verify a given function type is complete, i.e. the return type
-/// and all of the parameter types are complete.  Also check to see if we are in
+/// and all of the argument types are complete.  Also check to see if we are in
 /// a RS_StructPointer context, and if so whether any struct types have been
 /// pended.  If so, we don't want to ask the ABI lowering code to handle a type
 /// that cannot be converted to an IR type.
 bool CodeGenTypes::isFuncTypeConvertible(const FunctionType *FT) {
-  if (!isFuncParamTypeConvertible(FT->getReturnType()))
+  if (!isFuncTypeArgumentConvertible(FT->getResultType()))
     return false;
   
   if (const FunctionProtoType *FPT = dyn_cast<FunctionProtoType>(FT))
-    for (unsigned i = 0, e = FPT->getNumParams(); i != e; i++)
-      if (!isFuncParamTypeConvertible(FPT->getParamType(i)))
+    for (unsigned i = 0, e = FPT->getNumArgs(); i != e; i++)
+      if (!isFuncTypeArgumentConvertible(FPT->getArgType(i)))
         return false;
 
   return true;
@@ -242,10 +248,6 @@ void CodeGenTypes::UpdateCompletedType(const TagDecl *TD) {
       if (!ConvertType(ED->getIntegerType())->isIntegerTy(32))
         TypeCache.clear();
     }
-    // If necessary, provide the full definition of a type only used with a
-    // declaration so far.
-    if (CGDebugInfo *DI = CGM.getModuleDebugInfo())
-      DI->completeType(ED);
     return;
   }
   
@@ -349,6 +351,16 @@ llvm::Type *CodeGenTypes::ConvertType(QualType T) {
     case BuiltinType::Char32:
       ResultType = llvm::IntegerType::get(getLLVMContext(),
                                  static_cast<unsigned>(Context.getTypeSize(T)));
+      break;
+
+    // We store these as capabilities (and must use capability instructions for
+    // writing them to memory), and must perform some explicit casts for
+    // arithmetic.
+    case BuiltinType::IntCap:
+    case BuiltinType::UIntCap:
+      // FIXME: Don't hard-code the capability address space.
+      ResultType =
+          llvm::PointerType::get(llvm::Type::getInt8Ty(getLLVMContext()), 200);
       break;
 
     case BuiltinType::Half:
@@ -477,11 +489,11 @@ llvm::Type *CodeGenTypes::ConvertType(QualType T) {
 
       // Force conversion of all the relevant record types, to make sure
       // we re-convert the FunctionType when appropriate.
-      if (const RecordType *RT = FT->getReturnType()->getAs<RecordType>())
+      if (const RecordType *RT = FT->getResultType()->getAs<RecordType>())
         ConvertRecordDeclType(RT->getDecl());
       if (const FunctionProtoType *FPT = dyn_cast<FunctionProtoType>(FT))
-        for (unsigned i = 0, e = FPT->getNumParams(); i != e; i++)
-          if (const RecordType *RT = FPT->getParamType(i)->getAs<RecordType>())
+        for (unsigned i = 0, e = FPT->getNumArgs(); i != e; i++)
+          if (const RecordType *RT = FPT->getArgType(i)->getAs<RecordType>())
             ConvertRecordDeclType(RT->getDecl());
 
       // Return a placeholder type.
@@ -491,7 +503,7 @@ llvm::Type *CodeGenTypes::ConvertType(QualType T) {
       break;
     }
 
-    // While we're converting the parameter types for a function, we don't want
+    // While we're converting the argument types for a function, we don't want
     // to recursively convert any pointed-to structs.  Converting directly-used
     // structs is ok though.
     if (!RecordsBeingLaidOut.insert(Ty)) {
@@ -557,7 +569,7 @@ llvm::Type *CodeGenTypes::ConvertType(QualType T) {
     // recursive conversion.
     llvm::Type *T =
       ConvertTypeForMem(cast<ObjCObjectPointerType>(Ty)->getPointeeType());
-    ResultType = T->getPointerTo();
+    ResultType = T->getPointerTo(Target.AddressSpaceForObjC());
     break;
   }
 
@@ -653,10 +665,11 @@ llvm::StructType *CodeGenTypes::ConvertRecordDeclType(const RecordDecl *RD) {
   
   // Force conversion of non-virtual base classes recursively.
   if (const CXXRecordDecl *CRD = dyn_cast<CXXRecordDecl>(RD)) {
-    for (const auto &I : CRD->bases()) {
-      if (I.isVirtual()) continue;
+    for (CXXRecordDecl::base_class_const_iterator i = CRD->bases_begin(),
+         e = CRD->bases_end(); i != e; ++i) {
+      if (i->isVirtual()) continue;
       
-      ConvertRecordDeclType(I.getType()->getAs<RecordType>()->getDecl());
+      ConvertRecordDeclType(i->getType()->getAs<RecordType>()->getDecl());
     }
   }
 

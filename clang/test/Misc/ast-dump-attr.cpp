@@ -29,12 +29,12 @@ void TestAttributedStmt() {
 
 int TestAlignedNull __attribute__((aligned));
 // CHECK:      VarDecl{{.*}}TestAlignedNull
-// CHECK-NEXT:   AlignedAttr {{.*}} aligned
+// CHECK-NEXT:   AlignedAttr
 // CHECK-NEXT:     <<<NULL>>>
 
 int TestAlignedExpr __attribute__((aligned(4)));
 // CHECK:      VarDecl{{.*}}TestAlignedExpr
-// CHECK-NEXT:   AlignedAttr {{.*}} aligned
+// CHECK-NEXT:   AlignedAttr
 // CHECK-NEXT:     IntegerLiteral
 
 int TestEnum __attribute__((visibility("default")));
@@ -63,17 +63,17 @@ void function1(void *) {
 void TestIdentifier(void *, int)
 __attribute__((pointer_with_type_tag(ident1,1,2)));
 // CHECK: FunctionDecl{{.*}}TestIdentifier
-// CHECK:   ArgumentWithTypeTagAttr{{.*}} pointer_with_type_tag ident1
+// CHECK:   ArgumentWithTypeTagAttr{{.*}} ident1
 
 void TestBool(void *, int)
 __attribute__((pointer_with_type_tag(bool1,1,2)));
 // CHECK: FunctionDecl{{.*}}TestBool
-// CHECK:   ArgumentWithTypeTagAttr{{.*}}pointer_with_type_tag bool1 0 1 IsPointer
+// CHECK:   ArgumentWithTypeTagAttr{{.*}} IsPointer
 
 void TestUnsigned(void *, int)
 __attribute__((pointer_with_type_tag(unsigned1,1,2)));
 // CHECK: FunctionDecl{{.*}}TestUnsigned
-// CHECK:   ArgumentWithTypeTagAttr{{.*}} pointer_with_type_tag unsigned1 0 1
+// CHECK:   ArgumentWithTypeTagAttr{{.*}} 0 1
 
 void TestInt(void) __attribute__((constructor(123)));
 // CHECK:      FunctionDecl{{.*}}TestInt
@@ -102,30 +102,4 @@ M: __attribute(()) int j;
 N: __attribute(()) ;
 // CHECK: LabelStmt {{.*}} 'N'
 // CHECK-NEXT: NullStmt
-}
-
-namespace Test {
-extern "C" int printf(const char *format, ...);
-// CHECK: FunctionDecl{{.*}}printf
-// CHECK-NEXT: ParmVarDecl{{.*}}format{{.*}}'const char *'
-// CHECK-NEXT: FormatAttr{{.*}}printf 1 2 Implicit
-}
-
-int __attribute__((cdecl)) TestOne(void), TestTwo(void);
-// CHECK: FunctionDecl{{.*}}TestOne{{.*}}__attribute__((cdecl))
-// CHECK: FunctionDecl{{.*}}TestTwo{{.*}}__attribute__((cdecl))
-
-void func() {
-  auto Test = []() __attribute__((no_thread_safety_analysis)) {};
-  // CHECK: CXXMethodDecl{{.*}}operator() 'void (void) const'
-  // CHECK: NoThreadSafetyAnalysisAttr
-
-  // Because GNU's noreturn applies to the function type, and this lambda does
-  // not have a capture list, the call operator and the function pointer
-  // conversion should both be noreturn, but the method should not contain a
-  // NoReturnAttr because the attribute applied to the type.
-  auto Test2 = []() __attribute__((noreturn)) { while(1); };
-  // CHECK: CXXMethodDecl{{.*}}operator() 'void (void) __attribute__((noreturn)) const'
-  // CHECK-NOT: NoReturnAttr
-  // CHECK: CXXConversionDecl{{.*}}operator void (*)() __attribute__((noreturn))
 }

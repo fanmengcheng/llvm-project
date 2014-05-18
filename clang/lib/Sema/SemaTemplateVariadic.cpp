@@ -554,8 +554,8 @@ bool Sema::CheckParameterPacksForExpansion(
       if (isa<ParmVarDecl>(ND))
         IsFunctionParameterPack = true;
       else
-        std::tie(Depth, Index) = getDepthAndIndex(ND);
-
+        llvm::tie(Depth, Index) = getDepthAndIndex(ND);        
+      
       Name = ND->getIdentifier();
     }
     
@@ -599,7 +599,7 @@ bool Sema::CheckParameterPacksForExpansion(
       if (NamedDecl *PartialPack 
                     = CurrentInstantiationScope->getPartiallySubstitutedPack()){
         unsigned PartialDepth, PartialIndex;
-        std::tie(PartialDepth, PartialIndex) = getDepthAndIndex(PartialPack);
+        llvm::tie(PartialDepth, PartialIndex) = getDepthAndIndex(PartialPack);
         if (PartialDepth == Depth && PartialIndex == Index)
           RetainExpansion = true;
       }
@@ -669,8 +669,8 @@ Optional<unsigned> Sema::getNumArgumentsInExpansion(QualType T,
         Result = Size;
         continue;
       }
-
-      std::tie(Depth, Index) = getDepthAndIndex(ND);
+      
+      llvm::tie(Depth, Index) = getDepthAndIndex(ND);        
     }
     if (Depth >= TemplateArgs.getNumLevels() ||
         !TemplateArgs.hasTemplateArgument(Depth, Index))
@@ -767,7 +767,7 @@ namespace {
 // Callback to only accept typo corrections that refer to parameter packs.
 class ParameterPackValidatorCCC : public CorrectionCandidateCallback {
  public:
-  bool ValidateCandidate(const TypoCorrection &candidate) override {
+  virtual bool ValidateCandidate(const TypoCorrection &candidate) {
     NamedDecl *ND = candidate.getCorrectionDecl();
     return ND && ND->isParameterPack();
   }
@@ -810,7 +810,7 @@ ExprResult Sema::ActOnSizeofParameterPackExpr(Scope *S,
   case LookupResult::NotFoundInCurrentInstantiation:
     if (TypoCorrection Corrected = CorrectTypo(R.getLookupNameInfo(),
                                                R.getLookupKind(), S, 0,
-                                               Validator, CTK_ErrorRecovery)) {
+                                               Validator)) {
       diagnoseTypo(Corrected,
                    PDiag(diag::err_sizeof_pack_no_pack_name_suggest) << &Name,
                    PDiag(diag::note_parameter_pack_here));

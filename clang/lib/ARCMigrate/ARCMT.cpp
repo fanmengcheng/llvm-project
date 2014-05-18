@@ -103,8 +103,8 @@ public:
     : Diags(diags), DiagClient(client), CapturedDiags(capturedDiags),
       HasBegunSourceFile(false) { }
 
-  void BeginSourceFile(const LangOptions &Opts,
-                       const Preprocessor *PP) override {
+  virtual void BeginSourceFile(const LangOptions &Opts,
+                               const Preprocessor *PP) {
     // Pass BeginSourceFile message onto DiagClient on first call.
     // The corresponding EndSourceFile call will be made from an
     // explicit call to FinishCapture.
@@ -128,8 +128,8 @@ public:
     assert(!HasBegunSourceFile && "FinishCapture not called!");
   }
 
-  void HandleDiagnostic(DiagnosticsEngine::Level level,
-                        const Diagnostic &Info) override {
+  virtual void HandleDiagnostic(DiagnosticsEngine::Level level,
+                                const Diagnostic &Info) {
     if (DiagnosticIDs::isARCDiagnostic(Info.getID()) ||
         level >= DiagnosticsEngine::Error || level == DiagnosticsEngine::Note) {
       if (Info.getLocation().isValid())
@@ -167,7 +167,7 @@ static bool HasARCRuntime(CompilerInvocation &origCI) {
 
 static CompilerInvocation *
 createInvocationForMigration(CompilerInvocation &origCI) {
-  std::unique_ptr<CompilerInvocation> CInvok;
+  OwningPtr<CompilerInvocation> CInvok;
   CInvok.reset(new CompilerInvocation(origCI));
   PreprocessorOptions &PPOpts = CInvok->getPreprocessorOpts();
   if (!PPOpts.ImplicitPCHInclude.empty()) {
@@ -204,11 +204,11 @@ createInvocationForMigration(CompilerInvocation &origCI) {
       WarnOpts.push_back(*I);
   }
   WarnOpts.push_back("error=arc-unsafe-retained-assign");
-  CInvok->getDiagnosticOpts().Warnings = std::move(WarnOpts);
+  CInvok->getDiagnosticOpts().Warnings = llvm_move(WarnOpts);
 
   CInvok->getLangOpts()->ObjCARCWeak = HasARCRuntime(origCI);
 
-  return CInvok.release();
+  return CInvok.take();
 }
 
 static void emitPremigrationErrors(const CapturedDiagList &arcDiags,
@@ -246,7 +246,7 @@ bool arcmt::checkForManualIssues(CompilerInvocation &origCI,
                                                                      NoFinalizeRemoval);
   assert(!transforms.empty());
 
-  std::unique_ptr<CompilerInvocation> CInvok;
+  OwningPtr<CompilerInvocation> CInvok;
   CInvok.reset(createInvocationForMigration(origCI));
   CInvok->getFrontendOpts().Inputs.clear();
   CInvok->getFrontendOpts().Inputs.push_back(Input);
@@ -263,8 +263,8 @@ bool arcmt::checkForManualIssues(CompilerInvocation &origCI,
   CaptureDiagnosticConsumer errRec(*Diags, *DiagClient, capturedDiags);
   Diags->setClient(&errRec, /*ShouldOwnClient=*/false);
 
-  std::unique_ptr<ASTUnit> Unit(
-      ASTUnit::LoadFromCompilerInvocationAction(CInvok.release(), Diags));
+  OwningPtr<ASTUnit> Unit(
+      ASTUnit::LoadFromCompilerInvocationAction(CInvok.take(), Diags));
   if (!Unit) {
     errRec.FinishCapture();
     return true;
@@ -310,11 +310,8 @@ bool arcmt::checkForManualIssues(CompilerInvocation &origCI,
   TransformActions testAct(*Diags, capturedDiags, Ctx, Unit->getPreprocessor());
   MigrationPass pass(Ctx, OrigGCMode, Unit->getSema(), testAct, capturedDiags,
                      ARCMTMacroLocs);
+  pass.setNSAllocReallocError(NoNSAllocReallocError);
   pass.setNoFinalizeRemoval(NoFinalizeRemoval);
-  Diags->setDiagnosticMapping(diag::err_arcmt_nsalloc_realloc,
-                              NoNSAllocReallocError ? diag::MAP_WARNING
-                                                    : diag::MAP_ERROR,
-                              SourceLocation());
 
   for (unsigned i=0, e = transforms.size(); i != e; ++i)
     transforms[i](pass);
@@ -433,8 +430,8 @@ public:
   ARCMTMacroTrackerPPCallbacks(std::vector<SourceLocation> &ARCMTMacroLocs)
     : ARCMTMacroLocs(ARCMTMacroLocs) { }
 
-  void MacroExpands(const Token &MacroNameTok, const MacroDirective *MD,
-                    SourceRange Range, const MacroArgs *Args) override {
+  virtual void MacroExpands(const Token &MacroNameTok, const MacroDirective *MD,
+                            SourceRange Range, const MacroArgs *Args) {
     if (MacroNameTok.getIdentifierInfo()->getName() == getARCMTMacroName())
       ARCMTMacroLocs.push_back(MacroNameTok.getLocation());
   }
@@ -447,8 +444,8 @@ public:
   ARCMTMacroTrackerAction(std::vector<SourceLocation> &ARCMTMacroLocs)
     : ARCMTMacroLocs(ARCMTMacroLocs) { }
 
-  ASTConsumer *CreateASTConsumer(CompilerInstance &CI,
-                                 StringRef InFile) override {
+  virtual ASTConsumer *CreateASTConsumer(CompilerInstance &CI,
+                                         StringRef InFile) {
     CI.getPreprocessor().addPPCallbacks(
                               new ARCMTMacroTrackerPPCallbacks(ARCMTMacroLocs));
     return new ASTConsumer();
@@ -471,14 +468,14 @@ public:
       Listener->finish();
   }
 
-  void insert(SourceLocation loc, StringRef text) override {
+  virtual void insert(SourceLocation loc, StringRef text) {
     bool err = rewriter.InsertText(loc, text, /*InsertAfter=*/true,
                                    /*indentNewLines=*/true);
     if (!err && Listener)
       Listener->insert(loc, text);
   }
 
-  void remove(CharSourceRange range) override {
+  virtual void remove(CharSourceRange range) {
     Rewriter::RewriteOptions removeOpts;
     removeOpts.IncludeInsertsAtBeginOfRange = false;
     removeOpts.IncludeInsertsAtEndOfRange = false;
@@ -489,8 +486,8 @@ public:
       Listener->remove(range);
   }
 
-  void increaseIndentation(CharSourceRange range,
-                            SourceLocation parentIndent) override {
+  virtual void increaseIndentation(CharSourceRange range,
+                                    SourceLocation parentIndent) {
     rewriter.IncreaseIndentation(range, parentIndent);
   }
 };
@@ -515,7 +512,7 @@ MigrationProcess::MigrationProcess(const CompilerInvocation &CI,
 
 bool MigrationProcess::applyTransform(TransformFn trans,
                                       RewriteListener *listener) {
-  std::unique_ptr<CompilerInvocation> CInvok;
+  OwningPtr<CompilerInvocation> CInvok;
   CInvok.reset(createInvocationForMigration(OrigCI));
   CInvok->getDiagnosticOpts().IgnoreWarnings = true;
 
@@ -534,11 +531,12 @@ bool MigrationProcess::applyTransform(TransformFn trans,
   CaptureDiagnosticConsumer errRec(*Diags, *DiagClient, capturedDiags);
   Diags->setClient(&errRec, /*ShouldOwnClient=*/false);
 
-  std::unique_ptr<ARCMTMacroTrackerAction> ASTAction;
+  OwningPtr<ARCMTMacroTrackerAction> ASTAction;
   ASTAction.reset(new ARCMTMacroTrackerAction(ARCMTMacroLocs));
 
-  std::unique_ptr<ASTUnit> Unit(ASTUnit::LoadFromCompilerInvocationAction(
-      CInvok.release(), Diags, ASTAction.get()));
+  OwningPtr<ASTUnit> Unit(
+      ASTUnit::LoadFromCompilerInvocationAction(CInvok.take(), Diags,
+                                                ASTAction.get()));
   if (!Unit) {
     errRec.FinishCapture();
     return true;

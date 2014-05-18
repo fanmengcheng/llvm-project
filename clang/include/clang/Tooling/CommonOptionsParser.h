@@ -72,7 +72,7 @@ public:
   /// This constructor exits program in case of error.
   CommonOptionsParser(int &argc, const char **argv,
                       llvm::cl::OptionCategory &Category,
-                      const char *Overview = nullptr);
+                      const char *Overview = 0);
 
   /// Returns a reference to the loaded compilations database.
   CompilationDatabase &getCompilations() {
@@ -87,7 +87,7 @@ public:
   static const char *const HelpMessage;
 
 private:
-  std::unique_ptr<CompilationDatabase> Compilations;
+  OwningPtr<CompilationDatabase> Compilations;
   std::vector<std::string> SourcePathList;
 };
 

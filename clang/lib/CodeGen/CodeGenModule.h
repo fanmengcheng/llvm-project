@@ -30,7 +30,7 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/IR/Module.h"
-#include "llvm/IR/ValueHandle.h"
+#include "llvm/Support/ValueHandle.h"
 #include "llvm/Transforms/Utils/SpecialCaseList.h"
 
 namespace llvm {
@@ -42,7 +42,6 @@ namespace llvm {
   class DataLayout;
   class FunctionType;
   class LLVMContext;
-  class IndexedInstrProfReader;
 }
 
 namespace clang {
@@ -83,10 +82,10 @@ namespace CodeGen {
   class CGDebugInfo;
   class CGObjCRuntime;
   class CGOpenCLRuntime;
-  class CGOpenMPRuntime;
   class CGCUDARuntime;
   class BlockFieldFlags;
   class FunctionArgList;
+  class PGOProfileData;
 
   struct OrderGlobalInits {
     unsigned int priority;
@@ -100,8 +99,10 @@ namespace CodeGen {
     }
     
     bool operator<(const OrderGlobalInits &RHS) const {
-      return std::tie(priority, lex_order) <
-             std::tie(RHS.priority, RHS.lex_order);
+      if (priority < RHS.priority)
+        return true;
+      
+      return priority == RHS.priority && lex_order < RHS.lex_order;
     }
   };
 
@@ -221,15 +222,6 @@ struct ARCEntrypoints {
   llvm::Constant *clang_arc_use;
 };
 
-/// This class records statistics on instrumentation based profiling.
-struct InstrProfStats {
-  InstrProfStats() : Visited(0), Missing(0), Mismatched(0) {}
-  bool isOutOfDate() { return Missing || Mismatched; }
-  uint32_t Visited;
-  uint32_t Missing;
-  uint32_t Mismatched;
-};
-
 /// CodeGenModule - This class organizes the cross-function state that is used
 /// while generating LLVM code.
 class CodeGenModule : public CodeGenTypeCache {
@@ -245,7 +237,7 @@ class CodeGenModule : public CodeGenTypeCache {
   DiagnosticsEngine &Diags;
   const llvm::DataLayout &TheDataLayout;
   const TargetInfo &Target;
-  std::unique_ptr<CGCXXABI> ABI;
+  llvm::OwningPtr<CGCXXABI> ABI;
   llvm::LLVMContext &VMContext;
 
   CodeGenTBAA *TBAA;
@@ -262,14 +254,12 @@ class CodeGenModule : public CodeGenTypeCache {
 
   CGObjCRuntime* ObjCRuntime;
   CGOpenCLRuntime* OpenCLRuntime;
-  CGOpenMPRuntime* OpenMPRuntime;
   CGCUDARuntime* CUDARuntime;
   CGDebugInfo* DebugInfo;
   ARCEntrypoints *ARCData;
   llvm::MDNode *NoObjCARCExceptionsMetadata;
   RREntrypoints *RRData;
-  std::unique_ptr<llvm::IndexedInstrProfReader> PGOReader;
-  InstrProfStats PGOStats;
+  PGOProfileData *PGOData;
 
   // WeakRefReferences - A set of references that have only been seen via
   // a weakref so far. This is used to remove the weak of the reference if we
@@ -310,7 +300,6 @@ class CodeGenModule : public CodeGenTypeCache {
   /// forcing visibility of symbols which may otherwise be optimized
   /// out.
   std::vector<llvm::WeakVH> LLVMUsed;
-  std::vector<llvm::WeakVH> LLVMCompilerUsed;
 
   /// GlobalCtors - Store the list of global constructors and their respective
   /// priorities to be emitted when the translation unit is complete.
@@ -331,10 +320,7 @@ class CodeGenModule : public CodeGenTypeCache {
   llvm::StringMap<llvm::Constant*> AnnotationStrings;
 
   llvm::StringMap<llvm::Constant*> CFConstantStringMap;
-
-  llvm::StringMap<llvm::GlobalVariable *> Constant1ByteStringMap;
-  llvm::StringMap<llvm::GlobalVariable *> Constant2ByteStringMap;
-  llvm::StringMap<llvm::GlobalVariable *> Constant4ByteStringMap;
+  llvm::StringMap<llvm::GlobalVariable*> ConstantStringMap;
   llvm::DenseMap<const Decl*, llvm::Constant *> StaticLocalDeclMap;
   llvm::DenseMap<const Decl*, llvm::GlobalVariable*> StaticLocalDeclGuardMap;
   llvm::DenseMap<const Expr*, llvm::Constant *> MaterializedGlobalTemporaryMap;
@@ -416,7 +402,6 @@ class CodeGenModule : public CodeGenTypeCache {
   void createObjCRuntime();
 
   void createOpenCLRuntime();
-  void createOpenMPRuntime();
   void createCUDARuntime();
 
   bool isTriviallyRecursive(const FunctionDecl *F);
@@ -446,7 +431,7 @@ class CodeGenModule : public CodeGenTypeCache {
 
   GlobalDecl initializedGlobalDecl;
 
-  std::unique_ptr<llvm::SpecialCaseList> SanitizerBlacklist;
+  llvm::OwningPtr<llvm::SpecialCaseList> SanitizerBlacklist;
 
   const SanitizerOptions &SanOpts;
 
@@ -480,12 +465,6 @@ public:
     return *OpenCLRuntime;
   }
 
-  /// getOpenMPRuntime() - Return a reference to the configured OpenMP runtime.
-  CGOpenMPRuntime &getOpenMPRuntime() {
-    assert(OpenMPRuntime != nullptr);
-    return *OpenMPRuntime;
-  }
-
   /// getCUDARuntime() - Return a reference to the configured CUDA runtime.
   CGCUDARuntime &getCUDARuntime() {
     assert(CUDARuntime != 0);
@@ -502,8 +481,9 @@ public:
     return *RRData;
   }
 
-  InstrProfStats &getPGOStats() { return PGOStats; }
-  llvm::IndexedInstrProfReader *getPGOReader() const { return PGOReader.get(); }
+  PGOProfileData *getPGOData() const {
+    return PGOData;
+  }
 
   llvm::Constant *getStaticLocalDeclAddress(const VarDecl *D) {
     return StaticLocalDeclMap[D];
@@ -612,6 +592,21 @@ public:
   /// setTLSMode - Set the TLS mode for the given LLVM GlobalVariable
   /// for the thread-local variable declaration D.
   void setTLSMode(llvm::GlobalVariable *GV, const VarDecl &D) const;
+
+  /// TypeVisibilityKind - The kind of global variable that is passed to 
+  /// setTypeVisibility
+  enum TypeVisibilityKind {
+    TVK_ForVTT,
+    TVK_ForVTable,
+    TVK_ForConstructionVTable,
+    TVK_ForRTTI,
+    TVK_ForRTTIName
+  };
+
+  /// setTypeVisibility - Set the visibility for the given global
+  /// value which holds information about a type.
+  void setTypeVisibility(llvm::GlobalValue *GV, const CXXRecordDecl *D,
+                         TypeVisibilityKind TVK) const;
 
   static llvm::GlobalValue::VisibilityTypes GetLLVMVisibility(Visibility V) {
     switch (V) {
@@ -821,11 +816,10 @@ public:
   template<typename SomeDecl>
   void MaybeHandleStaticInExternC(const SomeDecl *D, llvm::GlobalValue *GV);
 
-  /// Add a global to a list to be added to the llvm.used metadata.
-  void addUsedGlobal(llvm::GlobalValue *GV);
-
-  /// Add a global to a list to be added to the llvm.compiler.used metadata.
-  void addCompilerUsedGlobal(llvm::GlobalValue *GV);
+  /// AddUsedGlobal - Add a global which should be forced to be
+  /// present in the object file; these are emitted to the llvm.used
+  /// metadata global.
+  void AddUsedGlobal(llvm::GlobalValue *GV);
 
   /// AddCXXDtorEntry - Add a destructor and object to add to the C++ global
   /// destructor function.
@@ -926,10 +920,6 @@ public:
   /// as a return type.
   bool ReturnTypeUsesSRet(const CGFunctionInfo &FI);
 
-  /// ReturnSlotInterferesWithArgs - Return true iff the given type uses an
-  /// argument slot when 'sret' is used as a return type.
-  bool ReturnSlotInterferesWithArgs(const CGFunctionInfo &FI);
-
   /// ReturnTypeUsesFPRet - Return true iff the given type uses 'fpret' when
   /// used as a return type.
   bool ReturnTypeUsesFPRet(QualType ResultType);
@@ -988,16 +978,11 @@ public:
   /// the given LLVM type.
   CharUnits GetTargetTypeStoreSize(llvm::Type *Ty) const;
   
-  /// getLLVMLinkageforDeclarator - Returns LLVM linkage for a declarator.
-  llvm::GlobalValue::LinkageTypes
-  getLLVMLinkageforDeclarator(const DeclaratorDecl *D, GVALinkage Linkage,
-                              bool IsConstantVariable,
-                              bool UseThunkForDtorVariant);
-
-  /// getLLVMLinkageVarDefinition - Returns LLVM linkage for a declarator.
-  llvm::GlobalValue::LinkageTypes
-  getLLVMLinkageVarDefinition(const VarDecl *VD, bool IsConstant);
-
+  /// GetLLVMLinkageVarDefinition - Returns LLVM linkage for a global 
+  /// variable.
+  llvm::GlobalValue::LinkageTypes 
+  GetLLVMLinkageVarDefinition(const VarDecl *D, bool isConstant);
+  
   /// Emit all the global annotations.
   void EmitGlobalAnnotations();
 
@@ -1058,8 +1043,6 @@ private:
   ///
   /// NOTE: This should only be called for definitions.
   void SetCommonAttributes(const Decl *D, llvm::GlobalValue *GV);
-
-  void setNonAliasAttributes(const Decl *D, llvm::GlobalValue *GV);
 
   /// SetFunctionDefinitionAttributes - Set attributes for a global definition.
   void SetFunctionDefinitionAttributes(const FunctionDecl *D,
@@ -1138,8 +1121,9 @@ private:
   /// still have a use for.
   void EmitDeferredVTables();
 
-  /// Emit the llvm.used and llvm.compiler.used metadata.
-  void emitLLVMUsed();
+  /// EmitLLVMUsed - Emit the llvm.used metadata used to force
+  /// references to global which may otherwise be optimized out.
+  void EmitLLVMUsed();
 
   /// \brief Emit the link options introduced by imported modules.
   void EmitModuleLinkOptions();

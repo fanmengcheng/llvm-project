@@ -159,7 +159,7 @@ private:
       Allocator->Deallocate(DiagStorage);
     else if (Allocator != reinterpret_cast<StorageAllocator *>(~uintptr_t(0)))
       delete DiagStorage;
-    DiagStorage = nullptr;
+    DiagStorage = 0;
   }
 
   void AddSourceRange(const CharSourceRange &R) const {
@@ -187,13 +187,13 @@ public:
   /// \brief Create a null partial diagnostic, which cannot carry a payload,
   /// and only exists to be swapped with a real partial diagnostic.
   PartialDiagnostic(NullDiagnostic)
-    : DiagID(0), DiagStorage(nullptr), Allocator(nullptr) { }
+    : DiagID(0), DiagStorage(0), Allocator(0) { }
 
   PartialDiagnostic(unsigned DiagID, StorageAllocator &Allocator)
-    : DiagID(DiagID), DiagStorage(nullptr), Allocator(&Allocator) { }
+    : DiagID(DiagID), DiagStorage(0), Allocator(&Allocator) { }
 
   PartialDiagnostic(const PartialDiagnostic &Other)
-    : DiagID(Other.DiagID), DiagStorage(nullptr), Allocator(Other.Allocator)
+    : DiagID(Other.DiagID), DiagStorage(0), Allocator(Other.Allocator)
   {
     if (Other.DiagStorage) {
       DiagStorage = getStorage();
@@ -201,11 +201,13 @@ public:
     }
   }
 
+#if LLVM_HAS_RVALUE_REFERENCES
   PartialDiagnostic(PartialDiagnostic &&Other)
     : DiagID(Other.DiagID), DiagStorage(Other.DiagStorage),
       Allocator(Other.Allocator) {
-    Other.DiagStorage = nullptr;
+    Other.DiagStorage = 0;
   }
+#endif
 
   PartialDiagnostic(const PartialDiagnostic &Other, Storage *DiagStorage)
     : DiagID(Other.DiagID), DiagStorage(DiagStorage),
@@ -216,7 +218,7 @@ public:
   }
 
   PartialDiagnostic(const Diagnostic &Other, StorageAllocator &Allocator)
-    : DiagID(Other.getID()), DiagStorage(nullptr), Allocator(&Allocator)
+    : DiagID(Other.getID()), DiagStorage(0), Allocator(&Allocator)
   {
     // Copy arguments.
     for (unsigned I = 0, N = Other.getNumArgs(); I != N; ++I) {
@@ -249,6 +251,7 @@ public:
     return *this;
   }
 
+#if LLVM_HAS_RVALUE_REFERENCES
   PartialDiagnostic &operator=(PartialDiagnostic &&Other) {
     freeStorage();
 
@@ -256,9 +259,10 @@ public:
     DiagStorage = Other.DiagStorage;
     Allocator = Other.Allocator;
 
-    Other.DiagStorage = nullptr;
+    Other.DiagStorage = 0;
     return *this;
   }
+#endif
 
   ~PartialDiagnostic() {
     freeStorage();
@@ -335,7 +339,7 @@ public:
     freeStorage();
   }
 
-  bool hasStorage() const { return DiagStorage != nullptr; }
+  bool hasStorage() const { return DiagStorage != 0; }
 
   friend const PartialDiagnostic &operator<<(const PartialDiagnostic &PD,
                                              unsigned I) {
@@ -376,8 +380,8 @@ public:
   // match.
   template<typename T>
   friend inline
-  typename std::enable_if<std::is_same<T, DeclContext>::value,
-                          const PartialDiagnostic &>::type
+  typename llvm::enable_if<llvm::is_same<T, DeclContext>,
+                           const PartialDiagnostic &>::type
   operator<<(const PartialDiagnostic &PD, T *DC) {
     PD.AddTaggedVal(reinterpret_cast<intptr_t>(DC),
                     DiagnosticsEngine::ak_declcontext);

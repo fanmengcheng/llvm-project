@@ -42,8 +42,3 @@ void testBasicStringSuppression_append() {
   std::basic_string<char32_t> v;
   v += 'c'; // no-warning
 }
-
-void testBasicStringSuppression_assign(std::basic_string<char32_t> &v,
-                                       const std::basic_string<char32_t> &v2) {
-  v = v2;
-}

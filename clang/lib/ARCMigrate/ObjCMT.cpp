@@ -88,8 +88,8 @@ public:
   FileID FileId;
   const TypedefDecl *NSIntegerTypedefed;
   const TypedefDecl *NSUIntegerTypedefed;
-  std::unique_ptr<NSAPI> NSAPIObj;
-  std::unique_ptr<edit::EditedSource> Editor;
+  OwningPtr<NSAPI> NSAPIObj;
+  OwningPtr<edit::EditedSource> Editor;
   FileRemapper &Remapper;
   FileManager &FileMgr;
   const PPConditionalDirectiveRecord *PPRec;
@@ -109,7 +109,7 @@ public:
                          ArrayRef<std::string> WhiteList)
   : MigrateDir(migrateDir),
     ASTMigrateActions(astMigrateActions),
-    NSIntegerTypedefed(nullptr), NSUIntegerTypedefed(nullptr),
+    NSIntegerTypedefed(0), NSUIntegerTypedefed(0),
     Remapper(remapper), FileMgr(fileMgr), PPRec(PPRec), PP(PP),
     IsOutputFile(isOutputFile) {
 
@@ -120,26 +120,26 @@ public:
   }
 
 protected:
-  void Initialize(ASTContext &Context) override {
+  virtual void Initialize(ASTContext &Context) {
     NSAPIObj.reset(new NSAPI(Context));
     Editor.reset(new edit::EditedSource(Context.getSourceManager(),
                                         Context.getLangOpts(),
-                                        PPRec));
+                                        PPRec, false));
   }
 
-  bool HandleTopLevelDecl(DeclGroupRef DG) override {
+  virtual bool HandleTopLevelDecl(DeclGroupRef DG) {
     for (DeclGroupRef::iterator I = DG.begin(), E = DG.end(); I != E; ++I)
       migrateDecl(*I);
     return true;
   }
-  void HandleInterestingDecl(DeclGroupRef DG) override {
+  virtual void HandleInterestingDecl(DeclGroupRef DG) {
     // Ignore decls from the PCH.
   }
-  void HandleTopLevelDeclInObjCContainer(DeclGroupRef DG) override {
+  virtual void HandleTopLevelDeclInObjCContainer(DeclGroupRef DG) {
     ObjCMigrateASTConsumer::HandleTopLevelDecl(DG);
   }
 
-  void HandleTranslationUnit(ASTContext &Ctx) override;
+  virtual void HandleTranslationUnit(ASTContext &Ctx);
 
   bool canModifyFile(StringRef Path) {
     if (WhiteListFilenames.empty())
@@ -180,7 +180,7 @@ ObjCMigrateAction::ObjCMigrateAction(FrontendAction *WrappedAction,
                                      unsigned migrateAction)
   : WrapperFrontendAction(WrappedAction), MigrateDir(migrateDir),
     ObjCMigAction(migrateAction),
-    CompInst(nullptr) {
+    CompInst(0) {
   if (MigrateDir.empty())
     MigrateDir = "."; // user current directory if none is given.
 }
@@ -253,7 +253,7 @@ public:
 
 class BodyMigrator : public RecursiveASTVisitor<BodyMigrator> {
   ObjCMigrateASTConsumer &Consumer;
-  std::unique_ptr<ParentMap> PMap;
+  OwningPtr<ParentMap> PMap;
 
 public:
   BodyMigrator(ObjCMigrateASTConsumer &consumer) : Consumer(consumer) { }
@@ -344,7 +344,7 @@ static const char *PropertyMemoryAttribute(ASTContext &Context, QualType ArgType
     return "weak";
   else if (RetainableObject)
     return ArgType->isBlockPointerType() ? "copy" : "strong";
-  return nullptr;
+  return 0;
 }
 
 static void rewriteToObjCProperty(const ObjCMethodDecl *Getter,
@@ -385,11 +385,11 @@ static void rewriteToObjCProperty(const ObjCMethodDecl *Getter,
   if (PropertyName.equals("target") ||
       (PropertyName.find("delegate") != StringRef::npos) ||
       (PropertyName.find("dataSource") != StringRef::npos)) {
-    QualType QT = Getter->getReturnType();
+    QualType QT = Getter->getResultType();
     if (!QT->isRealType())
       append_attr(PropertyString, "assign", LParenAdded);
   } else if (!Setter) {
-    QualType ResType = Context.getCanonicalType(Getter->getReturnType());
+    QualType ResType = Context.getCanonicalType(Getter->getResultType());
     if (const char *MemoryManagementAttr = PropertyMemoryAttribute(Context, ResType))
       append_attr(PropertyString, MemoryManagementAttr, LParenAdded);
   } else {
@@ -400,7 +400,7 @@ static void rewriteToObjCProperty(const ObjCMethodDecl *Getter,
   }
   if (LParenAdded)
     PropertyString += ')';
-  QualType RT = Getter->getReturnType();
+  QualType RT = Getter->getResultType();
   if (!isa<TypedefType>(RT)) {
     // strip off any ARC lifetime qualifier.
     QualType CanResultTy = Context.getCanonicalType(RT);
@@ -471,7 +471,9 @@ void ObjCMigrateASTConsumer::migrateObjCInterfaceDecl(ASTContext &Ctx,
   if (D->isDeprecated() || IsCategoryNameWithDeprecatedSuffix(D))
     return;
     
-  for (auto *Method : D->methods()) {
+  for (ObjCContainerDecl::method_iterator M = D->meth_begin(), MEnd = D->meth_end();
+       M != MEnd; ++M) {
+    ObjCMethodDecl *Method = (*M);
     if (Method->isDeprecated())
       continue;
     bool PropertyInferred = migrateProperty(Ctx, D, Method);
@@ -486,7 +488,9 @@ void ObjCMigrateASTConsumer::migrateObjCInterfaceDecl(ASTContext &Ctx,
   if (!(ASTMigrateActions & FrontendOptions::ObjCMT_ReturnsInnerPointerProperty))
     return;
   
-  for (auto *Prop : D->properties()) {
+  for (ObjCContainerDecl::prop_iterator P = D->prop_begin(),
+       E = D->prop_end(); P != E; ++P) {
+    ObjCPropertyDecl *Prop = *P;
     if ((ASTMigrateActions & FrontendOptions::ObjCMT_Annotation) &&
         !Prop->isDeprecated())
       migratePropertyNsReturnsInnerPointer(Ctx, Prop);
@@ -503,7 +507,9 @@ ClassImplementsAllMethodsAndProperties(ASTContext &Ctx,
   // in class interface.
   bool HasAtleastOneRequiredProperty = false;
   if (const ObjCProtocolDecl *PDecl = Protocol->getDefinition())
-    for (const auto *Property : PDecl->properties()) {
+    for (ObjCProtocolDecl::prop_iterator P = PDecl->prop_begin(),
+         E = PDecl->prop_end(); P != E; ++P) {
+      ObjCPropertyDecl *Property = *P;
       if (Property->getPropertyImplementation() == ObjCPropertyDecl::Optional)
         continue;
       HasAtleastOneRequiredProperty = true;
@@ -533,7 +539,9 @@ ClassImplementsAllMethodsAndProperties(ASTContext &Ctx,
   if (const ObjCProtocolDecl *PDecl = Protocol->getDefinition()) {
     if (PDecl->meth_begin() == PDecl->meth_end())
       return HasAtleastOneRequiredProperty;
-    for (const auto *MD : PDecl->methods()) {
+    for (ObjCContainerDecl::method_iterator M = PDecl->meth_begin(),
+         MEnd = PDecl->meth_end(); M != MEnd; ++M) {
+      ObjCMethodDecl *MD = (*M);
       if (MD->isImplicit())
         continue;
       if (MD->getImplementationControl() == ObjCMethodDecl::Optional)
@@ -659,7 +667,9 @@ static bool UseNSOptionsMacro(Preprocessor &PP, ASTContext &Ctx,
   bool PowerOfTwo = true;
   bool AllHexdecimalEnumerator = true;
   uint64_t MaxPowerOfTwoVal = 0;
-  for (auto Enumerator : EnumDcl->enumerators()) {
+  for (EnumDecl::enumerator_iterator EI = EnumDcl->enumerator_begin(),
+       EE = EnumDcl->enumerator_end(); EI != EE; ++EI) {
+    EnumConstantDecl *Enumerator = (*EI);
     const Expr *InitExpr = Enumerator->getInitExpr();
     if (!InitExpr) {
       PowerOfTwo = false;
@@ -773,11 +783,11 @@ bool ObjCMigrateASTConsumer::migrateNSEnumDecl(ASTContext &Ctx,
   if (!TypedefDcl) {
     if (NSIntegerTypedefed) {
       TypedefDcl = NSIntegerTypedefed;
-      NSIntegerTypedefed = nullptr;
+      NSIntegerTypedefed = 0;
     }
     else if (NSUIntegerTypedefed) {
       TypedefDcl = NSUIntegerTypedefed;
-      NSUIntegerTypedefed = nullptr;
+      NSUIntegerTypedefed = 0;
     }
     else
       return false;
@@ -834,7 +844,7 @@ static void ReplaceWithInstancetype(const ObjCMigrateASTConsumer &ASTC,
                                     ObjCMethodDecl *OM) {
   SourceRange R;
   std::string ClassString;
-  if (TypeSourceInfo *TSInfo = OM->getReturnTypeSourceInfo()) {
+  if (TypeSourceInfo *TSInfo =  OM->getResultTypeSourceInfo()) {
     TypeLoc TL = TSInfo->getTypeLoc();
     R = SourceRange(TL.getBeginLoc(), TL.getEndLoc());
     ClassString = "instancetype";
@@ -854,7 +864,7 @@ static void ReplaceWithClasstype(const ObjCMigrateASTConsumer &ASTC,
   ObjCInterfaceDecl *IDecl = OM->getClassInterface();
   SourceRange R;
   std::string ClassString;
-  if (TypeSourceInfo *TSInfo = OM->getReturnTypeSourceInfo()) {
+  if (TypeSourceInfo *TSInfo =  OM->getResultTypeSourceInfo()) {
     TypeLoc TL = TSInfo->getTypeLoc();
     R = SourceRange(TL.getBeginLoc(), TL.getEndLoc()); {
       ClassString  = IDecl->getName();
@@ -892,14 +902,14 @@ void ObjCMigrateASTConsumer::migrateMethodInstanceType(ASTContext &Ctx,
       migrateFactoryMethod(Ctx, CDecl, OM, OIT_Singleton);
       return;
     case OIT_Init:
-      if (OM->getReturnType()->isObjCIdType())
+      if (OM->getResultType()->isObjCIdType())
         ReplaceWithInstancetype(*this, OM);
       return;
     case OIT_ReturnsSelf:
       migrateFactoryMethod(Ctx, CDecl, OM, OIT_ReturnsSelf);
       return;
   }
-  if (!OM->getReturnType()->isObjCIdType())
+  if (!OM->getResultType()->isObjCIdType())
     return;
   
   ObjCInterfaceDecl *IDecl = dyn_cast<ObjCInterfaceDecl>(CDecl);
@@ -1033,7 +1043,7 @@ bool ObjCMigrateASTConsumer::migrateProperty(ASTContext &Ctx,
       Method->param_size() != 0)
     return false;
   // Is this method candidate to be a getter?
-  QualType GRT = Method->getReturnType();
+  QualType GRT = Method->getResultType();
   if (GRT->isVoidType())
     return false;
   
@@ -1086,7 +1096,7 @@ bool ObjCMigrateASTConsumer::migrateProperty(ASTContext &Ctx,
       return false;
     
     // Is this a valid setter, matching the target getter?
-    QualType SRT = SetterMethod->getReturnType();
+    QualType SRT = SetterMethod->getResultType();
     if (!SRT->isVoidType())
       return false;
     const ParmVarDecl *argDecl = *SetterMethod->param_begin();
@@ -1108,7 +1118,7 @@ bool ObjCMigrateASTConsumer::migrateProperty(ASTContext &Ctx,
     // Try a non-void method with no argument (and no setter or property of same name
     // as a 'readonly' property.
     edit::Commit commit(*Editor);
-    rewriteToObjCProperty(Method, nullptr /*SetterMethod*/, *NSAPIObj, commit,
+    rewriteToObjCProperty(Method, 0 /*SetterMethod*/, *NSAPIObj, commit,
                           LengthOfPrefix,
                           (ASTMigrateActions &
                            FrontendOptions::ObjCMT_AtomicProperty) != 0,
@@ -1127,8 +1137,8 @@ void ObjCMigrateASTConsumer::migrateNsReturnsInnerPointer(ASTContext &Ctx,
       !OM->isInstanceMethod() ||
       OM->hasAttr<ObjCReturnsInnerPointerAttr>())
     return;
-
-  QualType RT = OM->getReturnType();
+  
+  QualType RT = OM->getResultType();
   if (!TypeIsInnerPointer(RT) ||
       !Ctx.Idents.get("NS_RETURNS_INNER_POINTER").hasMacroDefinition())
     return;
@@ -1156,7 +1166,10 @@ void ObjCMigrateASTConsumer::migrateAllMethodInstaceType(ASTContext &Ctx,
     return;
   
   // migrate methods which can have instancetype as their result type.
-  for (auto *Method : CDecl->methods()) {
+  for (ObjCContainerDecl::method_iterator M = CDecl->meth_begin(),
+       MEnd = CDecl->meth_end();
+       M != MEnd; ++M) {
+    ObjCMethodDecl *Method = (*M);
     if (Method->isDeprecated())
       continue;
     migrateMethodInstanceType(Ctx, CDecl, Method);
@@ -1168,8 +1181,8 @@ void ObjCMigrateASTConsumer::migrateFactoryMethod(ASTContext &Ctx,
                                                   ObjCMethodDecl *OM,
                                                   ObjCInstanceTypeFamily OIT_Family) {
   if (OM->isInstanceMethod() ||
-      OM->getReturnType() == Ctx.getObjCInstanceType() ||
-      !OM->getReturnType()->isObjCIdType())
+      OM->getResultType() == Ctx.getObjCInstanceType() ||
+      !OM->getResultType()->isObjCIdType())
     return;
   
   // Candidate factory methods are + (id) NaMeXXX : ... which belong to a class
@@ -1334,7 +1347,7 @@ void ObjCMigrateASTConsumer::AddCFAnnotations(ASTContext &Ctx,
   // Annotate function.
   if (!ResultAnnotated) {
     RetEffect Ret = CE.getReturnValue();
-    const char *AnnotationString = nullptr;
+    const char *AnnotationString = 0;
     if (Ret.getObjKind() == RetEffect::CF) {
       if (Ret.isOwned() &&
           Ctx.Idents.get("CF_RETURNS_RETAINED").hasMacroDefinition())
@@ -1401,7 +1414,7 @@ ObjCMigrateASTConsumer::CF_BRIDGING_KIND
     if (Ret.getObjKind() == RetEffect::CF &&
         (Ret.isOwned() || Ret.notOwned()))
       ReturnCFAudited = true;
-    else if (!AuditedType(FuncDecl->getReturnType()))
+    else if (!AuditedType(FuncDecl->getResultType()))
       return CF_BRIDGING_NONE;
   }
   
@@ -1440,8 +1453,12 @@ void ObjCMigrateASTConsumer::migrateARCSafeAnnotation(ASTContext &Ctx,
     return;
   
   // migrate methods which can have instancetype as their result type.
-  for (const auto *Method : CDecl->methods())
+  for (ObjCContainerDecl::method_iterator M = CDecl->meth_begin(),
+       MEnd = CDecl->meth_end();
+       M != MEnd; ++M) {
+    ObjCMethodDecl *Method = (*M);
     migrateCFAnnotation(Ctx, Method);
+  }
 }
 
 void ObjCMigrateASTConsumer::AddCFAnnotations(ASTContext &Ctx,
@@ -1451,7 +1468,7 @@ void ObjCMigrateASTConsumer::AddCFAnnotations(ASTContext &Ctx,
   // Annotate function.
   if (!ResultAnnotated) {
     RetEffect Ret = CE.getReturnValue();
-    const char *AnnotationString = nullptr;
+    const char *AnnotationString = 0;
     if (Ret.getObjKind() == RetEffect::CF) {
       if (Ret.isOwned() &&
           Ctx.Idents.get("CF_RETURNS_RETAINED").hasMacroDefinition())
@@ -1534,7 +1551,8 @@ void ObjCMigrateASTConsumer::migrateAddMethodAnnotation(
         (Ret.isOwned() || Ret.notOwned())) {
       AddCFAnnotations(Ctx, CE, MethodDecl, false);
       return;
-    } else if (!AuditedType(MethodDecl->getReturnType()))
+    }
+    else if (!AuditedType(MethodDecl->getResultType()))
       return;
   }
   
@@ -1585,7 +1603,9 @@ void ObjCMigrateASTConsumer::inferDesignatedInitializers(
   if (!Ctx.Idents.get("NS_DESIGNATED_INITIALIZER").hasMacroDefinition())
     return;
 
-  for (const auto *MD : ImplD->instance_methods()) {
+  for (ObjCImplementationDecl::instmeth_iterator
+         I = ImplD->instmeth_begin(), E = ImplD->instmeth_end(); I != E; ++I) {
+    const ObjCMethodDecl *MD = *I;
     if (MD->isDeprecated() ||
         MD->getMethodFamily() != OMF_init ||
         MD->isDesignatedInitializerForTheInterface())
@@ -1610,10 +1630,10 @@ class RewritesReceiver : public edit::EditsReceiver {
 public:
   RewritesReceiver(Rewriter &Rewrite) : Rewrite(Rewrite) { }
 
-  void insert(SourceLocation loc, StringRef text) override {
+  virtual void insert(SourceLocation loc, StringRef text) {
     Rewrite.InsertText(loc, text);
   }
-  void replace(CharSourceRange range, StringRef text) override {
+  virtual void replace(CharSourceRange range, StringRef text) {
     Rewrite.ReplaceText(range.getBegin(), Rewrite.getRangeSize(range), text);
   }
 };
@@ -1647,7 +1667,7 @@ private:
     void writeLoc(SourceLocation Loc) {
       FileID FID;
       unsigned Offset;
-      std::tie(FID, Offset) = SourceMgr.getDecomposedLoc(Loc);
+      llvm::tie(FID, Offset) = SourceMgr.getDecomposedLoc(Loc);
       assert(!FID.isInvalid());
       SmallString<200> Path =
           StringRef(SourceMgr.getFileEntryForID(FID)->getName());
@@ -1676,26 +1696,54 @@ private:
     }
   };
  
-  void insert(SourceLocation Loc, StringRef Text) override {
+  virtual void insert(SourceLocation Loc, StringRef Text) {
     EntryWriter Writer(SourceMgr, OS);
     Writer.writeLoc(Loc);
     Writer.writeText(Text);
   }
 
-  void replace(CharSourceRange Range, StringRef Text) override {
+  virtual void replace(CharSourceRange Range, StringRef Text) {
     EntryWriter Writer(SourceMgr, OS);
     Writer.writeLoc(Range.getBegin());
     Writer.writeRemove(Range);
     Writer.writeText(Text);
   }
 
-  void remove(CharSourceRange Range) override {
+  virtual void remove(CharSourceRange Range) {
     EntryWriter Writer(SourceMgr, OS);
     Writer.writeLoc(Range.getBegin());
     Writer.writeRemove(Range);
   }
 };
 
+}
+
+static bool
+IsReallyASystemHeader(ASTContext &Ctx, const FileEntry *file, FileID FID) {
+  bool Invalid = false;
+  const SrcMgr::SLocEntry &SEntry =
+  Ctx.getSourceManager().getSLocEntry(FID, &Invalid);
+  if (!Invalid && SEntry.isFile()) {
+    const SrcMgr::FileInfo &FI = SEntry.getFile();
+    if (!FI.hasLineDirectives()) {
+      if (FI.getFileCharacteristic() == SrcMgr::C_ExternCSystem)
+        return true;
+      if (FI.getFileCharacteristic() == SrcMgr::C_System) {
+        // This file is in a system header directory. Continue committing
+        // change only if it's a user-specified system directory because user
+        // put a .system_framework file in the framework directory.
+        StringRef Directory(file->getDir()->getName());
+        size_t Ix = Directory.rfind(".framework");
+        if (Ix == StringRef::npos)
+          return true;
+        std::string PatchToSystemFramework = Directory.slice(0, Ix+sizeof(".framework"));
+        PatchToSystemFramework += ".system_framework";
+        if (!llvm::sys::fs::exists(PatchToSystemFramework.data()))
+          return true;
+      }
+    }
+  }
+  return false;
 }
 
 void ObjCMigrateASTConsumer::HandleTranslationUnit(ASTContext &Ctx) {
@@ -1738,7 +1786,7 @@ void ObjCMigrateASTConsumer::HandleTranslationUnit(ASTContext &Ctx) {
             D++;
         }
         else
-          migrateNSEnumDecl(Ctx, ED, /*TypedefDecl */nullptr);
+          migrateNSEnumDecl(Ctx, ED, /*TypedefDecl */0);
       }
       else if (const TypedefDecl *TD = dyn_cast<TypedefDecl>(*D)) {
         if (!(ASTMigrateActions & FrontendOptions::ObjCMT_NsMacros))
@@ -1796,11 +1844,11 @@ void ObjCMigrateASTConsumer::HandleTranslationUnit(ASTContext &Ctx) {
   
  if (IsOutputFile) {
    std::string Error;
-   llvm::raw_fd_ostream OS(MigrateDir.c_str(), Error, llvm::sys::fs::F_None);
+   llvm::raw_fd_ostream OS(MigrateDir.c_str(), Error, llvm::sys::fs::F_Binary);
     if (!Error.empty()) {
-      DiagnosticsEngine &Diags = Ctx.getDiagnostics();
-      Diags.Report(Diags.getCustomDiagID(DiagnosticsEngine::Error, "%0"))
-          << Error;
+      unsigned ID = Ctx.getDiagnostics().getDiagnosticIDs()->
+          getCustomDiagID(DiagnosticIDs::Error, Error);
+      Ctx.getDiagnostics().Report(ID);
       return;
     }
 
@@ -1819,6 +1867,8 @@ void ObjCMigrateASTConsumer::HandleTranslationUnit(ASTContext &Ctx) {
     RewriteBuffer &buf = I->second;
     const FileEntry *file = Ctx.getSourceManager().getFileEntryForID(FID);
     assert(file);
+    if (IsReallyASystemHeader(Ctx, file, FID))
+      continue;
     SmallString<512> newText;
     llvm::raw_svector_ostream vecOS(newText);
     buf.write(vecOS);
@@ -1939,12 +1989,12 @@ public:
   bool parse(StringRef File, SmallVectorImpl<EditEntry> &Entries) {
     using namespace llvm::yaml;
 
-    std::unique_ptr<llvm::MemoryBuffer> FileBuf;
+    OwningPtr<llvm::MemoryBuffer> FileBuf;
     if (llvm::MemoryBuffer::getFile(File, FileBuf))
       return true;
 
     llvm::SourceMgr SM;
-    Stream YAMLStream(FileBuf.release(), SM);
+    Stream YAMLStream(FileBuf.take(), SM);
     document_iterator I = YAMLStream.begin();
     if (I == YAMLStream.end())
       return true;
@@ -2011,8 +2061,10 @@ private:
 }
 
 static bool reportDiag(const Twine &Err, DiagnosticsEngine &Diag) {
-  Diag.Report(Diag.getCustomDiagID(DiagnosticsEngine::Error, "%0"))
-      << Err.str();
+  SmallString<128> Buf;
+  unsigned ID = Diag.getDiagnosticIDs()->getCustomDiagID(DiagnosticIDs::Error,
+                                                         Err.toStringRef(Buf));
+  Diag.Report(ID);
   return true;
 }
 

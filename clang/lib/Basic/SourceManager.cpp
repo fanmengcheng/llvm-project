@@ -404,7 +404,10 @@ SourceManager::~SourceManager() {
   delete FakeBufferForRecovery;
   delete FakeContentCacheForRecovery;
 
-  llvm::DeleteContainerSeconds(MacroArgsCacheMap);
+  for (llvm::DenseMap<FileID, MacroArgsMap *>::iterator
+         I = MacroArgsCacheMap.begin(),E = MacroArgsCacheMap.end(); I!=E; ++I) {
+    delete I->second;
+  }
 }
 
 void SourceManager::clearIDTables() {
@@ -436,8 +439,12 @@ SourceManager::getOrCreateContentCache(const FileEntry *FileEnt,
   ContentCache *&Entry = FileInfos[FileEnt];
   if (Entry) return Entry;
 
-  // Nope, create a new Cache entry.
-  Entry = ContentCacheAlloc.Allocate<ContentCache>();
+  // Nope, create a new Cache entry.  Make sure it is at least 8-byte aligned
+  // so that FileInfo can use the low 3 bits of the pointer for its own
+  // nefarious purposes.
+  unsigned EntryAlign = llvm::AlignOf<ContentCache>::Alignment;
+  EntryAlign = std::max(8U, EntryAlign);
+  Entry = ContentCacheAlloc.Allocate<ContentCache>(1, EntryAlign);
 
   if (OverriddenFilesInfo) {
     // If the file contents are overridden with contents from another file,
@@ -464,8 +471,12 @@ SourceManager::getOrCreateContentCache(const FileEntry *FileEnt,
 ///  memory buffer.  This does no caching.
 const ContentCache*
 SourceManager::createMemBufferContentCache(const MemoryBuffer *Buffer) {
-  // Add a new ContentCache to the MemBufferInfos list and return it.
-  ContentCache *Entry = ContentCacheAlloc.Allocate<ContentCache>();
+  // Add a new ContentCache to the MemBufferInfos list and return it.  Make sure
+  // it is at least 8-byte aligned so that FileInfo can use the low 3 bits of
+  // the pointer for its own nefarious purposes.
+  unsigned EntryAlign = llvm::AlignOf<ContentCache>::Alignment;
+  EntryAlign = std::max(8U, EntryAlign);
+  ContentCache *Entry = ContentCacheAlloc.Allocate<ContentCache>(1, EntryAlign);
   new (Entry) ContentCache();
   MemBufferInfos.push_back(Entry);
   Entry->setBuffer(Buffer);
@@ -1370,6 +1381,31 @@ unsigned SourceManager::getLineNumber(FileID FID, unsigned FilePos,
     }
   }
 
+  // If the spread is large, do a "radix" test as our initial guess, based on
+  // the assumption that lines average to approximately the same length.
+  // NOTE: This is currently disabled, as it does not appear to be profitable in
+  // initial measurements.
+  if (0 && SourceLineCacheEnd-SourceLineCache > 20) {
+    unsigned FileLen = Content->SourceLineCache[Content->NumLines-1];
+
+    // Take a stab at guessing where it is.
+    unsigned ApproxPos = Content->NumLines*QueriedFilePos / FileLen;
+
+    // Check for -10 and +10 lines.
+    unsigned LowerBound = std::max(int(ApproxPos-10), 0);
+    unsigned UpperBound = std::min(ApproxPos+10, FileLen);
+
+    // If the computed lower bound is less than the query location, move it in.
+    if (SourceLineCache < SourceLineCacheStart+LowerBound &&
+        SourceLineCacheStart[LowerBound] < QueriedFilePos)
+      SourceLineCache = SourceLineCacheStart+LowerBound;
+
+    // If the computed upper bound is greater than the query location, move it.
+    if (SourceLineCacheEnd > SourceLineCacheStart+UpperBound &&
+        SourceLineCacheStart[UpperBound] >= QueriedFilePos)
+      SourceLineCacheEnd = SourceLineCacheStart+UpperBound;
+  }
+
   unsigned *Pos
     = std::lower_bound(SourceLineCache, SourceLineCacheEnd, QueriedFilePos);
   unsigned LineNo = Pos-SourceLineCacheStart;
@@ -1857,7 +1893,7 @@ void SourceManager::associateFileChunkWithMacroArgExp(
 
     FileID SpellFID; // Current FileID in the spelling range.
     unsigned SpellRelativeOffs;
-    std::tie(SpellFID, SpellRelativeOffs) = getDecomposedLoc(SpellLoc);
+    llvm::tie(SpellFID, SpellRelativeOffs) = getDecomposedLoc(SpellLoc);
     while (1) {
       const SLocEntry &Entry = getSLocEntry(SpellFID);
       unsigned SpellFIDBeginOffs = Entry.getOffset();
@@ -1936,7 +1972,7 @@ SourceManager::getMacroArgExpandedLocation(SourceLocation Loc) const {
 
   FileID FID;
   unsigned Offset;
-  std::tie(FID, Offset) = getDecomposedLoc(Loc);
+  llvm::tie(FID, Offset) = getDecomposedLoc(Loc);
   if (FID.isInvalid())
     return Loc;
 

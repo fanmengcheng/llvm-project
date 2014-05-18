@@ -367,8 +367,9 @@ void JumpScopeChecker::BuildScopeInformation(Stmt *S, unsigned &origParentScope)
     if (DeclStmt *DS = dyn_cast<DeclStmt>(SubStmt)) {
       // The decl statement creates a scope if any of the decls in it are VLAs
       // or have the cleanup attribute.
-      for (auto *I : DS->decls())
-        BuildScopeInformation(I, ParentScope);
+      for (DeclStmt::decl_iterator I = DS->decl_begin(), E = DS->decl_end();
+           I != E; ++I)
+        BuildScopeInformation(*I, ParentScope);
       continue;
     }
     // Disallow jumps into any part of an @try statement by pushing a scope and
@@ -444,8 +445,9 @@ void JumpScopeChecker::BuildScopeInformation(Stmt *S, unsigned &origParentScope)
     if (ExprWithCleanups *EWC = dyn_cast<ExprWithCleanups>(SubStmt)) {
       for (unsigned i = 0, e = EWC->getNumObjects(); i != e; ++i) {
         const BlockDecl *BDecl = EWC->getObject(i);
-        for (const auto &CI : BDecl->captures()) {
-          VarDecl *variable = CI.getVariable();
+        for (BlockDecl::capture_const_iterator ci = BDecl->capture_begin(),
+             ce = BDecl->capture_end(); ci != ce; ++ci) {
+          VarDecl *variable = ci->getVariable();
           BuildScopeInformation(variable, BDecl, ParentScope);
         }
       }
@@ -750,7 +752,7 @@ void JumpScopeChecker::CheckJump(Stmt *From, Stmt *To, SourceLocation DiagLoc,
   SmallVector<unsigned, 10> ToScopesError;
   SmallVector<unsigned, 10> ToScopesWarning;
   for (unsigned I = ToScope; I != CommonScope; I = Scopes[I].ParentScope) {
-    if (S.getLangOpts().MSVCCompat && JumpDiagWarning != 0 &&
+    if (S.getLangOpts().MicrosoftMode && JumpDiagWarning != 0 &&
         IsMicrosoftJumpWarning(JumpDiagError, Scopes[I].InDiag))
       ToScopesWarning.push_back(I);
     else if (IsCXX98CompatWarning(S, Scopes[I].InDiag))

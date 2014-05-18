@@ -39,10 +39,7 @@ struct FormatStyle {
     /// Should be used for C, C++, ObjectiveC, ObjectiveC++.
     LK_Cpp,
     /// Should be used for JavaScript.
-    LK_JavaScript,
-    /// Should be used for Protocol Buffers
-    /// (https://developers.google.com/protocol-buffers/).
-    LK_Proto
+    LK_JavaScript
   };
 
   /// \brief Language, this format style is targeted at.
@@ -57,9 +54,6 @@ struct FormatStyle {
 
   /// \brief The maximum number of consecutive empty lines to keep.
   unsigned MaxEmptyLinesToKeep;
-
-  /// \brief If true, empty lines at the start of blocks are kept.
-  bool KeepEmptyLinesAtTheStartOfBlocks;
 
   /// \brief The penalty for each line break introduced inside a comment.
   unsigned PenaltyBreakComment;
@@ -79,8 +73,7 @@ struct FormatStyle {
   /// \brief Set whether & and * bind to the type as opposed to the variable.
   bool PointerBindsToType;
 
-  /// \brief If \c true, analyze the formatted file for the most common binding
-  /// and use \c PointerBindsToType only as fallback.
+  /// \brief If \c true, analyze the formatted file for the most common binding.
   bool DerivePointerBinding;
 
   /// \brief The extra indent or outdent of access modifiers, e.g. \c public:.
@@ -120,10 +113,7 @@ struct FormatStyle {
   /// \brief The indentation used for namespaces.
   NamespaceIndentationKind NamespaceIndentation;
 
-  /// \brief The number of spaces before trailing line comments (//-comments).
-  ///
-  /// This does not affect trailing block comments (/**/-comments) as those
-  /// commonly have different usage patterns and a number of special cases.
+  /// \brief The number of spaces to before trailing line comments.
   unsigned SpacesBeforeTrailingComments;
 
   /// \brief If \c false, a function call's or function definition's parameters
@@ -166,24 +156,9 @@ struct FormatStyle {
   /// single line.
   bool AllowShortLoopsOnASingleLine;
 
-  /// \brief Different styles for merging short functions containing at most one
-  /// statement.
-  enum ShortFunctionStyle {
-    /// \brief Never merge functions into a single line.
-    SFS_None,
-    /// \brief Only merge functions defined inside a class.
-    SFS_Inline,
-    /// \brief Merge all functions fitting on a single line.
-    SFS_All,
-  };
-
-  /// \brief Dependent on the value, <tt>int f() { return 0; }</tt> can be put
-  /// on a single line.
-  ShortFunctionStyle AllowShortFunctionsOnASingleLine;
-
-  /// \brief Add a space after \c @property in Objective-C, i.e. use
-  /// <tt>\@property (readonly)</tt> instead of <tt>\@property(readonly)</tt>.
-  bool ObjCSpaceAfterProperty;
+  /// \brief If \c true, <tt>int f() { return 0; }</tt> can be put on a single
+  /// line.
+  bool AllowShortFunctionsOnASingleLine;
 
   /// \brief Add a space in front of an Objective-C protocol list, i.e. use
   /// <tt>Foo <Protocol></tt> instead of \c Foo<Protocol>.
@@ -279,14 +254,10 @@ struct FormatStyle {
   /// template argument lists
   bool SpacesInAngles;
 
-  /// \brief If \c true, spaces may be inserted into '()'.
+  /// \brief If \c false, spaces may be inserted into '()'.
   bool SpaceInEmptyParentheses;
 
-  /// \brief If \c true, spaces are inserted inside container literals (e.g.
-  /// ObjC and Javascript array and dict literals).
-  bool SpacesInContainerLiterals;
-
-  /// \brief If \c true, spaces may be inserted into C style casts.
+  /// \brief If \c false, spaces may be inserted into C style casts.
   bool SpacesInCStyleCastParentheses;
 
   /// \brief Different ways to put a space before opening parentheses.
@@ -315,18 +286,6 @@ struct FormatStyle {
   /// \brief A regular expression that describes comments with special meaning,
   /// which should not be split into lines or otherwise changed.
   std::string CommentPragmas;
-
-  /// \brief A vector of macros that should be interpreted as foreach loops
-  /// instead of as function calls.
-  ///
-  /// These are expected to be macros of the form:
-  /// \code
-  /// FOREACH(<variable-declaration>, ...)
-  ///   <loop-body>
-  /// \endcode
-  ///
-  /// For example: BOOST_FOREACH.
-  std::vector<std::string> ForEachMacros;
 
   bool operator==(const FormatStyle &R) const {
     return AccessModifierOffset == R.AccessModifierOffset &&
@@ -362,10 +321,7 @@ struct FormatStyle {
                R.IndentFunctionDeclarationAfterType &&
            IndentWidth == R.IndentWidth && Language == R.Language &&
            MaxEmptyLinesToKeep == R.MaxEmptyLinesToKeep &&
-           KeepEmptyLinesAtTheStartOfBlocks ==
-               R.KeepEmptyLinesAtTheStartOfBlocks &&
            NamespaceIndentation == R.NamespaceIndentation &&
-           ObjCSpaceAfterProperty == R.ObjCSpaceAfterProperty &&
            ObjCSpaceBeforeProtocolList == R.ObjCSpaceBeforeProtocolList &&
            PenaltyBreakComment == R.PenaltyBreakComment &&
            PenaltyBreakFirstLessLess == R.PenaltyBreakFirstLessLess &&
@@ -379,13 +335,11 @@ struct FormatStyle {
            UseTab == R.UseTab && SpacesInParentheses == R.SpacesInParentheses &&
            SpacesInAngles == R.SpacesInAngles &&
            SpaceInEmptyParentheses == R.SpaceInEmptyParentheses &&
-           SpacesInContainerLiterals == R.SpacesInContainerLiterals &&
            SpacesInCStyleCastParentheses == R.SpacesInCStyleCastParentheses &&
            SpaceBeforeParens == R.SpaceBeforeParens &&
            SpaceBeforeAssignmentOperators == R.SpaceBeforeAssignmentOperators &&
            ContinuationIndentWidth == R.ContinuationIndentWidth &&
-           CommentPragmas == R.CommentPragmas &&
-           ForEachMacros == R.ForEachMacros;
+           CommentPragmas == R.CommentPragmas;
   }
 };
 
@@ -393,15 +347,18 @@ struct FormatStyle {
 /// http://llvm.org/docs/CodingStandards.html.
 FormatStyle getLLVMStyle();
 
-/// \brief Returns a format style complying with one of Google's style guides:
+/// \brief Returns a format style complying with Google's C++ style guide:
 /// http://google-styleguide.googlecode.com/svn/trunk/cppguide.xml.
+FormatStyle getGoogleStyle();
+
+/// \brief Returns a format style complying with Google's JavaScript style
+/// guide:
 /// http://google-styleguide.googlecode.com/svn/trunk/javascriptguide.xml.
-/// https://developers.google.com/protocol-buffers/docs/style.
-FormatStyle getGoogleStyle(FormatStyle::LanguageKind Language);
+FormatStyle getGoogleJSStyle();
 
 /// \brief Returns a format style complying with Chromium's style guide:
 /// http://www.chromium.org/developers/coding-style.
-FormatStyle getChromiumStyle(FormatStyle::LanguageKind Language);
+FormatStyle getChromiumStyle();
 
 /// \brief Returns a format style complying with Mozilla's style guide:
 /// https://developer.mozilla.org/en-US/docs/Developer_Guide/Coding_Style.

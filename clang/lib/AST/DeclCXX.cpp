@@ -202,17 +202,19 @@ CXXRecordDecl::setBases(CXXBaseSpecifier const * const *Bases,
       data().HasNonLiteralTypeFieldsOrBases = true;
     
     // Now go through all virtual bases of this base and add them.
-    for (const auto &VBase : BaseClassDecl->vbases()) {
+    for (CXXRecordDecl::base_class_iterator VBase =
+          BaseClassDecl->vbases_begin(),
+         E = BaseClassDecl->vbases_end(); VBase != E; ++VBase) {
       // Add this base if it's not already in the list.
-      if (SeenVBaseTypes.insert(C.getCanonicalType(VBase.getType()))) {
-        VBases.push_back(&VBase);
+      if (SeenVBaseTypes.insert(C.getCanonicalType(VBase->getType()))) {
+        VBases.push_back(VBase);
 
         // C++11 [class.copy]p8:
         //   The implicitly-declared copy constructor for a class X will have
         //   the form 'X::X(const X&)' if each [...] virtual base class B of X
         //   has a copy constructor whose first parameter is of type
         //   'const B&' or 'const volatile B&' [...]
-        if (CXXRecordDecl *VBaseDecl = VBase.getType()->getAsCXXRecordDecl())
+        if (CXXRecordDecl *VBaseDecl = VBase->getType()->getAsCXXRecordDecl())
           if (!VBaseDecl->hasCopyConstructorWithConstParam())
             data().ImplicitCopyConstructorHasConstParam = false;
       }
@@ -527,11 +529,8 @@ void CXXRecordDecl::addedMember(Decl *D) {
   if (CXXDestructorDecl *DD = dyn_cast<CXXDestructorDecl>(D)) {
     SMKind |= SMF_Destructor;
 
-    if (DD->isUserProvided())
+    if (!DD->isImplicit())
       data().HasIrrelevantDestructor = false;
-    // If the destructor is explicitly defaulted and not trivial or not public
-    // or if the destructor is deleted, we clear HasIrrelevantDestructor in
-    // finishedDefaultedOrDeletedMember.
 
     // C++11 [class.dtor]p5:
     //   A destructor is trivial if [...] the destructor is not virtual.
@@ -820,8 +819,10 @@ void CXXRecordDecl::addedMember(Decl *D) {
         // data member must come through here with Empty still true, and Empty
         // will subsequently be set to false below.
         if (data().IsStandardLayout && data().Empty) {
-          for (const auto &BI : bases()) {
-            if (Context.hasSameUnqualifiedType(BI.getType(), T)) {
+          for (CXXRecordDecl::base_class_const_iterator BI = bases_begin(),
+                                                        BE = bases_end();
+               BI != BE; ++BI) {
+            if (Context.hasSameUnqualifiedType(BI->getType(), T)) {
               data().IsStandardLayout = false;
               break;
             }
@@ -939,11 +940,9 @@ void CXXRecordDecl::finishedDefaultedOrDeletedMember(CXXMethodDecl *D) {
     else if (Constructor->isConstexpr())
       // We may now know that the constructor is constexpr.
       data().HasConstexprNonCopyMoveConstructor = true;
-  } else if (isa<CXXDestructorDecl>(D)) {
+  } else if (isa<CXXDestructorDecl>(D))
     SMKind |= SMF_Destructor;
-    if (!D->isTrivial() || D->getAccess() != AS_public || D->isDeleted())
-      data().HasIrrelevantDestructor = false;
-  } else if (D->isCopyAssignmentOperator())
+  else if (D->isCopyAssignmentOperator())
     SMKind |= SMF_CopyAssignment;
   else if (D->isMoveAssignmentOperator())
     SMKind |= SMF_MoveAssignment;
@@ -1031,9 +1030,13 @@ CXXRecordDecl::getGenericLambdaTemplateParameterList() const {
 }
 
 static CanQualType GetConversionType(ASTContext &Context, NamedDecl *Conv) {
-  QualType T =
-      cast<CXXConversionDecl>(Conv->getUnderlyingDecl()->getAsFunction())
-          ->getConversionType();
+  QualType T;
+  if (isa<UsingShadowDecl>(Conv))
+    Conv = cast<UsingShadowDecl>(Conv)->getTargetDecl();
+  if (FunctionTemplateDecl *ConvTemp = dyn_cast<FunctionTemplateDecl>(Conv))
+    T = ConvTemp->getTemplatedDecl()->getResultType();
+  else 
+    T = cast<CXXConversionDecl>(Conv)->getConversionType();
   return Context.getCanonicalType(T);
 }
 
@@ -1096,13 +1099,14 @@ static void CollectVisibleConversions(ASTContext &Context,
   }
 
   // Collect information recursively from any base classes.
-  for (const auto &I : Record->bases()) {
-    const RecordType *RT = I.getType()->getAs<RecordType>();
+  for (CXXRecordDecl::base_class_iterator
+         I = Record->bases_begin(), E = Record->bases_end(); I != E; ++I) {
+    const RecordType *RT = I->getType()->getAs<RecordType>();
     if (!RT) continue;
 
     AccessSpecifier BaseAccess
-      = CXXRecordDecl::MergeAccess(Access, I.getAccessSpecifier());
-    bool BaseInVirtual = InVirtual || I.isVirtual();
+      = CXXRecordDecl::MergeAccess(Access, I->getAccessSpecifier());
+    bool BaseInVirtual = InVirtual || I->isVirtual();
 
     CXXRecordDecl *Base = cast<CXXRecordDecl>(RT->getDecl());
     CollectVisibleConversions(Context, Base, BaseInVirtual, BaseAccess,
@@ -1138,12 +1142,13 @@ static void CollectVisibleConversions(ASTContext &Context,
     HiddenTypes.insert(GetConversionType(Context, ConvI.getDecl()));
 
   // Recursively collect conversions from base classes.
-  for (const auto &I : Record->bases()) {
-    const RecordType *RT = I.getType()->getAs<RecordType>();
+  for (CXXRecordDecl::base_class_iterator
+         I = Record->bases_begin(), E = Record->bases_end(); I != E; ++I) {
+    const RecordType *RT = I->getType()->getAs<RecordType>();
     if (!RT) continue;
 
     CollectVisibleConversions(Context, cast<CXXRecordDecl>(RT->getDecl()),
-                              I.isVirtual(), I.getAccessSpecifier(),
+                              I->isVirtual(), I->getAccessSpecifier(),
                               HiddenTypes, Output, VBaseCs, HiddenVBaseCs);
   }
 
@@ -1324,9 +1329,11 @@ bool CXXRecordDecl::mayBeAbstract() const {
       isDependentContext())
     return false;
   
-  for (const auto &B : bases()) {
+  for (CXXRecordDecl::base_class_const_iterator B = bases_begin(),
+                                             BEnd = bases_end();
+       B != BEnd; ++B) {
     CXXRecordDecl *BaseDecl 
-      = cast<CXXRecordDecl>(B.getType()->getAs<RecordType>()->getDecl());
+      = cast<CXXRecordDecl>(B->getType()->getAs<RecordType>()->getDecl());
     if (BaseDecl->isAbstract())
       return true;
   }
@@ -1388,8 +1395,9 @@ CXXMethodDecl::getCorrespondingMethodInClass(const CXXRecordDecl *RD,
       return MD;
   }
 
-  for (const auto &I : RD->bases()) {
-    const RecordType *RT = I.getType()->getAs<RecordType>();
+  for (CXXRecordDecl::base_class_const_iterator I = RD->bases_begin(),
+         E = RD->bases_end(); I != E; ++I) {
+    const RecordType *RT = I->getType()->getAs<RecordType>();
     if (!RT)
       continue;
     const CXXRecordDecl *Base = cast<CXXRecordDecl>(RT->getDecl());

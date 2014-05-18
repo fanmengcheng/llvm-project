@@ -30,14 +30,14 @@ public:
   // Does NOT take ownership of the elements in L.
   MultiplexASTDeserializationListener(
       const std::vector<ASTDeserializationListener*>& L);
-  void ReaderInitialized(ASTReader *Reader) override;
-  void IdentifierRead(serialization::IdentID ID,
-                      IdentifierInfo *II) override;
-  void TypeRead(serialization::TypeIdx Idx, QualType T) override;
-  void DeclRead(serialization::DeclID ID, const Decl *D) override;
-  void SelectorRead(serialization::SelectorID iD, Selector Sel) override;
-  void MacroDefinitionRead(serialization::PreprocessedEntityID,
-                           MacroDefinition *MD) override;
+  virtual void ReaderInitialized(ASTReader *Reader);
+  virtual void IdentifierRead(serialization::IdentID ID,
+                              IdentifierInfo *II);
+  virtual void TypeRead(serialization::TypeIdx Idx, QualType T);
+  virtual void DeclRead(serialization::DeclID ID, const Decl *D);
+  virtual void SelectorRead(serialization::SelectorID iD, Selector Sel);
+  virtual void MacroDefinitionRead(serialization::PreprocessedEntityID, 
+                                   MacroDefinition *MD);
 private:
   std::vector<ASTDeserializationListener*> Listeners;
 };
@@ -89,24 +89,25 @@ class MultiplexASTMutationListener : public ASTMutationListener {
 public:
   // Does NOT take ownership of the elements in L.
   MultiplexASTMutationListener(ArrayRef<ASTMutationListener*> L);
-  void CompletedTagDefinition(const TagDecl *D) override;
-  void AddedVisibleDecl(const DeclContext *DC, const Decl *D) override;
-  void AddedCXXImplicitMember(const CXXRecordDecl *RD, const Decl *D) override;
-  void AddedCXXTemplateSpecialization(const ClassTemplateDecl *TD,
-                            const ClassTemplateSpecializationDecl *D) override;
-  void AddedCXXTemplateSpecialization(const VarTemplateDecl *TD,
-                               const VarTemplateSpecializationDecl *D) override;
-  void AddedCXXTemplateSpecialization(const FunctionTemplateDecl *TD,
-                                      const FunctionDecl *D) override;
-  void DeducedReturnType(const FunctionDecl *FD, QualType ReturnType) override;
-  void CompletedImplicitDefinition(const FunctionDecl *D) override;
-  void StaticDataMemberInstantiated(const VarDecl *D) override;
-  void AddedObjCCategoryToInterface(const ObjCCategoryDecl *CatD,
-                                    const ObjCInterfaceDecl *IFD) override;
-  void AddedObjCPropertyInClassExtension(const ObjCPropertyDecl *Prop,
-                                    const ObjCPropertyDecl *OrigProp,
-                                    const ObjCCategoryDecl *ClassExt) override;
-  void DeclarationMarkedUsed(const Decl *D) override;
+  virtual void CompletedTagDefinition(const TagDecl *D);
+  virtual void AddedVisibleDecl(const DeclContext *DC, const Decl *D);
+  virtual void AddedCXXImplicitMember(const CXXRecordDecl *RD, const Decl *D);
+  virtual void AddedCXXTemplateSpecialization(const ClassTemplateDecl *TD,
+                                    const ClassTemplateSpecializationDecl *D);
+  virtual void
+  AddedCXXTemplateSpecialization(const VarTemplateDecl *TD,
+                                 const VarTemplateSpecializationDecl *D);
+  virtual void AddedCXXTemplateSpecialization(const FunctionTemplateDecl *TD,
+                                              const FunctionDecl *D);
+  virtual void DeducedReturnType(const FunctionDecl *FD, QualType ReturnType);
+  virtual void CompletedImplicitDefinition(const FunctionDecl *D);
+  virtual void StaticDataMemberInstantiated(const VarDecl *D);
+  virtual void AddedObjCCategoryToInterface(const ObjCCategoryDecl *CatD,
+                                            const ObjCInterfaceDecl *IFD);
+  virtual void AddedObjCPropertyInClassExtension(const ObjCPropertyDecl *Prop,
+                                            const ObjCPropertyDecl *OrigProp,
+                                            const ObjCCategoryDecl *ClassExt);
+  void DeclarationMarkedUsed(const Decl *D) LLVM_OVERRIDE;
 
 private:
   std::vector<ASTMutationListener*> Listeners;
@@ -183,9 +184,10 @@ void MultiplexASTMutationListener::DeclarationMarkedUsed(const Decl *D) {
 
 }  // end namespace clang
 
-MultiplexConsumer::MultiplexConsumer(ArrayRef<ASTConsumer *> C)
-    : Consumers(C.begin(), C.end()), MutationListener(),
-      DeserializationListener() {
+
+MultiplexConsumer::MultiplexConsumer(ArrayRef<ASTConsumer*> C)
+    : Consumers(C.begin(), C.end()),
+      MutationListener(0), DeserializationListener(0) {
   // Collect the mutation listeners and deserialization listeners of all
   // children, and create a multiplex listener each if so.
   std::vector<ASTMutationListener*> mutationListeners;

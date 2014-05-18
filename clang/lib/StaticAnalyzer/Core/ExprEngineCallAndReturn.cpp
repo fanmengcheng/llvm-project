@@ -11,6 +11,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#define DEBUG_TYPE "ExprEngine"
+
 #include "clang/StaticAnalyzer/Core/PathSensitive/ExprEngine.h"
 #include "PrettyStackTraceLocationContext.h"
 #include "clang/AST/CXXInheritance.h"
@@ -25,8 +27,6 @@
 
 using namespace clang;
 using namespace ento;
-
-#define DEBUG_TYPE "ExprEngine"
 
 STATISTIC(NumOfDynamicDispatchPathSplits,
   "The # of times we split the path due to imprecise dynamic dispatch info");
@@ -162,7 +162,7 @@ void ExprEngine::removeDeadOnEndOfFunction(NodeBuilderContext& BC,
   // Find the last statement in the function and the corresponding basic block.
   const Stmt *LastSt = 0;
   const CFGBlock *Blk = 0;
-  std::tie(LastSt, Blk) = getLastStmt(Pred);
+  llvm::tie(LastSt, Blk) = getLastStmt(Pred);
   if (!Blk || !LastSt) {
     Dst.Add(Pred);
     return;
@@ -231,7 +231,7 @@ void ExprEngine::processCallExit(ExplodedNode *CEBNode) {
   // Find the last statement in the function and the corresponding basic block.
   const Stmt *LastSt = 0;
   const CFGBlock *Blk = 0;
-  std::tie(LastSt, Blk) = getLastStmt(CEBNode);
+  llvm::tie(LastSt, Blk) = getLastStmt(CEBNode);
 
   // Generate a CallEvent /before/ cleaning the state, so that we can get the
   // correct value for 'this' (if necessary).
@@ -282,7 +282,7 @@ void ExprEngine::processCallExit(ExplodedNode *CEBNode) {
   // they occurred.
   ExplodedNodeSet CleanedNodes;
   if (LastSt && Blk && AMgr.options.AnalysisPurgeOpt != PurgeNone) {
-    static SimpleProgramPointTag retValBind("ExprEngine", "Bind Return Value");
+    static SimpleProgramPointTag retValBind("ExprEngine : Bind Return Value");
     PostStmt Loc(LastSt, calleeCtx, &retValBind);
     bool isNew;
     ExplodedNode *BindedRetNode = G.getNode(Loc, state, false, &isNew);
@@ -664,8 +664,6 @@ static CallInlinePolicy mayInlineCallKind(const CallEvent &Call,
     break;
   }
   case CE_CXXAllocator:
-    if (Opts.mayInlineCXXAllocator())
-      break;
     // Do not inline allocators until we model deallocators.
     // This is unfortunate, but basically necessary for smart pointers and such.
     return CIP_DisallowedAlways;

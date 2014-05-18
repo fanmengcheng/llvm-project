@@ -17,7 +17,6 @@
 #include "clang/Tooling/CompilationDatabase.h"
 #include "clang/Tooling/Tooling.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Config/config.h"
 #include "gtest/gtest.h"
 #include <string>
 
@@ -108,19 +107,19 @@ TEST(runToolOnCode, FindsClassDecl) {
 }
 
 TEST(buildASTFromCode, FindsClassDecl) {
-  std::unique_ptr<ASTUnit> AST = buildASTFromCode("class X;");
+  OwningPtr<ASTUnit> AST(buildASTFromCode("class X;"));
   ASSERT_TRUE(AST.get());
   EXPECT_TRUE(FindClassDeclX(AST.get()));
 
-  AST = buildASTFromCode("class Y;");
+  AST.reset(buildASTFromCode("class Y;"));
   ASSERT_TRUE(AST.get());
   EXPECT_FALSE(FindClassDeclX(AST.get()));
 }
 
 TEST(newFrontendActionFactory, CreatesFrontendActionFactoryFromType) {
-  std::unique_ptr<FrontendActionFactory> Factory(
+  OwningPtr<FrontendActionFactory> Factory(
       newFrontendActionFactory<SyntaxOnlyAction>());
-  std::unique_ptr<FrontendAction> Action(Factory->create());
+  OwningPtr<FrontendAction> Action(Factory->create());
   EXPECT_TRUE(Action.get() != NULL);
 }
 
@@ -132,9 +131,9 @@ struct IndependentFrontendActionCreator {
 
 TEST(newFrontendActionFactory, CreatesFrontendActionFactoryFromFactoryType) {
   IndependentFrontendActionCreator Creator;
-  std::unique_ptr<FrontendActionFactory> Factory(
+  OwningPtr<FrontendActionFactory> Factory(
       newFrontendActionFactory(&Creator));
-  std::unique_ptr<FrontendAction> Action(Factory->create());
+  OwningPtr<FrontendAction> Action(Factory->create());
   EXPECT_TRUE(Action.get() != NULL);
 }
 
@@ -178,7 +177,7 @@ TEST(ToolInvocation, TestVirtualModulesCompilation) {
 struct VerifyEndCallback : public SourceFileCallbacks {
   VerifyEndCallback() : BeginCalled(0), EndCalled(0), Matched(false) {}
   virtual bool handleBeginSource(CompilerInstance &CI,
-                                 StringRef Filename) override {
+                                 StringRef Filename) LLVM_OVERRIDE {
     ++BeginCalled;
     return true;
   }
@@ -193,7 +192,7 @@ struct VerifyEndCallback : public SourceFileCallbacks {
   bool Matched;
 };
 
-#if !defined(LLVM_ON_WIN32)
+#if !defined(_WIN32)
 TEST(newFrontendActionFactory, InjectsSourceFileCallbacks) {
   VerifyEndCallback EndCallback;
 
@@ -206,9 +205,7 @@ TEST(newFrontendActionFactory, InjectsSourceFileCallbacks) {
   Tool.mapVirtualFile("/a.cc", "void a() {}");
   Tool.mapVirtualFile("/b.cc", "void b() {}");
 
-  std::unique_ptr<FrontendActionFactory> Action(
-      newFrontendActionFactory(&EndCallback, &EndCallback));
-  Tool.run(Action.get());
+  Tool.run(newFrontendActionFactory(&EndCallback, &EndCallback));
 
   EXPECT_TRUE(EndCallback.Matched);
   EXPECT_EQ(2u, EndCallback.BeginCalled);
@@ -239,21 +236,6 @@ TEST(runToolOnCode, TestSkipFunctionBody) {
                              "int skipMeNot() { an_error_here }"));
 }
 
-TEST(runToolOnCodeWithArgs, TestNoDepFile) {
-  llvm::SmallString<32> DepFilePath;
-  ASSERT_FALSE(
-      llvm::sys::fs::createTemporaryFile("depfile", "d", DepFilePath));
-  std::vector<std::string> Args;
-  Args.push_back("-MMD");
-  Args.push_back("-MT");
-  Args.push_back(DepFilePath.str());
-  Args.push_back("-MF");
-  Args.push_back(DepFilePath.str());
-  EXPECT_TRUE(runToolOnCodeWithArgs(new SkipBodyAction, "", Args));
-  EXPECT_FALSE(llvm::sys::fs::exists(DepFilePath.str()));
-  EXPECT_FALSE(llvm::sys::fs::remove(DepFilePath.str()));
-}
-
 struct CheckSyntaxOnlyAdjuster: public ArgumentsAdjuster {
   bool &Found;
   bool &Ran;
@@ -261,7 +243,7 @@ struct CheckSyntaxOnlyAdjuster: public ArgumentsAdjuster {
   CheckSyntaxOnlyAdjuster(bool &Found, bool &Ran) : Found(Found), Ran(Ran) { }
 
   virtual CommandLineArguments
-  Adjust(const CommandLineArguments &Args) override {
+  Adjust(const CommandLineArguments &Args) LLVM_OVERRIDE {
     Ran = true;
     for (unsigned I = 0, E = Args.size(); I != E; ++I) {
       if (Args[I] == "-fsyntax-only") {
@@ -279,13 +261,10 @@ TEST(ClangToolTest, ArgumentAdjusters) {
   ClangTool Tool(Compilations, std::vector<std::string>(1, "/a.cc"));
   Tool.mapVirtualFile("/a.cc", "void a() {}");
 
-  std::unique_ptr<FrontendActionFactory> Action(
-      newFrontendActionFactory<SyntaxOnlyAction>());
-
   bool Found = false;
   bool Ran = false;
   Tool.appendArgumentsAdjuster(new CheckSyntaxOnlyAdjuster(Found, Ran));
-  Tool.run(Action.get());
+  Tool.run(newFrontendActionFactory<SyntaxOnlyAction>());
   EXPECT_TRUE(Ran);
   EXPECT_TRUE(Found);
 
@@ -293,12 +272,12 @@ TEST(ClangToolTest, ArgumentAdjusters) {
   Tool.clearArgumentsAdjusters();
   Tool.appendArgumentsAdjuster(new CheckSyntaxOnlyAdjuster(Found, Ran));
   Tool.appendArgumentsAdjuster(new ClangSyntaxOnlyAdjuster());
-  Tool.run(Action.get());
+  Tool.run(newFrontendActionFactory<SyntaxOnlyAction>());
   EXPECT_TRUE(Ran);
   EXPECT_FALSE(Found);
 }
 
-#ifndef LLVM_ON_WIN32
+#ifndef _WIN32
 TEST(ClangToolTest, BuildASTs) {
   FixedCompilationDatabase Compilations("/", std::vector<std::string>());
 
@@ -310,9 +289,11 @@ TEST(ClangToolTest, BuildASTs) {
   Tool.mapVirtualFile("/a.cc", "void a() {}");
   Tool.mapVirtualFile("/b.cc", "void b() {}");
 
-  std::vector<std::unique_ptr<ASTUnit>> ASTs;
+  std::vector<ASTUnit *> ASTs;
   EXPECT_EQ(0, Tool.buildASTs(ASTs));
   EXPECT_EQ(2u, ASTs.size());
+
+  llvm::DeleteContainerPointers(ASTs);
 }
 
 struct TestDiagnosticConsumer : public DiagnosticConsumer {
@@ -330,9 +311,7 @@ TEST(ClangToolTest, InjectDiagnosticConsumer) {
   Tool.mapVirtualFile("/a.cc", "int x = undeclared;");
   TestDiagnosticConsumer Consumer;
   Tool.setDiagnosticConsumer(&Consumer);
-  std::unique_ptr<FrontendActionFactory> Action(
-      newFrontendActionFactory<SyntaxOnlyAction>());
-  Tool.run(Action.get());
+  Tool.run(newFrontendActionFactory<SyntaxOnlyAction>());
   EXPECT_EQ(1u, Consumer.NumDiagnosticsSeen);
 }
 
@@ -342,7 +321,7 @@ TEST(ClangToolTest, InjectDiagnosticConsumerInBuildASTs) {
   Tool.mapVirtualFile("/a.cc", "int x = undeclared;");
   TestDiagnosticConsumer Consumer;
   Tool.setDiagnosticConsumer(&Consumer);
-  std::vector<std::unique_ptr<ASTUnit>> ASTs;
+  std::vector<ASTUnit*> ASTs;
   Tool.buildASTs(ASTs);
   EXPECT_EQ(1u, ASTs.size());
   EXPECT_EQ(1u, Consumer.NumDiagnosticsSeen);

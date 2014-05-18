@@ -26,11 +26,3 @@ namespace PR15757 {
     return 0;
   }
 }
-
-namespace WrongIdent {
-  struct A {};
-  struct B : A {};
-  struct C : B {
-    using B::A;
-  };
-}

@@ -81,9 +81,9 @@ Parser::DeclGroupPtrTy Parser::ParseObjCAtDirectives() {
   case tok::objc_import:
     if (getLangOpts().Modules)
       return ParseModuleImport(AtLoc);
-    Diag(AtLoc, diag::err_atimport);
-    SkipUntil(tok::semi);
-    return Actions.ConvertDeclToDeclGroup(0);
+      
+    // Fall through
+      
   default:
     Diag(AtLoc, diag::err_unexpected_at);
     SkipUntil(tok::semi);
@@ -329,7 +329,7 @@ public:
     MethodImplKind(MethodImplKind) {
   }
 
-  void invoke(ParsingFieldDeclarator &FD) override {
+  void invoke(ParsingFieldDeclarator &FD) {
     if (FD.D.getIdentifier() == 0) {
       P.Diag(AtLoc, diag::err_objc_property_requires_field_name)
         << FD.D.getSourceRange();
@@ -1348,7 +1348,7 @@ void Parser::ParseObjCClassInstanceVariables(Decl *interfaceDecl,
         P(P), IDecl(IDecl), visibility(V), AllIvarDecls(AllIvarDecls) {
       }
 
-      void invoke(ParsingFieldDeclarator &FD) override {
+      void invoke(ParsingFieldDeclarator &FD) {
         P.Actions.ActOnObjCContainerStartDefinition(IDecl);
         // Install the declarator into the interface decl.
         Decl *Field
@@ -2933,11 +2933,11 @@ void Parser::ParseLexedObjCMethodDefs(LexedMethod &LM, bool parseMethod) {
   else
     Actions.ActOnStartOfFunctionDef(getCurScope(), MCDecl);
   if (Tok.is(tok::kw_try))
-    ParseFunctionTryBlock(MCDecl, BodyScope);
+    MCDecl = ParseFunctionTryBlock(MCDecl, BodyScope);
   else {
     if (Tok.is(tok::colon))
       ParseConstructorInitializer(MCDecl);
-    ParseFunctionStatementBody(MCDecl, BodyScope);
+    MCDecl = ParseFunctionStatementBody(MCDecl, BodyScope);
   }
   
   if (Tok.getLocation() != OrigLoc) {

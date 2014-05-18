@@ -1161,7 +1161,6 @@ bool
 Parser::ParseTemplateArgumentList(TemplateArgList &TemplateArgs) {
   // Template argument lists are constant-evaluation contexts.
   EnterExpressionEvaluationContext EvalContext(Actions,Sema::ConstantEvaluated);
-  ColonProtectionRAIIObject ColonProtection(*this, false);
 
   do {
     ParsedTemplateArgument Arg = ParseTemplateArgument();
@@ -1228,7 +1227,9 @@ void Parser::ParseLateTemplatedFuncDef(LateParsedTemplate &LPT) {
      return;
 
   // Get the FunctionDecl.
-  FunctionDecl *FunD = LPT.D->getAsFunction();
+  FunctionTemplateDecl *FunTmplD = dyn_cast<FunctionTemplateDecl>(LPT.D);
+  FunctionDecl *FunD =
+      FunTmplD ? FunTmplD->getTemplatedDecl() : cast<FunctionDecl>(LPT.D);
   // Track template parameter depth.
   TemplateParameterDepthRAII CurTemplateDepthTracker(TemplateParameterDepth);
 
@@ -1239,7 +1240,7 @@ void Parser::ParseLateTemplatedFuncDef(LateParsedTemplate &LPT) {
 
   // Get the list of DeclContexts to reenter.
   SmallVector<DeclContext*, 4> DeclContextsToReenter;
-  DeclContext *DD = FunD;
+  DeclContext *DD = FunD->getLexicalParent();
   while (DD && !DD->isTranslationUnit()) {
     DeclContextsToReenter.push_back(DD);
     DD = DD->getLexicalParent();
@@ -1249,16 +1250,37 @@ void Parser::ParseLateTemplatedFuncDef(LateParsedTemplate &LPT) {
   SmallVectorImpl<DeclContext *>::reverse_iterator II =
       DeclContextsToReenter.rbegin();
   for (; II != DeclContextsToReenter.rend(); ++II) {
-    TemplateParamScopeStack.push_back(new ParseScope(this,
-          Scope::TemplateParamScope));
-    unsigned NumParamLists =
-      Actions.ActOnReenterTemplateScope(getCurScope(), cast<Decl>(*II));
-    CurTemplateDepthTracker.addDepth(NumParamLists);
-    if (*II != FunD) {
-      TemplateParamScopeStack.push_back(new ParseScope(this, Scope::DeclScope));
-      Actions.PushDeclContext(Actions.getCurScope(), *II);
+    if (ClassTemplatePartialSpecializationDecl *MD =
+            dyn_cast_or_null<ClassTemplatePartialSpecializationDecl>(*II)) {
+      TemplateParamScopeStack.push_back(
+          new ParseScope(this, Scope::TemplateParamScope));
+      Actions.ActOnReenterTemplateScope(getCurScope(), MD);
+      ++CurTemplateDepthTracker;
+    } else if (CXXRecordDecl *MD = dyn_cast_or_null<CXXRecordDecl>(*II)) {
+      bool IsClassTemplate = MD->getDescribedClassTemplate() != 0;
+      TemplateParamScopeStack.push_back(
+          new ParseScope(this, Scope::TemplateParamScope, 
+                        /*ManageScope*/IsClassTemplate));
+      Actions.ActOnReenterTemplateScope(getCurScope(),
+                                        MD->getDescribedClassTemplate());
+      if (IsClassTemplate) 
+        ++CurTemplateDepthTracker;
     }
+    TemplateParamScopeStack.push_back(new ParseScope(this, Scope::DeclScope));
+    Actions.PushDeclContext(Actions.getCurScope(), *II);
   }
+  TemplateParamScopeStack.push_back(
+      new ParseScope(this, Scope::TemplateParamScope));
+
+  DeclaratorDecl *Declarator = dyn_cast<DeclaratorDecl>(FunD);
+  const unsigned DeclaratorNumTemplateParameterLists = 
+      (Declarator ? Declarator->getNumTemplateParameterLists() : 0);
+  if (Declarator && DeclaratorNumTemplateParameterLists != 0) {
+    Actions.ActOnReenterDeclaratorTemplateScope(getCurScope(), Declarator);
+    CurTemplateDepthTracker.addDepth(DeclaratorNumTemplateParameterLists);
+  }
+  Actions.ActOnReenterTemplateScope(getCurScope(), LPT.D);
+  ++CurTemplateDepthTracker;
 
   assert(!LPT.Toks.empty() && "Empty body!");
 
@@ -1290,10 +1312,8 @@ void Parser::ParseLateTemplatedFuncDef(LateParsedTemplate &LPT) {
       Actions.ActOnDefaultCtorInitializers(LPT.D);
 
     if (Tok.is(tok::l_brace)) {
-      assert((!isa<FunctionTemplateDecl>(LPT.D) ||
-              cast<FunctionTemplateDecl>(LPT.D)
-                      ->getTemplateParameters()
-                      ->getDepth() == TemplateParameterDepth - 1) &&
+      assert((!FunTmplD || FunTmplD->getTemplateParameters()->getDepth() <
+                               TemplateParameterDepth) &&
              "TemplateParameterDepth should be greater than the depth of "
              "current template being instantiated!");
       ParseFunctionStatementBody(LPT.D, FnScope);

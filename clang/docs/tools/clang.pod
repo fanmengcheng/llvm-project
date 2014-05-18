@@ -237,7 +237,7 @@ Specify the architecture to build for.
 
 =item B<-mmacosx-version-min>=I<version>
 
-When building for Mac OS X, specify the minimum version supported by your
+When building for Mac OS/X, specify the minimum version supported by your
 application.
 
 =item B<-miphoneos-version-min>
@@ -380,7 +380,7 @@ to the linker depending on the stage selection options).
 
 =item B<-###>
 
-Print (but do not run) the commands to run for this compilation.
+Print the commands to run for this compilation.
 
 =item B<--help>
 

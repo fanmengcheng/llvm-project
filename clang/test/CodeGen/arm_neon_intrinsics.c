@@ -1887,12 +1887,6 @@ poly16x4_t test_vdup_n_p16(poly16_t a) {
   return vdup_n_p16(a);
 }
 
-// CHECK: test_vdup_n_f16
-// CHECK: vld1.16 {{{d[0-9]+\[\]}}}
-float16x4_t test_vdup_n_f16(float16_t *a) {
-  return vdup_n_f16(*a);
-}
-
 // CHECK: test_vdup_n_f32
 // CHECK: vmov 
 float32x2_t test_vdup_n_f32(float32_t a) {
@@ -1945,12 +1939,6 @@ poly8x16_t test_vdupq_n_p8(poly8_t a) {
 // CHECK: vmov 
 poly16x8_t test_vdupq_n_p16(poly16_t a) {
   return vdupq_n_p16(a);
-}
-
-// CHECK: test_vdupq_n_f16
-// CHECK: vld1.16 {{{d[0-9]+\[\], d[0-9]+\[\]}}}
-float16x8_t test_vdupq_n_f16(float16_t *a) {
-  return vdupq_n_f16(*a);
 }
 
 // CHECK: test_vdupq_n_f32
@@ -4880,12 +4868,6 @@ poly16x4_t test_vmov_n_p16(poly16_t a) {
   return vmov_n_p16(a);
 }
 
-// CHECK: test_vmov_n_f16
-// CHECK: vld1.16 {{{d[0-9]+\[\]}}}
-float16x4_t test_vmov_n_f16(float16_t *a) {
-  return vmov_n_f16(*a);
-}
-
 // CHECK: test_vmov_n_f32
 // CHECK: vmov 
 float32x2_t test_vmov_n_f32(float32_t a) {
@@ -4938,12 +4920,6 @@ poly8x16_t test_vmovq_n_p8(poly8_t a) {
 // CHECK: vmov 
 poly16x8_t test_vmovq_n_p16(poly16_t a) {
   return vmovq_n_p16(a);
-}
-
-// CHECK: test_vmovq_n_f16
-// CHECK: vld1.16 {{{d[0-9]+\[\], d[0-9]+\[\]}}}
-float16x8_t test_vmovq_n_f16(float16_t *a) {
-  return vmovq_n_f16(*a);
 }
 
 // CHECK: test_vmovq_n_f32

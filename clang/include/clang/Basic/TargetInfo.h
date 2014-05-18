@@ -283,7 +283,7 @@ public:
   unsigned getLongLongAlign() const { return LongLongAlign; }
 
   /// \brief Determine whether the __int128 type is supported on this target.
-  virtual bool hasInt128Type() const { return getPointerWidth(0) >= 64; } // FIXME
+  bool hasInt128Type() const { return getPointerWidth(0) >= 64; } // FIXME
 
   /// \brief Return the alignment that is suitable for storing any
   /// object with a fundamental alignment requirement.
@@ -605,6 +605,24 @@ public:
   /// either; the entire thing is pretty badly mangled.
   virtual bool hasProtectedVisibility() const { return true; }
 
+  /// \brief Return the section to use for CFString literals, or 0 if no
+  /// special section is used.
+  virtual const char *getCFStringSection() const {
+    return "__DATA,__cfstring";
+  }
+
+  /// \brief Return the section to use for NSString literals, or 0 if no
+  /// special section is used.
+  virtual const char *getNSStringSection() const {
+    return "__OBJC,__cstring_object,regular,no_dead_strip";
+  }
+
+  /// \brief Return the section to use for NSString literals, or 0 if no
+  /// special section is used (NonFragile ABI).
+  virtual const char *getNSStringNonFragileABISection() const {
+    return "__DATA, __objc_stringobj, regular, no_dead_strip";
+  }
+
   /// \brief An optional hook that targets can implement to perform semantic
   /// checking on attribute((section("foo"))) specifiers.
   ///
@@ -735,7 +753,7 @@ public:
 
   /// \brief Return the section to use for C++ static initialization functions.
   virtual const char *getStaticInitSectionSpecifier() const {
-    return nullptr;
+    return 0;
   }
 
   const LangAS::Map &getAddressSpaceMap() const {
@@ -785,6 +803,19 @@ public:
     }
   }
 
+  /// SupportsCapabilities - Returns true if the target supports capabilities.
+  virtual bool SupportsCapabilities() const { return false; }
+
+  /// AddressSpaceForCapabilities - If this target supports capabilities,
+  /// returns the address space used to represent them.  The result is
+  /// undefined otherwise.
+  virtual int AddressSpaceForCapabilities() const { return -1; }
+
+  /// AddressSpaceForObjC - Returns the address space to use for 
+  /// Objective-C objects.
+  virtual int AddressSpaceForObjC() const { return 0; }
+
+
 protected:
   virtual uint64_t getPointerWidthV(unsigned AddrSpace) const {
     return PointerWidth;
@@ -795,13 +826,14 @@ protected:
   virtual enum IntType getPtrDiffTypeV(unsigned AddrSpace) const {
     return PtrDiffType;
   }
+
   virtual void getGCCRegNames(const char * const *&Names,
                               unsigned &NumNames) const = 0;
   virtual void getGCCRegAliases(const GCCRegAlias *&Aliases,
                                 unsigned &NumAliases) const = 0;
   virtual void getGCCAddlRegNames(const AddlRegName *&Addl,
                                   unsigned &NumAddl) const {
-    Addl = nullptr;
+    Addl = 0;
     NumAddl = 0;
   }
   virtual bool validateAsmConstraint(const char *&Name,

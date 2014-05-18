@@ -59,10 +59,11 @@ enum LanguageLinkage {
 /// This is relevant to CodeGen and AST file reading.
 enum GVALinkage {
   GVA_Internal,
-  GVA_AvailableExternally,
-  GVA_DiscardableODR,
+  GVA_C99Inline,
+  GVA_CXXInline,
   GVA_StrongExternal,
-  GVA_StrongODR
+  GVA_TemplateInstantiation,
+  GVA_ExplicitTemplateInstantiation
 };
 
 inline bool isExternallyVisible(Linkage L) {

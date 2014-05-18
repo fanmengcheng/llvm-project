@@ -1,7 +1,4 @@
-// RUN: %clang_cc1 -analyze -analyzer-checker=core,osx.cocoa.NonNilReturnValue,osx.cocoa.NilArg,osx.cocoa.Loops,debug.ExprInspection -verify -Wno-objc-root-class %s
-
-void clang_analyzer_eval(int);
-
+// RUN: %clang_cc1 -analyze -analyzer-checker=core,osx.cocoa.NonNilReturnValue,osx.cocoa.NilArg,osx.cocoa.Loops -verify -Wno-objc-root-class %s
 typedef unsigned long NSUInteger;
 typedef signed char BOOL;
 typedef struct _NSZone NSZone;
@@ -277,18 +274,5 @@ void testCountAwareNSOrderedSet(NSOrderedSet *containers, int *validptr) {
 	for (id c in containers) {
 		*x = 1; // no warning
 	}
-}
-
-void testLiteralsNonNil() {
-  clang_analyzer_eval(!!@[]); // expected-warning{{TRUE}}
-  clang_analyzer_eval(!!@{}); // expected-warning{{TRUE}}
-}
-
-@interface NSMutableArray (MySafeAdd)
-- (void)addObject:(id)obj safe:(BOOL)safe;
-@end
-
-void testArrayCategory(NSMutableArray *arr) {
-  [arr addObject:0 safe:1]; // no-warning
 }
 

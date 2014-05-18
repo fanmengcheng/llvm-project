@@ -15,6 +15,7 @@
 #include "clang/AST/ASTLambda.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/Basic/TargetInfo.h"
+#include "clang/Lex/Preprocessor.h"
 #include "clang/Sema/Initialization.h"
 #include "clang/Sema/Lookup.h"
 #include "clang/Sema/Scope.h"
@@ -255,7 +256,7 @@ CXXRecordDecl *Sema::createLambdaClosureType(SourceRange IntroducerRange,
                                                      IsGenericLambda, 
                                                      CaptureDefault);
   DC->addDecl(Class);
-
+  
   return Class;
 }
 
@@ -363,10 +364,10 @@ CXXMethodDecl *Sema::startLambdaDefinition(CXXRecordDecl *Class,
   // dependent type.
   if (Class->isDependentContext() || TemplateParams) {
     const FunctionProtoType *FPT = MethodType->castAs<FunctionProtoType>();
-    QualType Result = FPT->getReturnType();
+    QualType Result = FPT->getResultType();
     if (Result->isUndeducedType()) {
       Result = SubstAutoType(Result, Context.DependentTy);
-      MethodType = Context.getFunctionType(Result, FPT->getParamTypes(),
+      MethodType = Context.getFunctionType(Result, FPT->getArgTypes(),
                                            FPT->getExtProtoInfo());
     }
   }
@@ -417,8 +418,10 @@ CXXMethodDecl *Sema::startLambdaDefinition(CXXRecordDecl *Class,
                              const_cast<ParmVarDecl **>(Params.end()),
                              /*CheckParameterNames=*/false);
     
-    for (auto P : Method->params())
-      P->setOwningFunction(Method);
+    for (CXXMethodDecl::param_iterator P = Method->param_begin(), 
+                                    PEnd = Method->param_end();
+         P != PEnd; ++P)
+      (*P)->setOwningFunction(Method);
   }
 
   Decl *ManglingContextDecl;
@@ -453,8 +456,8 @@ void Sema::buildLambdaScope(LambdaScopeInfo *LSI,
   LSI->Mutable = Mutable;
 
   if (ExplicitResultType) {
-    LSI->ReturnType = CallOperator->getReturnType();
-
+    LSI->ReturnType = CallOperator->getResultType();
+    
     if (!LSI->ReturnType->isDependentType() &&
         !LSI->ReturnType->isVoidType()) {
       if (RequireCompleteType(CallOperator->getLocStart(), LSI->ReturnType,
@@ -735,9 +738,6 @@ QualType Sema::performLambdaInitCaptureInitialization(SourceLocation Loc,
       return QualType();
     } else {
       DeduceInit = CXXDirectInit->getExpr(0);
-      if (isa<InitListExpr>(DeduceInit))
-        Diag(CXXDirectInit->getLocStart(), diag::err_init_capture_paren_braces)
-          << DeclarationName(Id) << Loc;
     }
   }
 
@@ -898,13 +898,14 @@ void Sema::ActOnStartOfLambdaDefinition(LambdaIntroducer &Intro,
 
     ExplicitResultType = FTI.hasTrailingReturnType();
 
-    if (FTI.NumParams == 1 && !FTI.isVariadic && FTI.Params[0].Ident == 0 &&
-        cast<ParmVarDecl>(FTI.Params[0].Param)->getType()->isVoidType()) {
+    if (FTI.NumArgs == 1 && !FTI.isVariadic && FTI.ArgInfo[0].Ident == 0 &&
+        cast<ParmVarDecl>(FTI.ArgInfo[0].Param)->getType()->isVoidType()) {
       // Empty arg list, don't push any params.
+      checkVoidParamDecl(cast<ParmVarDecl>(FTI.ArgInfo[0].Param));
     } else {
-      Params.reserve(FTI.NumParams);
-      for (unsigned i = 0, e = FTI.NumParams; i != e; ++i)
-        Params.push_back(cast<ParmVarDecl>(FTI.Params[i].Param));
+      Params.reserve(FTI.NumArgs);
+      for (unsigned i = 0, e = FTI.NumArgs; i != e; ++i)
+        Params.push_back(cast<ParmVarDecl>(FTI.ArgInfo[i].Param));
     }
 
     // Check for unexpanded parameter packs in the method type.
@@ -934,23 +935,6 @@ void Sema::ActOnStartOfLambdaDefinition(LambdaIntroducer &Intro,
                        ExplicitResultType,
                        !Method->isConst());
 
-  // C++11 [expr.prim.lambda]p9:
-  //   A lambda-expression whose smallest enclosing scope is a block scope is a
-  //   local lambda expression; any other lambda expression shall not have a
-  //   capture-default or simple-capture in its lambda-introducer.
-  //
-  // For simple-captures, this is covered by the check below that any named
-  // entity is a variable that can be captured.
-  //
-  // For DR1632, we also allow a capture-default in any context where we can
-  // odr-use 'this' (in particular, in a default initializer for a non-static
-  // data member).
-  if (Intro.Default != LCD_None && !Class->getParent()->isFunctionOrMethod() &&
-      (getCurrentThisType().isNull() ||
-       CheckCXXThisCapture(SourceLocation(), /*Explicit*/true,
-                           /*BuildAndDiagnose*/false)))
-    Diag(Intro.DefaultLoc, diag::err_capture_default_non_local);
-
   // Distinct capture names, for diagnostics.
   llvm::SmallSet<IdentifierInfo*, 8> CaptureNames;
 
@@ -967,10 +951,11 @@ void Sema::ActOnStartOfLambdaDefinition(LambdaIntroducer &Intro,
       //   An identifier or this shall not appear more than once in a 
       //   lambda-capture.
       if (LSI->isCXXThisCaptured()) {
-        Diag(C->Loc, diag::err_capture_more_than_once)
-            << "'this'" << SourceRange(LSI->getCXXThisCapture().getLocation())
-            << FixItHint::CreateRemoval(
-                   SourceRange(getLocForEndOfToken(PrevCaptureLoc), C->Loc));
+        Diag(C->Loc, diag::err_capture_more_than_once) 
+          << "'this'"
+          << SourceRange(LSI->getCXXThisCapture().getLocation())
+          << FixItHint::CreateRemoval(
+               SourceRange(PP.getLocForEndOfToken(PrevCaptureLoc), C->Loc));
         continue;
       }
 
@@ -979,8 +964,8 @@ void Sema::ActOnStartOfLambdaDefinition(LambdaIntroducer &Intro,
       //   lambda-capture shall not contain this [...].
       if (Intro.Default == LCD_ByCopy) {
         Diag(C->Loc, diag::err_this_capture_with_copy_default)
-            << FixItHint::CreateRemoval(
-                SourceRange(getLocForEndOfToken(PrevCaptureLoc), C->Loc));
+          << FixItHint::CreateRemoval(
+               SourceRange(PP.getLocForEndOfToken(PrevCaptureLoc), C->Loc));
         continue;
       }
 
@@ -1033,13 +1018,13 @@ void Sema::ActOnStartOfLambdaDefinition(LambdaIntroducer &Intro,
       //   each identifier it contains shall be preceded by &.
       if (C->Kind == LCK_ByRef && Intro.Default == LCD_ByRef) {
         Diag(C->Loc, diag::err_reference_capture_with_reference_default)
-            << FixItHint::CreateRemoval(
-                SourceRange(getLocForEndOfToken(PrevCaptureLoc), C->Loc));
+          << FixItHint::CreateRemoval(
+               SourceRange(PP.getLocForEndOfToken(PrevCaptureLoc), C->Loc));
         continue;
       } else if (C->Kind == LCK_ByCopy && Intro.Default == LCD_ByCopy) {
         Diag(C->Loc, diag::err_copy_capture_with_copy_default)
-            << FixItHint::CreateRemoval(
-                SourceRange(getLocForEndOfToken(PrevCaptureLoc), C->Loc));
+          << FixItHint::CreateRemoval(
+               SourceRange(PP.getLocForEndOfToken(PrevCaptureLoc), C->Loc));
         continue;
       }
 
@@ -1060,8 +1045,6 @@ void Sema::ActOnStartOfLambdaDefinition(LambdaIntroducer &Intro,
       }
 
       Var = R.getAsSingle<VarDecl>();
-      if (Var && DiagnoseUseOfDecl(Var, C->Loc))
-        continue;
     }
 
     // C++11 [expr.prim.lambda]p8:
@@ -1070,9 +1053,9 @@ void Sema::ActOnStartOfLambdaDefinition(LambdaIntroducer &Intro,
     if (!CaptureNames.insert(C->Id)) {
       if (Var && LSI->isCaptured(Var)) {
         Diag(C->Loc, diag::err_capture_more_than_once)
-            << C->Id << SourceRange(LSI->getCapture(Var).getLocation())
-            << FixItHint::CreateRemoval(
-                   SourceRange(getLocForEndOfToken(PrevCaptureLoc), C->Loc));
+          << C->Id << SourceRange(LSI->getCapture(Var).getLocation())
+          << FixItHint::CreateRemoval(
+               SourceRange(PP.getLocForEndOfToken(PrevCaptureLoc), C->Loc));
       } else
         // Previous capture captured something different (one or both was
         // an init-cpature): no fixit.
@@ -1137,8 +1120,6 @@ void Sema::ActOnStartOfLambdaDefinition(LambdaIntroducer &Intro,
 
 void Sema::ActOnLambdaError(SourceLocation StartLoc, Scope *CurScope,
                             bool IsInstantiation) {
-  LambdaScopeInfo *LSI = getCurLambda();
-
   // Leave the expression-evaluation context.
   DiscardCleanupsInEvaluationContext();
   PopExpressionEvaluationContext();
@@ -1148,11 +1129,15 @@ void Sema::ActOnLambdaError(SourceLocation StartLoc, Scope *CurScope,
     PopDeclContext();
 
   // Finalize the lambda.
+  LambdaScopeInfo *LSI = getCurLambda();
   CXXRecordDecl *Class = LSI->Lambda;
   Class->setInvalidDecl();
-  SmallVector<Decl*, 4> Fields(Class->fields());
-  ActOnFields(0, Class->getLocation(), Class, Fields, SourceLocation(),
-              SourceLocation(), 0);
+  SmallVector<Decl*, 4> Fields;
+  for (RecordDecl::field_iterator i = Class->field_begin(),
+                                  e = Class->field_end(); i != e; ++i)
+    Fields.push_back(*i);
+  ActOnFields(0, Class->getLocation(), Class, Fields, 
+              SourceLocation(), SourceLocation(), 0);
   CheckCompletedCXXClass(Class);
 
   PopFunctionScopeInfo();
@@ -1179,9 +1164,8 @@ static void addFunctionPointerConversion(Sema &S,
     InvokerExtInfo.TypeQuals = 0;
     assert(InvokerExtInfo.RefQualifier == RQ_None && 
         "Lambda's call operator should not have a reference qualifier");
-    InvokerFunctionTy =
-        S.Context.getFunctionType(CallOpProto->getReturnType(),
-                                  CallOpProto->getParamTypes(), InvokerExtInfo);
+    InvokerFunctionTy = S.Context.getFunctionType(CallOpProto->getResultType(),
+        CallOpProto->getArgTypes(), InvokerExtInfo);
     PtrToFunctionTy = S.Context.getPointerType(InvokerFunctionTy);
   }
 
@@ -1225,7 +1209,7 @@ static void addFunctionPointerConversion(Sema &S,
       ConvTSI->getTypeLoc().getAs<FunctionProtoTypeLoc>();
   // Get the result of the conversion function which is a pointer-to-function.
   PointerTypeLoc PtrToFunctionTL = 
-      ConvTL.getReturnLoc().getAs<PointerTypeLoc>();
+      ConvTL.getResultLoc().getAs<PointerTypeLoc>();
   // Do the same for the TypeSourceInfo that is used to name the conversion
   // operator.
   PointerTypeLoc ConvNamePtrToFunctionTL = 
@@ -1260,8 +1244,8 @@ static void addFunctionPointerConversion(Sema &S,
                                              From->getTypeSourceInfo(),
                                              From->getStorageClass(),
                                              /*DefaultArg=*/0));
-    CallOpConvTL.setParam(I, From);
-    CallOpConvNameTL.setParam(I, From);
+    CallOpConvTL.setArg(I, From);
+    CallOpConvNameTL.setArg(I, From);
   }
 
   CXXConversionDecl *Conversion 
@@ -1347,7 +1331,7 @@ static void addBlockPointerConversion(Sema &S,
     FunctionProtoType::ExtProtoInfo ExtInfo = Proto->getExtProtoInfo();
     ExtInfo.TypeQuals = 0;
     QualType FunctionTy = S.Context.getFunctionType(
-        Proto->getReturnType(), Proto->getParamTypes(), ExtInfo);
+        Proto->getResultType(), Proto->getArgTypes(), ExtInfo);
     BlockPtrTy = S.Context.getBlockPointerType(FunctionTy);
   }
 
@@ -1472,7 +1456,7 @@ ExprResult Sema::ActOnLambdaExpr(SourceLocation StartLoc, Stmt *Body,
       const FunctionProtoType *Proto
         = CallOperator->getType()->getAs<FunctionProtoType>();
       QualType FunctionTy = Context.getFunctionType(
-          LSI->ReturnType, Proto->getParamTypes(), Proto->getExtProtoInfo());
+          LSI->ReturnType, Proto->getArgTypes(), Proto->getExtProtoInfo());
       CallOperator->setType(FunctionTy);
     }
     // C++ [expr.prim.lambda]p7:
@@ -1510,9 +1494,12 @@ ExprResult Sema::ActOnLambdaExpr(SourceLocation StartLoc, Stmt *Body,
       addBlockPointerConversion(*this, IntroducerRange, Class, CallOperator);
     
     // Finalize the lambda class.
-    SmallVector<Decl*, 4> Fields(Class->fields());
-    ActOnFields(0, Class->getLocation(), Class, Fields, SourceLocation(),
-                SourceLocation(), 0);
+    SmallVector<Decl*, 4> Fields;
+    for (RecordDecl::field_iterator i = Class->field_begin(),
+                                    e = Class->field_end(); i != e; ++i)
+      Fields.push_back(*i);
+    ActOnFields(0, Class->getLocation(), Class, Fields, 
+                SourceLocation(), SourceLocation(), 0);
     CheckCompletedCXXClass(Class);
   }
 

@@ -17,6 +17,7 @@
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/ExprObjC.h"
 #include "clang/AST/TypeLoc.h"
+#include "clang/Lex/Preprocessor.h"
 #include "clang/Sema/Designator.h"
 #include "clang/Sema/Lookup.h"
 #include "clang/Sema/SemaInternal.h"
@@ -440,22 +441,26 @@ InitListChecker::FillInValueInitializations(const InitializedEntity &Entity,
                               Entity, ILE, RequiresSecondPass);
     else if (RDecl->isUnion() && isa<CXXRecordDecl>(RDecl) &&
              cast<CXXRecordDecl>(RDecl)->hasInClassInitializer()) {
-      for (auto *Field : RDecl->fields()) {
+      for (RecordDecl::field_iterator Field = RDecl->field_begin(),
+                                      FieldEnd = RDecl->field_end();
+           Field != FieldEnd; ++Field) {
         if (Field->hasInClassInitializer()) {
-          FillInValueInitForField(0, Field, Entity, ILE, RequiresSecondPass);
+          FillInValueInitForField(0, *Field, Entity, ILE, RequiresSecondPass);
           break;
         }
       }
     } else {
       unsigned Init = 0;
-      for (auto *Field : RDecl->fields()) {
+      for (RecordDecl::field_iterator Field = RDecl->field_begin(),
+                                      FieldEnd = RDecl->field_end();
+           Field != FieldEnd; ++Field) {
         if (Field->isUnnamedBitfield())
           continue;
 
         if (hadError)
           return;
 
-        FillInValueInitForField(Init, Field, Entity, ILE, RequiresSecondPass);
+        FillInValueInitForField(Init, *Field, Entity, ILE, RequiresSecondPass);
         if (hadError)
           return;
 
@@ -582,10 +587,13 @@ int InitListChecker::numArrayElements(QualType DeclType) {
 int InitListChecker::numStructUnionElements(QualType DeclType) {
   RecordDecl *structDecl = DeclType->getAs<RecordType>()->getDecl();
   int InitializableMembers = 0;
-  for (const auto *Field : structDecl->fields())
+  for (RecordDecl::field_iterator
+         Field = structDecl->field_begin(),
+         FieldEnd = structDecl->field_end();
+       Field != FieldEnd; ++Field) {
     if (!Field->isUnnamedBitfield())
       ++InitializableMembers;
-
+  }
   if (structDecl->isUnion())
     return std::min(InitializableMembers, 1);
   return InitializableMembers - structDecl->hasFlexibleArrayMember();
@@ -653,13 +661,13 @@ void InitListChecker::CheckImplicitInitList(const InitializedEntity &Entity,
     if (T->isArrayType() || T->isRecordType()) {
       SemaRef.Diag(StructuredSubobjectInitList->getLocStart(),
                    diag::warn_missing_braces)
-          << StructuredSubobjectInitList->getSourceRange()
-          << FixItHint::CreateInsertion(
-                 StructuredSubobjectInitList->getLocStart(), "{")
-          << FixItHint::CreateInsertion(
-                 SemaRef.getLocForEndOfToken(
-                     StructuredSubobjectInitList->getLocEnd()),
-                 "}");
+        << StructuredSubobjectInitList->getSourceRange()
+        << FixItHint::CreateInsertion(
+              StructuredSubobjectInitList->getLocStart(), "{")
+        << FixItHint::CreateInsertion(
+              SemaRef.PP.getLocForEndOfToken(
+                                      StructuredSubobjectInitList->getLocEnd()),
+              "}");
     }
   }
 }
@@ -1642,7 +1650,7 @@ class FieldInitializerValidatorCCC : public CorrectionCandidateCallback {
   explicit FieldInitializerValidatorCCC(RecordDecl *RD)
       : Record(RD) {}
 
-  bool ValidateCandidate(const TypoCorrection &candidate) override {
+  virtual bool ValidateCandidate(const TypoCorrection &candidate) {
     FieldDecl *FD = candidate.getCorrectionDeclAs<FieldDecl>();
     return FD && FD->getDeclContext()->getRedeclContext()->Equals(Record);
   }
@@ -1815,7 +1823,7 @@ InitListChecker::CheckDesignatedInitializer(const InitializedEntity &Entity,
         if (TypoCorrection Corrected = SemaRef.CorrectTypo(
                 DeclarationNameInfo(FieldName, D->getFieldLoc()),
                 Sema::LookupMemberName, /*Scope=*/ 0, /*SS=*/ 0, Validator,
-                Sema::CTK_ErrorRecovery, RT->getDecl())) {
+                RT->getDecl())) {
           SemaRef.diagnoseTypo(
               Corrected,
               SemaRef.PDiag(diag::err_field_designator_unknown_suggest)
@@ -2285,7 +2293,8 @@ InitListChecker::getStructuredSubobjectInit(InitListExpr *IList, unsigned Index,
     if (RDecl->isUnion())
       NumElements = 1;
     else
-      NumElements = std::distance(RDecl->field_begin(), RDecl->field_end());
+      NumElements = std::distance(RDecl->field_begin(),
+                                  RDecl->field_end());
   }
 
   Result->reserveInits(SemaRef.Context, NumElements);
@@ -3541,7 +3550,7 @@ static OverloadingResult TryRefInitWithConversionFunction(Sema &S,
 
   // Compute the returned type of the conversion.
   if (isa<CXXConversionDecl>(Function))
-    T2 = Function->getReturnType();
+    T2 = Function->getResultType();
   else
     T2 = cv1T1;
 
@@ -4410,7 +4419,7 @@ InitializationSequence::InitializationSequence(Sema &S,
                                                const InitializationKind &Kind,
                                                MultiExprArg Args,
                                                bool TopLevelOfInitList)
-    : FailedCandidateSet(Kind.getLocation(), OverloadCandidateSet::CSK_Normal) {
+    : FailedCandidateSet(Kind.getLocation()) {
   InitializeFrom(S, Entity, Kind, Args, TopLevelOfInitList);
 }
 
@@ -4944,7 +4953,7 @@ static ExprResult CopyObject(Sema &S,
   // Only consider constructors and constructor templates. Per
   // C++0x [dcl.init]p16, second bullet to class types, this initialization
   // is direct-initialization.
-  OverloadCandidateSet CandidateSet(Loc, OverloadCandidateSet::CSK_Normal);
+  OverloadCandidateSet CandidateSet(Loc);
   LookupCopyAndMoveConstructors(S, CandidateSet, Class, CurInitExpr);
 
   bool HadMultipleCandidates = (CandidateSet.size() > 1);
@@ -5052,7 +5061,7 @@ static void CheckCXX98CompatAccessibleCopy(Sema &S,
     return;
 
   // Find constructors which would have been considered.
-  OverloadCandidateSet CandidateSet(Loc, OverloadCandidateSet::CSK_Normal);
+  OverloadCandidateSet CandidateSet(Loc);
   LookupCopyAndMoveConstructors(
       S, CandidateSet, cast<CXXRecordDecl>(Record->getDecl()), CurInitExpr);
 
@@ -5223,13 +5232,10 @@ PerformConstructorInitialization(Sema &S,
       ConstructKind = CXXConstructExpr::CK_Delegating;
     }
 
-    // Only get the parenthesis or brace range if it is a list initialization or
-    // direct construction.
-    SourceRange ParenOrBraceRange;
-    if (IsListInitialization)
-      ParenOrBraceRange = SourceRange(LBraceLoc, RBraceLoc);
-    else if (Kind.getKind() == InitializationKind::IK_Direct)
-      ParenOrBraceRange = Kind.getParenRange();
+    // Only get the parenthesis range if it is a direct construction.
+    SourceRange parenRange =
+        Kind.getKind() == InitializationKind::IK_Direct ?
+        Kind.getParenRange() : SourceRange();
 
     // If the entity allows NRVO, mark the construction as elidable
     // unconditionally.
@@ -5241,7 +5247,7 @@ PerformConstructorInitialization(Sema &S,
                                         IsListInitialization,
                                         ConstructorInitRequiresZeroInit,
                                         ConstructKind,
-                                        ParenOrBraceRange);
+                                        parenRange);
     else
       CurInit = S.BuildCXXConstructExpr(Loc, Entity.getType(),
                                         Constructor,
@@ -5250,7 +5256,7 @@ PerformConstructorInitialization(Sema &S,
                                         IsListInitialization,
                                         ConstructorInitRequiresZeroInit,
                                         ConstructKind,
-                                        ParenOrBraceRange);
+                                        parenRange);
   }
   if (CurInit.isInvalid())
     return ExprError();
@@ -5310,25 +5316,25 @@ InitializedEntityOutlivesFullExpression(const InitializedEntity &Entity) {
 /// Determine the declaration which an initialized entity ultimately refers to,
 /// for the purpose of lifetime-extending a temporary bound to a reference in
 /// the initialization of \p Entity.
-static const InitializedEntity *getEntityForTemporaryLifetimeExtension(
-    const InitializedEntity *Entity,
-    const InitializedEntity *FallbackDecl = 0) {
+static const ValueDecl *
+getDeclForTemporaryLifetimeExtension(const InitializedEntity &Entity,
+                                     const ValueDecl *FallbackDecl = 0) {
   // C++11 [class.temporary]p5:
-  switch (Entity->getKind()) {
+  switch (Entity.getKind()) {
   case InitializedEntity::EK_Variable:
     //   The temporary [...] persists for the lifetime of the reference
-    return Entity;
+    return Entity.getDecl();
 
   case InitializedEntity::EK_Member:
     // For subobjects, we look at the complete object.
-    if (Entity->getParent())
-      return getEntityForTemporaryLifetimeExtension(Entity->getParent(),
-                                                    Entity);
+    if (Entity.getParent())
+      return getDeclForTemporaryLifetimeExtension(*Entity.getParent(),
+                                                  Entity.getDecl());
 
     //   except:
     //   -- A temporary bound to a reference member in a constructor's
     //      ctor-initializer persists until the constructor exits.
-    return Entity;
+    return Entity.getDecl();
 
   case InitializedEntity::EK_Parameter:
   case InitializedEntity::EK_Parameter_CF_Audited:
@@ -5343,7 +5349,7 @@ static const InitializedEntity *getEntityForTemporaryLifetimeExtension(
     //   -- A temporary bound to a reference in a new-initializer persists
     //      until the completion of the full-expression containing the
     //      new-initializer.
-    return nullptr;
+    return 0;
 
   case InitializedEntity::EK_Temporary:
   case InitializedEntity::EK_CompoundLiteralInit:
@@ -5351,12 +5357,12 @@ static const InitializedEntity *getEntityForTemporaryLifetimeExtension(
     // We don't yet know the storage duration of the surrounding temporary.
     // Assume it's got full-expression duration for now, it will patch up our
     // storage duration if that's not correct.
-    return nullptr;
+    return 0;
 
   case InitializedEntity::EK_ArrayElement:
     // For subobjects, we look at the complete object.
-    return getEntityForTemporaryLifetimeExtension(Entity->getParent(),
-                                                  FallbackDecl);
+    return getDeclForTemporaryLifetimeExtension(*Entity.getParent(),
+                                                FallbackDecl);
 
   case InitializedEntity::EK_Base:
   case InitializedEntity::EK_Delegating:
@@ -5371,20 +5377,17 @@ static const InitializedEntity *getEntityForTemporaryLifetimeExtension(
   case InitializedEntity::EK_Exception:
   case InitializedEntity::EK_VectorElement:
   case InitializedEntity::EK_ComplexElement:
-    return nullptr;
+    return 0;
   }
   llvm_unreachable("unknown entity kind");
 }
 
-static void performLifetimeExtension(Expr *Init,
-                                     const InitializedEntity *ExtendingEntity);
+static void performLifetimeExtension(Expr *Init, const ValueDecl *ExtendingD);
 
 /// Update a glvalue expression that is used as the initializer of a reference
 /// to note that its lifetime is extended.
 /// \return \c true if any temporary had its lifetime extended.
-static bool
-performReferenceExtension(Expr *Init,
-                          const InitializedEntity *ExtendingEntity) {
+static bool performReferenceExtension(Expr *Init, const ValueDecl *ExtendingD) {
   if (InitListExpr *ILE = dyn_cast<InitListExpr>(Init)) {
     if (ILE->getNumInits() == 1 && ILE->isGLValue()) {
       // This is just redundant braces around an initializer. Step over it.
@@ -5418,9 +5421,8 @@ performReferenceExtension(Expr *Init,
   if (MaterializeTemporaryExpr *ME = dyn_cast<MaterializeTemporaryExpr>(Init)) {
     // Update the storage duration of the materialized temporary.
     // FIXME: Rebuild the expression instead of mutating it.
-    ME->setExtendingDecl(ExtendingEntity->getDecl(),
-                         ExtendingEntity->allocateManglingNumber());
-    performLifetimeExtension(ME->GetTemporaryExpr(), ExtendingEntity);
+    ME->setExtendingDecl(ExtendingD);
+    performLifetimeExtension(ME->GetTemporaryExpr(), ExtendingD);
     return true;
   }
 
@@ -5429,8 +5431,7 @@ performReferenceExtension(Expr *Init,
 
 /// Update a prvalue expression that is going to be materialized as a
 /// lifetime-extended temporary.
-static void performLifetimeExtension(Expr *Init,
-                                     const InitializedEntity *ExtendingEntity) {
+static void performLifetimeExtension(Expr *Init, const ValueDecl *ExtendingD) {
   // Dig out the expression which constructs the extended temporary.
   SmallVector<const Expr *, 2> CommaLHSs;
   SmallVector<SubobjectAdjustment, 2> Adjustments;
@@ -5442,14 +5443,14 @@ static void performLifetimeExtension(Expr *Init,
 
   if (CXXStdInitializerListExpr *ILE =
           dyn_cast<CXXStdInitializerListExpr>(Init)) {
-    performReferenceExtension(ILE->getSubExpr(), ExtendingEntity);
+    performReferenceExtension(ILE->getSubExpr(), ExtendingD);
     return;
   }
 
   if (InitListExpr *ILE = dyn_cast<InitListExpr>(Init)) {
     if (ILE->getType()->isArrayType()) {
       for (unsigned I = 0, N = ILE->getNumInits(); I != N; ++I)
-        performLifetimeExtension(ILE->getInit(I), ExtendingEntity);
+        performLifetimeExtension(ILE->getInit(I), ExtendingD);
       return;
     }
 
@@ -5461,23 +5462,25 @@ static void performLifetimeExtension(Expr *Init,
       // bound to temporaries, those temporaries are also lifetime-extended.
       if (RD->isUnion() && ILE->getInitializedFieldInUnion() &&
           ILE->getInitializedFieldInUnion()->getType()->isReferenceType())
-        performReferenceExtension(ILE->getInit(0), ExtendingEntity);
+        performReferenceExtension(ILE->getInit(0), ExtendingD);
       else {
         unsigned Index = 0;
-        for (const auto *I : RD->fields()) {
+        for (RecordDecl::field_iterator I = RD->field_begin(),
+                                        E = RD->field_end();
+             I != E; ++I) {
           if (Index >= ILE->getNumInits())
             break;
           if (I->isUnnamedBitfield())
             continue;
           Expr *SubInit = ILE->getInit(Index);
           if (I->getType()->isReferenceType())
-            performReferenceExtension(SubInit, ExtendingEntity);
+            performReferenceExtension(SubInit, ExtendingD);
           else if (isa<InitListExpr>(SubInit) ||
                    isa<CXXStdInitializerListExpr>(SubInit))
             // This may be either aggregate-initialization of a member or
             // initialization of a std::initializer_list object. Either way,
             // we should recursively lifetime-extend that initializer.
-            performLifetimeExtension(SubInit, ExtendingEntity);
+            performLifetimeExtension(SubInit, ExtendingD);
           ++Index;
         }
       }
@@ -5763,12 +5766,12 @@ InitializationSequence::Perform(Sema &S,
       // Even though we didn't materialize a temporary, the binding may still
       // extend the lifetime of a temporary. This happens if we bind a reference
       // to the result of a cast to reference type.
-      if (const InitializedEntity *ExtendingEntity =
-              getEntityForTemporaryLifetimeExtension(&Entity))
-        if (performReferenceExtension(CurInit.get(), ExtendingEntity))
-          warnOnLifetimeExtension(S, Entity, CurInit.get(),
-                                  /*IsInitializerList=*/false,
-                                  ExtendingEntity->getDecl());
+      if (const ValueDecl *ExtendingDecl =
+              getDeclForTemporaryLifetimeExtension(Entity)) {
+        if (performReferenceExtension(CurInit.get(), ExtendingDecl))
+          warnOnLifetimeExtension(S, Entity, CurInit.get(), false,
+                                  ExtendingDecl);
+      }
 
       break;
 
@@ -5780,18 +5783,19 @@ InitializationSequence::Perform(Sema &S,
       if (S.CheckExceptionSpecCompatibility(CurInit.get(), DestType))
         return ExprError();
 
+      // Maybe lifetime-extend the temporary's subobjects to match the
+      // entity's lifetime.
+      const ValueDecl *ExtendingDecl =
+          getDeclForTemporaryLifetimeExtension(Entity);
+      if (ExtendingDecl) {
+        performLifetimeExtension(CurInit.get(), ExtendingDecl);
+        warnOnLifetimeExtension(S, Entity, CurInit.get(), false, ExtendingDecl);
+      }
+
       // Materialize the temporary into memory.
       MaterializeTemporaryExpr *MTE = new (S.Context) MaterializeTemporaryExpr(
           Entity.getType().getNonReferenceType(), CurInit.get(),
-          Entity.getType()->isLValueReferenceType());
-
-      // Maybe lifetime-extend the temporary's subobjects to match the
-      // entity's lifetime.
-      if (const InitializedEntity *ExtendingEntity =
-              getEntityForTemporaryLifetimeExtension(&Entity))
-        if (performReferenceExtension(MTE, ExtendingEntity))
-          warnOnLifetimeExtension(S, Entity, CurInit.get(), /*IsInitializerList=*/false,
-                                  ExtendingEntity->getDecl());
+          Entity.getType()->isLValueReferenceType(), ExtendingDecl);
 
       // If we're binding to an Objective-C object that has lifetime, we
       // need cleanups. Likewise if we're extending this temporary to automatic
@@ -5884,7 +5888,7 @@ InitializationSequence::Perform(Sema &S,
 
         CastKind = CK_UserDefinedConversion;
 
-        CreatedObject = Conversion->getReturnType()->isRecordType();
+        CreatedObject = Conversion->getResultType()->isRecordType();
       }
 
       bool RequiresCopy = !IsCopy && !isReferenceBinding(Steps.back());
@@ -6179,19 +6183,19 @@ InitializationSequence::Perform(Sema &S,
              diag::warn_cxx98_compat_initializer_list_init)
         << CurInit.get()->getSourceRange();
 
+      // Maybe lifetime-extend the array temporary's subobjects to match the
+      // entity's lifetime.
+      const ValueDecl *ExtendingDecl =
+          getDeclForTemporaryLifetimeExtension(Entity);
+      if (ExtendingDecl) {
+        performLifetimeExtension(CurInit.get(), ExtendingDecl);
+        warnOnLifetimeExtension(S, Entity, CurInit.get(), true, ExtendingDecl);
+      }
+
       // Materialize the temporary into memory.
       MaterializeTemporaryExpr *MTE = new (S.Context)
           MaterializeTemporaryExpr(CurInit.get()->getType(), CurInit.get(),
-                                   /*BoundToLvalueReference=*/false);
-
-      // Maybe lifetime-extend the array temporary's subobjects to match the
-      // entity's lifetime.
-      if (const InitializedEntity *ExtendingEntity =
-              getEntityForTemporaryLifetimeExtension(&Entity))
-        if (performReferenceExtension(MTE, ExtendingEntity))
-          warnOnLifetimeExtension(S, Entity, CurInit.get(),
-                                  /*IsInitializerList=*/true,
-                                  ExtendingEntity->getDecl());
+                                   /*lvalue reference*/ false, ExtendingDecl);
 
       // Wrap it in a construction of a std::initializer_list<T>.
       CurInit = S.Owned(
@@ -6256,7 +6260,8 @@ static bool DiagnoseUninitializedReference(Sema &S, SourceLocation Loc,
   if (!RD || !RD->hasUninitializedReferenceMember())
     return false;
 
-  for (const auto *FI : RD->fields()) {
+  for (CXXRecordDecl::field_iterator FI = RD->field_begin(),
+                                     FE = RD->field_end(); FI != FE; ++FI) {
     if (FI->isUnnamedBitfield())
       continue;
 
@@ -6266,8 +6271,10 @@ static bool DiagnoseUninitializedReference(Sema &S, SourceLocation Loc,
     }
   }
 
-  for (const auto &BI : RD->bases()) {
-    if (DiagnoseUninitializedReference(S, BI.getLocStart(), BI.getType())) {
+  for (CXXRecordDecl::base_class_iterator BI = RD->bases_begin(),
+                                          BE = RD->bases_end();
+       BI != BE; ++BI) {
+    if (DiagnoseUninitializedReference(S, BI->getLocStart(), BI->getType())) {
       S.Diag(Loc, diag::note_value_initialization_here) << RD;
       return true;
     }
@@ -6512,7 +6519,7 @@ bool InitializationSequence::Diagnose(Sema &S,
     else
       R = SourceRange(Args.front()->getLocEnd(), Args.back()->getLocEnd());
 
-    R.setBegin(S.getLocForEndOfToken(R.getBegin()));
+    R.setBegin(S.PP.getLocForEndOfToken(R.getBegin()));
     if (Kind.isCStyleOrFunctionalCast())
       S.Diag(Kind.getLocation(), diag::err_builtin_func_cast_more_than_one_arg)
         << R;
@@ -7055,10 +7062,10 @@ static void DiagnoseNarrowingInInitList(Sema &S,
   }
   OS << ">(";
   S.Diag(PostInit->getLocStart(), diag::note_init_list_narrowing_override)
-      << PostInit->getSourceRange()
-      << FixItHint::CreateInsertion(PostInit->getLocStart(), OS.str())
-      << FixItHint::CreateInsertion(
-             S.getLocForEndOfToken(PostInit->getLocEnd()), ")");
+    << PostInit->getSourceRange()
+    << FixItHint::CreateInsertion(PostInit->getLocStart(), OS.str())
+    << FixItHint::CreateInsertion(
+      S.getPreprocessor().getLocForEndOfToken(PostInit->getLocEnd()), ")");
 }
 
 //===----------------------------------------------------------------------===//

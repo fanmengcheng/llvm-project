@@ -83,17 +83,17 @@ public:
   PrintTransforms(raw_ostream &OS)
     : Ctx(0), OS(OS) { }
 
-  void start(ASTContext &ctx) override { Ctx = &ctx; }
-  void finish() override { Ctx = 0; }
+  virtual void start(ASTContext &ctx) { Ctx = &ctx; }
+  virtual void finish() { Ctx = 0; }
 
-  void insert(SourceLocation loc, StringRef text) override {
+  virtual void insert(SourceLocation loc, StringRef text) {
     assert(Ctx);
     OS << "Insert: ";
     printSourceLocation(loc, *Ctx, OS);
     OS << " \"" << text << "\"\n";
   }
 
-  void remove(CharSourceRange range) override {
+  virtual void remove(CharSourceRange range) {
     assert(Ctx);
     OS << "Remove: ";
     printSourceRange(range, *Ctx, OS);
@@ -178,7 +178,7 @@ static bool performTransformations(StringRef resourcesPath,
                                  origCI.getMigratorOpts().NoFinalizeRemoval);
   assert(!transforms.empty());
 
-  std::unique_ptr<PrintTransforms> transformPrinter;
+  OwningPtr<PrintTransforms> transformPrinter;
   if (OutputTransformations)
     transformPrinter.reset(new PrintTransforms(llvm::outs()));
 
@@ -207,12 +207,12 @@ static bool performTransformations(StringRef resourcesPath,
 static bool filesCompareEqual(StringRef fname1, StringRef fname2) {
   using namespace llvm;
 
-  std::unique_ptr<MemoryBuffer> file1;
+  OwningPtr<MemoryBuffer> file1;
   MemoryBuffer::getFile(fname1, file1);
   if (!file1)
     return false;
-
-  std::unique_ptr<MemoryBuffer> file2;
+  
+  OwningPtr<MemoryBuffer> file2;
   MemoryBuffer::getFile(fname2, file2);
   if (!file2)
     return false;
@@ -238,7 +238,7 @@ static bool verifyTransformedFiles(ArrayRef<std::string> resultFiles) {
     resultMap[sys::path::stem(fname)] = fname;
   }
 
-  std::unique_ptr<MemoryBuffer> inputBuf;
+  OwningPtr<MemoryBuffer> inputBuf;
   if (RemappingsFile.empty())
     MemoryBuffer::getSTDIN(inputBuf);
   else

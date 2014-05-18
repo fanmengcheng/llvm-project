@@ -23,7 +23,6 @@
 
 #include "clang/Parse/Parser.h"
 #include "RAIIObjectsForParser.h"
-#include "clang/AST/ASTContext.h"
 #include "clang/Basic/PrettyStackTrace.h"
 #include "clang/Sema/DeclSpec.h"
 #include "clang/Sema/ParsedTemplate.h"
@@ -428,7 +427,7 @@ class CastExpressionIdValidator : public CorrectionCandidateCallback {
     WantTypeSpecifiers = AllowTypes;
   }
 
-  bool ValidateCandidate(const TypoCorrection &candidate) override {
+  virtual bool ValidateCandidate(const TypoCorrection &candidate) {
     NamedDecl *ND = candidate.getCorrectionDecl();
     if (!ND)
       return candidate.isKeyword();
@@ -637,8 +636,7 @@ ExprResult Parser::ParseCastExpression(bool isUnaryExpression,
     // If this expression is limited to being a unary-expression, the parent can
     // not start a cast expression.
     ParenParseOption ParenExprType =
-        (isUnaryExpression && !getLangOpts().CPlusPlus) ? CompoundLiteral
-                                                        : CastExpr;
+      (isUnaryExpression && !getLangOpts().CPlusPlus)? CompoundLiteral : CastExpr;
     ParsedType CastTy;
     SourceLocation RParenLoc;
     
@@ -792,8 +790,7 @@ ExprResult Parser::ParseCastExpression(bool isUnaryExpression,
             DS.SetRangeEnd(ILoc);
             const char *PrevSpec = 0;
             unsigned DiagID;
-            DS.SetTypeSpecType(TST_typename, ILoc, PrevSpec, DiagID, Typ,
-                               Actions.getASTContext().getPrintingPolicy());
+            DS.SetTypeSpecType(TST_typename, ILoc, PrevSpec, DiagID, Typ);
             
             Declarator DeclaratorInfo(DS, Declarator::TypeNameContext);
             TypeResult Ty = Actions.ActOnTypeName(getCurScope(), 
@@ -836,7 +833,6 @@ ExprResult Parser::ParseCastExpression(bool isUnaryExpression,
   case tok::kw___func__:       // primary-expression: __func__ [C99 6.4.2.2]
   case tok::kw___FUNCTION__:   // primary-expression: __FUNCTION__ [GNU]
   case tok::kw___FUNCDNAME__:   // primary-expression: __FUNCDNAME__ [MS]
-  case tok::kw___FUNCSIG__:     // primary-expression: __FUNCSIG__ [MS]
   case tok::kw_L__FUNCTION__:   // primary-expression: L__FUNCTION__ [MS]
   case tok::kw___PRETTY_FUNCTION__:  // primary-expression: __P..Y_F..N__ [GNU]
     Res = Actions.ActOnPredefinedExpr(Tok.getLocation(), SavedKind);
@@ -959,8 +955,7 @@ ExprResult Parser::ParseCastExpression(bool isUnaryExpression,
       const char *PrevSpec = 0;
       unsigned DiagID;
       DS.SetTypeSpecType(TST_typename, Tok.getAnnotationEndLoc(),
-                         PrevSpec, DiagID, Type,
-                         Actions.getASTContext().getPrintingPolicy());
+                         PrevSpec, DiagID, Type);
 
       Declarator DeclaratorInfo(DS, Declarator::TypeNameContext);
       TypeResult Ty = Actions.ActOnTypeName(getCurScope(), DeclaratorInfo);
@@ -1497,7 +1492,8 @@ Parser::ParseExprAfterUnaryExprOrTypeTrait(const Token &OpTok,
     // pathenthesis around type name.
     if (OpTok.is(tok::kw_sizeof)  || OpTok.is(tok::kw___alignof) ||
         OpTok.is(tok::kw_alignof) || OpTok.is(tok::kw__Alignof)) {
-      if (isTypeIdUnambiguously()) {
+      bool isAmbiguousTypeId;
+      if (isTypeIdInParens(isAmbiguousTypeId)) {
         DeclSpec DS(AttrFactory);
         ParseSpecifierQualifierList(DS);
         Declarator DeclaratorInfo(DS, Declarator::TypeNameContext);
@@ -2079,7 +2075,7 @@ Parser::ParseParenExpression(ParenParseOption &ExprType, bool stopIfCastExpr,
           CastTy = Ty.get();
           return ExprResult();
         }
-
+        
         // Reject the cast of super idiom in ObjC.
         if (Tok.is(tok::identifier) && getLangOpts().ObjC1 &&
             Tok.getIdentifierInfo() == Ident_super && 
@@ -2126,8 +2122,7 @@ Parser::ParseParenExpression(ParenParseOption &ExprType, bool stopIfCastExpr,
 
     // Don't build a paren expression unless we actually match a ')'.
     if (!Result.isInvalid() && Tok.is(tok::r_paren))
-      Result =
-          Actions.ActOnParenExpr(OpenLoc, Tok.getLocation(), Result.take());
+      Result = Actions.ActOnParenExpr(OpenLoc, Tok.getLocation(), Result.take());
   }
 
   // Match the ')'.

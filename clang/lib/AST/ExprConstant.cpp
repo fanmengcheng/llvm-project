@@ -968,7 +968,7 @@ namespace {
       // any object: we won't use such a designator for anything.
       if (!Info.getLangOpts().CPlusPlus11)
         Designator.setInvalid();
-      return (CSK == CSK_ArrayToPointer || checkNullPointer(Info, E, CSK)) &&
+      return checkNullPointer(Info, E, CSK) &&
              Designator.checkSubobject(Info, E, CSK);
     }
 
@@ -986,7 +986,7 @@ namespace {
         Designator.addComplexUnchecked(EltTy, Imag);
     }
     void adjustIndex(EvalInfo &Info, const Expr *E, uint64_t N) {
-      if (N && checkNullPointer(Info, E, CSK_ArrayIndex))
+      if (checkNullPointer(Info, E, CSK_ArrayIndex))
         Designator.adjustIndex(Info, E, N);
     }
   };
@@ -1363,7 +1363,8 @@ static bool CheckConstantExpression(EvalInfo &Info, SourceLocation DiagLoc,
           return false;
       }
     }
-    for (const auto *I : RD->fields()) {
+    for (RecordDecl::field_iterator I = RD->field_begin(), E = RD->field_end();
+         I != E; ++I) {
       if (!CheckConstantExpression(Info, DiagLoc, I->getType(),
                                    Value.getStructField(I->getFieldIndex())))
         return false;
@@ -1831,8 +1832,9 @@ static bool HandleLValueMember(EvalInfo &Info, const Expr *E, LValue &LVal,
 static bool HandleLValueIndirectMember(EvalInfo &Info, const Expr *E,
                                        LValue &LVal,
                                        const IndirectFieldDecl *IFD) {
-  for (const auto *C : IFD->chain())
-    if (!HandleLValueMember(Info, E, LVal, cast<FieldDecl>(C)))
+  for (IndirectFieldDecl::chain_iterator C = IFD->chain_begin(),
+                                         CE = IFD->chain_end(); C != CE; ++C)
+    if (!HandleLValueMember(Info, E, LVal, cast<FieldDecl>(*C)))
       return false;
   return true;
 }
@@ -3115,18 +3117,14 @@ static bool EvaluateDecl(EvalInfo &Info, const Decl *D) {
     Result.set(VD, Info.CurrentCall->Index);
     APValue &Val = Info.CurrentCall->createTemporary(VD, true);
 
-    const Expr *InitE = VD->getInit();
-    if (!InitE) {
+    if (!VD->getInit()) {
       Info.Diag(D->getLocStart(), diag::note_constexpr_uninitialized)
         << false << VD->getType();
       Val = APValue();
       return false;
     }
 
-    if (InitE->isValueDependent())
-      return false;
-
-    if (!EvaluateInPlace(Val, Info, Result, InitE)) {
+    if (!EvaluateInPlace(Val, Info, Result, VD->getInit())) {
       // Wipe out any partially-computed value, to allow tracking that this
       // evaluation failed.
       Val = APValue();
@@ -3318,12 +3316,13 @@ static EvalStmtResult EvaluateStmt(APValue &Result, EvalInfo &Info,
 
   case Stmt::DeclStmtClass: {
     const DeclStmt *DS = cast<DeclStmt>(S);
-    for (const auto *DclIt : DS->decls()) {
+    for (DeclStmt::const_decl_iterator DclIt = DS->decl_begin(),
+           DclEnd = DS->decl_end(); DclIt != DclEnd; ++DclIt) {
       // Each declaration initialization is its own full-expression.
       // FIXME: This isn't quite right; if we're performing aggregate
       // initialization, each braced subexpression is its own full-expression.
       FullExpressionRAII Scope(Info);
-      if (!EvaluateDecl(Info, DclIt) && !Info.keepEvaluatingAfterFailure())
+      if (!EvaluateDecl(Info, *DclIt) && !Info.keepEvaluatingAfterFailure())
         return ESR_Failed;
     }
     return ESR_Succeeded;
@@ -3341,8 +3340,9 @@ static EvalStmtResult EvaluateStmt(APValue &Result, EvalInfo &Info,
     BlockScopeRAII Scope(Info);
 
     const CompoundStmt *CS = cast<CompoundStmt>(S);
-    for (const auto *BI : CS->body()) {
-      EvalStmtResult ESR = EvaluateStmt(Result, Info, BI, Case);
+    for (CompoundStmt::const_body_iterator BI = CS->body_begin(),
+           BE = CS->body_end(); BI != BE; ++BI) {
+      EvalStmtResult ESR = EvaluateStmt(Result, Info, *BI, Case);
       if (ESR == ESR_Succeeded)
         Case = 0;
       else if (ESR != ESR_CaseNotFound)
@@ -3618,7 +3618,7 @@ static bool HandleFunctionCall(SourceLocation CallLoc,
 
   EvalStmtResult ESR = EvaluateStmt(Result, Info, Body);
   if (ESR == ESR_Succeeded) {
-    if (Callee->getReturnType()->isVoidType())
+    if (Callee->getResultType()->isVoidType())
       return true;
     Info.Diag(Callee->getLocEnd(), diag::note_constexpr_no_return);
   }
@@ -3684,14 +3684,15 @@ static bool HandleConstructorCall(SourceLocation CallLoc, const LValue &This,
 #ifndef NDEBUG
   CXXRecordDecl::base_class_const_iterator BaseIt = RD->bases_begin();
 #endif
-  for (const auto *I : Definition->inits()) {
+  for (CXXConstructorDecl::init_const_iterator I = Definition->init_begin(),
+       E = Definition->init_end(); I != E; ++I) {
     LValue Subobject = This;
     APValue *Value = &Result;
 
     // Determine the subobject to initialize.
     FieldDecl *FD = 0;
-    if (I->isBaseInitializer()) {
-      QualType BaseType(I->getBaseClass(), 0);
+    if ((*I)->isBaseInitializer()) {
+      QualType BaseType((*I)->getBaseClass(), 0);
 #ifndef NDEBUG
       // Non-virtual base classes are initialized in the order in the class
       // definition. We have already checked for virtual base classes.
@@ -3700,12 +3701,12 @@ static bool HandleConstructorCall(SourceLocation CallLoc, const LValue &This,
              "base class initializers not in expected order");
       ++BaseIt;
 #endif
-      if (!HandleLValueDirectBase(Info, I->getInit(), Subobject, RD,
+      if (!HandleLValueDirectBase(Info, (*I)->getInit(), Subobject, RD,
                                   BaseType->getAsCXXRecordDecl(), &Layout))
         return false;
       Value = &Result.getStructBase(BasesSeen++);
-    } else if ((FD = I->getMember())) {
-      if (!HandleLValueMember(Info, I->getInit(), Subobject, FD, &Layout))
+    } else if ((FD = (*I)->getMember())) {
+      if (!HandleLValueMember(Info, (*I)->getInit(), Subobject, FD, &Layout))
         return false;
       if (RD->isUnion()) {
         Result = APValue(FD);
@@ -3713,11 +3714,13 @@ static bool HandleConstructorCall(SourceLocation CallLoc, const LValue &This,
       } else {
         Value = &Result.getStructField(FD->getFieldIndex());
       }
-    } else if (IndirectFieldDecl *IFD = I->getIndirectMember()) {
+    } else if (IndirectFieldDecl *IFD = (*I)->getIndirectMember()) {
       // Walk the indirect field decl's chain to find the object to initialize,
       // and make sure we've initialized every step along it.
-      for (auto *C : IFD->chain()) {
-        FD = cast<FieldDecl>(C);
+      for (IndirectFieldDecl::chain_iterator C = IFD->chain_begin(),
+                                             CE = IFD->chain_end();
+           C != CE; ++C) {
+        FD = cast<FieldDecl>(*C);
         CXXRecordDecl *CD = cast<CXXRecordDecl>(FD->getParent());
         // Switch the union field if it differs. This happens if we had
         // preceding zero-initialization, and we're now initializing a union
@@ -3732,7 +3735,7 @@ static bool HandleConstructorCall(SourceLocation CallLoc, const LValue &This,
             *Value = APValue(APValue::UninitStruct(), CD->getNumBases(),
                              std::distance(CD->field_begin(), CD->field_end()));
         }
-        if (!HandleLValueMember(Info, I->getInit(), Subobject, FD))
+        if (!HandleLValueMember(Info, (*I)->getInit(), Subobject, FD))
           return false;
         if (CD->isUnion())
           Value = &Value->getUnionValue();
@@ -3744,8 +3747,8 @@ static bool HandleConstructorCall(SourceLocation CallLoc, const LValue &This,
     }
 
     FullExpressionRAII InitScope(Info);
-    if (!EvaluateInPlace(*Value, Info, Subobject, I->getInit()) ||
-        (FD && FD->isBitField() && !truncateBitfieldValue(Info, I->getInit(),
+    if (!EvaluateInPlace(*Value, Info, Subobject, (*I)->getInit()) ||
+        (FD && FD->isBitField() && !truncateBitfieldValue(Info, (*I)->getInit(),
                                                           *Value, FD))) {
       // If we're checking for a potential constant expression, evaluate all
       // initializers even if some of them fail.
@@ -4946,13 +4949,14 @@ static bool HandleClassZeroInitialization(EvalInfo &Info, const Expr *E,
     }
   }
 
-  for (const auto *I : RD->fields()) {
+  for (RecordDecl::field_iterator I = RD->field_begin(), End = RD->field_end();
+       I != End; ++I) {
     // -- if T is a reference type, no initialization is performed.
     if (I->getType()->isReferenceType())
       continue;
 
     LValue Subobject = This;
-    if (!HandleLValueMember(Info, E, Subobject, I, &Layout))
+    if (!HandleLValueMember(Info, E, Subobject, *I, &Layout))
       return false;
 
     ImplicitValueInitExpr VIE(I->getType());
@@ -5060,7 +5064,8 @@ bool RecordExprEvaluator::VisitInitListExpr(const InitListExpr *E) {
                    std::distance(RD->field_begin(), RD->field_end()));
   unsigned ElementNo = 0;
   bool Success = true;
-  for (const auto *Field : RD->fields()) {
+  for (RecordDecl::field_iterator Field = RD->field_begin(),
+       FieldEnd = RD->field_end(); Field != FieldEnd; ++Field) {
     // Anonymous bit-fields are not considered members of the class for
     // purposes of aggregate initialization.
     if (Field->isUnnamedBitfield())
@@ -5073,7 +5078,7 @@ bool RecordExprEvaluator::VisitInitListExpr(const InitListExpr *E) {
     // FIXME: Diagnostics here should point to the end of the initializer
     // list, not the start.
     if (!HandleLValueMember(Info, HaveInit ? E->getInit(ElementNo) : E,
-                            Subobject, Field, &Layout))
+                            Subobject, *Field, &Layout))
       return false;
 
     // Perform an implicit value-initialization for members beyond the end of
@@ -5088,7 +5093,7 @@ bool RecordExprEvaluator::VisitInitListExpr(const InitListExpr *E) {
     APValue &FieldVal = Result.getStructField(Field->getFieldIndex());
     if (!EvaluateInPlace(FieldVal, Info, Subobject, Init) ||
         (Field->isBitField() && !truncateBitfieldValue(Info, Init,
-                                                       FieldVal, Field))) {
+                                                       FieldVal, *Field))) {
       if (!Info.keepEvaluatingAfterFailure())
         return false;
       Success = false;
@@ -5108,15 +5113,16 @@ bool RecordExprEvaluator::VisitCXXConstructExpr(const CXXConstructExpr *E) {
     if (!Result.isUninit())
       return true;
 
-    // We can get here in two different ways:
-    //  1) We're performing value-initialization, and should zero-initialize
-    //     the object, or
-    //  2) We're performing default-initialization of an object with a trivial
-    //     constexpr default constructor, in which case we should start the
-    //     lifetimes of all the base subobjects (there can be no data member
-    //     subobjects in this case) per [basic.life]p1.
-    // Either way, ZeroInitialization is appropriate.
-    return ZeroInitialization(E);
+    if (ZeroInit)
+      return ZeroInitialization(E);
+
+    const CXXRecordDecl *RD = FD->getParent();
+    if (RD->isUnion())
+      Result = APValue((FieldDecl*)0);
+    else
+      Result = APValue(APValue::UninitStruct(), RD->getNumBases(),
+                       std::distance(RD->field_begin(), RD->field_end()));
+    return true;
   }
 
   const FunctionDecl *Definition = 0;
@@ -5596,9 +5602,19 @@ bool ArrayExprEvaluator::VisitCXXConstructExpr(const CXXConstructExpr *E,
     if (HadZeroInit)
       return true;
 
-    // See RecordExprEvaluator::VisitCXXConstructExpr for explanation.
-    ImplicitValueInitExpr VIE(Type);
-    return EvaluateInPlace(*Value, Info, Subobject, &VIE);
+    if (ZeroInit) {
+      ImplicitValueInitExpr VIE(Type);
+      return EvaluateInPlace(*Value, Info, Subobject, &VIE);
+    }
+
+    const CXXRecordDecl *RD = FD->getParent();
+    if (RD->isUnion())
+      *Value = APValue((FieldDecl*)0);
+    else
+      *Value =
+          APValue(APValue::UninitStruct(), RD->getNumBases(),
+                  std::distance(RD->field_begin(), RD->field_end()));
+    return true;
   }
 
   const FunctionDecl *Definition = 0;
@@ -8012,8 +8028,6 @@ static bool Evaluate(APValue &Result, EvalInfo &Info, const Expr *E) {
 /// an object can indirectly refer to subobjects which were initialized earlier.
 static bool EvaluateInPlace(APValue &Result, EvalInfo &Info, const LValue &This,
                             const Expr *E, bool AllowNonLiteralTypes) {
-  assert(!E->isValueDependent());
-
   if (!AllowNonLiteralTypes && !CheckLiteralType(Info, E, &This))
     return false;
 
@@ -8033,9 +8047,6 @@ static bool EvaluateInPlace(APValue &Result, EvalInfo &Info, const LValue &This,
 /// EvaluateAsRValue - Try to evaluate this expression, performing an implicit
 /// lvalue-to-rvalue cast if it is an lvalue.
 static bool EvaluateAsRValue(EvalInfo &Info, const Expr *E, APValue &Result) {
-  if (E->getType().isNull())
-    return false;
-
   if (!CheckLiteralType(Info, E))
     return false;
 
@@ -8061,13 +8072,6 @@ static bool FastEvaluateAsRValue(const Expr *Exp, Expr::EvalResult &Result,
     Result.Val = APValue(APSInt(L->getValue(),
                                 L->getType()->isUnsignedIntegerType()));
     IsConst = true;
-    return true;
-  }
-
-  // This case should be rare, but we need to check it before we check on
-  // the type below.
-  if (Exp->getType().isNull()) {
-    IsConst = false;
     return true;
   }
   
@@ -8327,19 +8331,9 @@ static ICEDiag CheckICE(const Expr* E, const ASTContext &Ctx) {
   case Expr::MaterializeTemporaryExprClass:
   case Expr::PseudoObjectExprClass:
   case Expr::AtomicExprClass:
+  case Expr::InitListExprClass:
   case Expr::LambdaExprClass:
     return ICEDiag(IK_NotICE, E->getLocStart());
-
-  case Expr::InitListExprClass: {
-    // C++03 [dcl.init]p13: If T is a scalar type, then a declaration of the
-    // form "T x = { a };" is equivalent to "T x = a;".
-    // Unless we're initializing a reference, T is a scalar as it is known to be
-    // of integral or enumeration type.
-    if (E->isRValue())
-      if (cast<InitListExpr>(E)->getNumInits() == 1)
-        return CheckICE(cast<InitListExpr>(E)->getInit(0), Ctx);
-    return ICEDiag(IK_NotICE, E->getLocStart());
-  }
 
   case Expr::SizeOfPackExprClass:
   case Expr::GNUNullExprClass:

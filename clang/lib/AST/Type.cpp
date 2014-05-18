@@ -422,10 +422,6 @@ QualType Type::getPointeeType() const {
     return BPT->getPointeeType();
   if (const ReferenceType *RT = getAs<ReferenceType>())
     return RT->getPointeeType();
-  if (const MemberPointerType *MPT = getAs<MemberPointerType>())
-    return MPT->getPointeeType();
-  if (const DecayedType *DT = getAs<DecayedType>())
-    return DT->getPointeeType();
   return QualType();
 }
 
@@ -589,7 +585,7 @@ namespace {
       return Visit(T->getElementType());
     }
     AutoType *VisitFunctionType(const FunctionType *T) {
-      return Visit(T->getReturnType());
+      return Visit(T->getResultType());
     }
     AutoType *VisitParenType(const ParenType *T) {
       return Visit(T->getInnerType());
@@ -950,6 +946,19 @@ bool Type::isIncompleteType(NamedDecl **Def) const {
     return !Interface->hasDefinition();
   }
   }
+}
+
+bool QualType::isCapabilityType() const {
+  const QualType CanonicalType = getCanonicalType();
+  if (const BuiltinType *BT = dyn_cast<BuiltinType>(CanonicalType))
+    return BT->getKind() == BuiltinType::IntCap ||
+           BT->getKind() == BuiltinType::UIntCap;
+  const Type *T = CanonicalType.getTypePtr();
+  if (const PointerType *PT = dyn_cast<PointerType>(T)) {
+    // FIXME: Don't hard-code address space
+    return PT->getPointeeType().getAddressSpace() == 200;
+  }
+  return false;
 }
 
 bool QualType::isPODType(ASTContext &Context) const {
@@ -1431,7 +1440,8 @@ TypeWithKeyword::KeywordIsTagTypeKind(ElaboratedTypeKeyword Keyword) {
   llvm_unreachable("Unknown elaborated type keyword.");
 }
 
-StringRef TypeWithKeyword::getKeywordName(ElaboratedTypeKeyword Keyword) {
+const char*
+TypeWithKeyword::getKeywordName(ElaboratedTypeKeyword Keyword) {
   switch (Keyword) {
   case ETK_None: return "";
   case ETK_Typename: return "typename";
@@ -1516,13 +1526,15 @@ StringRef BuiltinType::getName(const PrintingPolicy &Policy) const {
   case Long:              return "long";
   case LongLong:          return "long long";
   case Int128:            return "__int128";
+  case IntCap:            return "__intcap";
   case UChar:             return "unsigned char";
   case UShort:            return "unsigned short";
   case UInt:              return "unsigned int";
   case ULong:             return "unsigned long";
   case ULongLong:         return "unsigned long long";
   case UInt128:           return "unsigned __int128";
-  case Half:              return Policy.Half ? "half" : "__fp16";
+  case UIntCap:           return "__uintcap";
+  case Half:              return "half";
   case Float:             return "float";
   case Double:            return "double";
   case LongDouble:        return "long double";
@@ -1573,6 +1585,7 @@ QualType QualType::getNonLValueExprType(const ASTContext &Context) const {
 StringRef FunctionType::getNameForCallConv(CallingConv CC) {
   switch (CC) {
   case CC_C: return "cdecl";
+  case CC_CheriCCall: return "cheri_ccall";
   case CC_X86StdCall: return "stdcall";
   case CC_X86FastCall: return "fastcall";
   case CC_X86ThisCall: return "thiscall";
@@ -1588,37 +1601,41 @@ StringRef FunctionType::getNameForCallConv(CallingConv CC) {
   llvm_unreachable("Invalid calling convention.");
 }
 
-FunctionProtoType::FunctionProtoType(QualType result, ArrayRef<QualType> params,
+FunctionProtoType::FunctionProtoType(QualType result, ArrayRef<QualType> args,
                                      QualType canonical,
                                      const ExtProtoInfo &epi)
-    : FunctionType(FunctionProto, result, epi.TypeQuals, canonical,
-                   result->isDependentType(),
-                   result->isInstantiationDependentType(),
-                   result->isVariablyModifiedType(),
-                   result->containsUnexpandedParameterPack(), epi.ExtInfo),
-      NumParams(params.size()), NumExceptions(epi.NumExceptions),
-      ExceptionSpecType(epi.ExceptionSpecType),
-      HasAnyConsumedParams(epi.ConsumedParameters != 0), Variadic(epi.Variadic),
-      HasTrailingReturn(epi.HasTrailingReturn), RefQualifier(epi.RefQualifier) {
-  assert(NumParams == params.size() && "function has too many parameters");
+  : FunctionType(FunctionProto, result, epi.TypeQuals,
+                 canonical,
+                 result->isDependentType(),
+                 result->isInstantiationDependentType(),
+                 result->isVariablyModifiedType(),
+                 result->containsUnexpandedParameterPack(),
+                 epi.ExtInfo),
+    NumArgs(args.size()), NumExceptions(epi.NumExceptions),
+    ExceptionSpecType(epi.ExceptionSpecType),
+    HasAnyConsumedArgs(epi.ConsumedArguments != 0),
+    Variadic(epi.Variadic), HasTrailingReturn(epi.HasTrailingReturn),
+    RefQualifier(epi.RefQualifier)
+{
+  assert(NumArgs == args.size() && "function has too many parameters");
 
   // Fill in the trailing argument array.
   QualType *argSlot = reinterpret_cast<QualType*>(this+1);
-  for (unsigned i = 0; i != NumParams; ++i) {
-    if (params[i]->isDependentType())
+  for (unsigned i = 0; i != NumArgs; ++i) {
+    if (args[i]->isDependentType())
       setDependent();
-    else if (params[i]->isInstantiationDependentType())
+    else if (args[i]->isInstantiationDependentType())
       setInstantiationDependent();
-
-    if (params[i]->containsUnexpandedParameterPack())
+    
+    if (args[i]->containsUnexpandedParameterPack())
       setContainsUnexpandedParameterPack();
 
-    argSlot[i] = params[i];
+    argSlot[i] = args[i];
   }
 
   if (getExceptionSpecType() == EST_Dynamic) {
     // Fill in the exception array.
-    QualType *exnSlot = argSlot + NumParams;
+    QualType *exnSlot = argSlot + NumArgs;
     for (unsigned i = 0, e = epi.NumExceptions; i != e; ++i) {
       if (epi.Exceptions[i]->isDependentType())
         setDependent();
@@ -1632,7 +1649,7 @@ FunctionProtoType::FunctionProtoType(QualType result, ArrayRef<QualType> params,
     }
   } else if (getExceptionSpecType() == EST_ComputedNoexcept) {
     // Store the noexcept expression and context.
-    Expr **noexSlot = reinterpret_cast<Expr **>(argSlot + NumParams);
+    Expr **noexSlot = reinterpret_cast<Expr**>(argSlot + NumArgs);
     *noexSlot = epi.NoexceptExpr;
     
     if (epi.NoexceptExpr) {
@@ -1645,8 +1662,7 @@ FunctionProtoType::FunctionProtoType(QualType result, ArrayRef<QualType> params,
   } else if (getExceptionSpecType() == EST_Uninstantiated) {
     // Store the function decl from which we will resolve our
     // exception specification.
-    FunctionDecl **slot =
-        reinterpret_cast<FunctionDecl **>(argSlot + NumParams);
+    FunctionDecl **slot = reinterpret_cast<FunctionDecl**>(argSlot + NumArgs);
     slot[0] = epi.ExceptionSpecDecl;
     slot[1] = epi.ExceptionSpecTemplate;
     // This exception specification doesn't make the type dependent, because
@@ -1654,15 +1670,14 @@ FunctionProtoType::FunctionProtoType(QualType result, ArrayRef<QualType> params,
   } else if (getExceptionSpecType() == EST_Unevaluated) {
     // Store the function decl from which we will resolve our
     // exception specification.
-    FunctionDecl **slot =
-        reinterpret_cast<FunctionDecl **>(argSlot + NumParams);
+    FunctionDecl **slot = reinterpret_cast<FunctionDecl**>(argSlot + NumArgs);
     slot[0] = epi.ExceptionSpecDecl;
   }
 
-  if (epi.ConsumedParameters) {
-    bool *consumedParams = const_cast<bool *>(getConsumedParamsBuffer());
-    for (unsigned i = 0; i != NumParams; ++i)
-      consumedParams[i] = epi.ConsumedParameters[i];
+  if (epi.ConsumedArguments) {
+    bool *consumedArgs = const_cast<bool*>(getConsumedArgsBuffer());
+    for (unsigned i = 0; i != NumArgs; ++i)
+      consumedArgs[i] = epi.ConsumedArguments[i];
   }
 }
 
@@ -1690,41 +1705,16 @@ FunctionProtoType::getNoexceptSpec(const ASTContext &ctx) const {
   return value.getBoolValue() ? NR_Nothrow : NR_Throw;
 }
 
-bool FunctionProtoType::isNothrow(const ASTContext &Ctx,
-                                  bool ResultIfDependent) const {
-  ExceptionSpecificationType EST = getExceptionSpecType();
-  assert(EST != EST_Unevaluated && EST != EST_Uninstantiated);
-  if (EST == EST_DynamicNone || EST == EST_BasicNoexcept)
-    return true;
-
-  if (EST == EST_Dynamic && ResultIfDependent == true) {
-    // A dynamic exception specification is throwing unless every exception
-    // type is an (unexpanded) pack expansion type.
-    for (unsigned I = 0, N = NumExceptions; I != N; ++I)
-      if (!getExceptionType(I)->getAs<PackExpansionType>())
-        return false;
-    return ResultIfDependent;
-  }
-
-  if (EST != EST_ComputedNoexcept)
-    return false;
-
-  NoexceptResult NR = getNoexceptSpec(Ctx);
-  if (NR == NR_Dependent)
-    return ResultIfDependent;
-  return NR == NR_Nothrow;
-}
-
 bool FunctionProtoType::isTemplateVariadic() const {
-  for (unsigned ArgIdx = getNumParams(); ArgIdx; --ArgIdx)
-    if (isa<PackExpansionType>(getParamType(ArgIdx - 1)))
+  for (unsigned ArgIdx = getNumArgs(); ArgIdx; --ArgIdx)
+    if (isa<PackExpansionType>(getArgType(ArgIdx - 1)))
       return true;
   
   return false;
 }
 
 void FunctionProtoType::Profile(llvm::FoldingSetNodeID &ID, QualType Result,
-                                const QualType *ArgTys, unsigned NumParams,
+                                const QualType *ArgTys, unsigned NumArgs,
                                 const ExtProtoInfo &epi,
                                 const ASTContext &Context) {
 
@@ -1746,7 +1736,7 @@ void FunctionProtoType::Profile(llvm::FoldingSetNodeID &ID, QualType Result,
   // whether the following bool is the EH spec or part of the arguments.
 
   ID.AddPointer(Result.getAsOpaquePtr());
-  for (unsigned i = 0; i != NumParams; ++i)
+  for (unsigned i = 0; i != NumArgs; ++i)
     ID.AddPointer(ArgTys[i].getAsOpaquePtr());
   // This method is relatively performance sensitive, so as a performance
   // shortcut, use one AddInteger call instead of four for the next four
@@ -1769,9 +1759,9 @@ void FunctionProtoType::Profile(llvm::FoldingSetNodeID &ID, QualType Result,
              epi.ExceptionSpecType == EST_Unevaluated) {
     ID.AddPointer(epi.ExceptionSpecDecl->getCanonicalDecl());
   }
-  if (epi.ConsumedParameters) {
-    for (unsigned i = 0; i != NumParams; ++i)
-      ID.AddBoolean(epi.ConsumedParameters[i]);
+  if (epi.ConsumedArguments) {
+    for (unsigned i = 0; i != NumArgs; ++i)
+      ID.AddBoolean(epi.ConsumedArguments[i]);
   }
   epi.ExtInfo.Profile(ID);
   ID.AddBoolean(epi.HasTrailingReturn);
@@ -1779,7 +1769,7 @@ void FunctionProtoType::Profile(llvm::FoldingSetNodeID &ID, QualType Result,
 
 void FunctionProtoType::Profile(llvm::FoldingSetNodeID &ID,
                                 const ASTContext &Ctx) {
-  Profile(ID, getReturnType(), param_type_begin(), NumParams, getExtProtoInfo(),
+  Profile(ID, getResultType(), arg_type_begin(), NumArgs, getExtProtoInfo(),
           Ctx);
 }
 
@@ -1848,9 +1838,11 @@ TagType::TagType(TypeClass TC, const TagDecl *D, QualType can)
     decl(const_cast<TagDecl*>(D)) {}
 
 static TagDecl *getInterestingTagDecl(TagDecl *decl) {
-  for (auto I : decl->redecls()) {
+  for (TagDecl::redecl_iterator I = decl->redecls_begin(),
+                                E = decl->redecls_end();
+       I != E; ++I) {
     if (I->isCompleteDefinition() || I->isBeingDefined())
-      return I;
+      return *I;
   }
   // If there's no definition (not even in progress), return what we have.
   return decl;
@@ -1905,6 +1897,7 @@ bool AttributedType::isCallingConv() const {
   case attr_pcs:
   case attr_pcs_vfp:
   case attr_cdecl:
+  case attr_cheri_ccall:
   case attr_fastcall:
   case attr_stdcall:
   case attr_thiscall:
@@ -2227,12 +2220,13 @@ static CachedProperties computeCachedProperties(const Type *T) {
   case Type::ExtVector:
     return Cache::get(cast<VectorType>(T)->getElementType());
   case Type::FunctionNoProto:
-    return Cache::get(cast<FunctionType>(T)->getReturnType());
+    return Cache::get(cast<FunctionType>(T)->getResultType());
   case Type::FunctionProto: {
     const FunctionProtoType *FPT = cast<FunctionProtoType>(T);
-    CachedProperties result = Cache::get(FPT->getReturnType());
-    for (const auto &ai : FPT->param_types())
-      result = merge(result, Cache::get(ai));
+    CachedProperties result = Cache::get(FPT->getResultType());
+    for (FunctionProtoType::arg_type_iterator ai = FPT->arg_type_begin(),
+           ae = FPT->arg_type_end(); ai != ae; ++ai)
+      result = merge(result, Cache::get(*ai));
     return result;
   }
   case Type::ObjCInterface: {
@@ -2311,12 +2305,13 @@ static LinkageInfo computeLinkageInfo(const Type *T) {
   case Type::ExtVector:
     return computeLinkageInfo(cast<VectorType>(T)->getElementType());
   case Type::FunctionNoProto:
-    return computeLinkageInfo(cast<FunctionType>(T)->getReturnType());
+    return computeLinkageInfo(cast<FunctionType>(T)->getResultType());
   case Type::FunctionProto: {
     const FunctionProtoType *FPT = cast<FunctionProtoType>(T);
-    LinkageInfo LV = computeLinkageInfo(FPT->getReturnType());
-    for (const auto &ai : FPT->param_types())
-      LV.merge(computeLinkageInfo(ai));
+    LinkageInfo LV = computeLinkageInfo(FPT->getResultType());
+    for (FunctionProtoType::arg_type_iterator ai = FPT->arg_type_begin(),
+           ae = FPT->arg_type_end(); ai != ae; ++ai)
+      LV.merge(computeLinkageInfo(*ai));
     return LV;
   }
   case Type::ObjCInterface:
@@ -2465,8 +2460,4 @@ QualType::DestructionKind QualType::isDestructedTypeImpl(QualType type) {
     return DK_cxx_destructor;
 
   return DK_none;
-}
-
-CXXRecordDecl *MemberPointerType::getMostRecentCXXRecordDecl() const {
-  return getClass()->getAsCXXRecordDecl()->getMostRecentDecl();
 }

@@ -373,8 +373,9 @@ void ClassifyRefs::classify(const Expr *E, Class C) {
 }
 
 void ClassifyRefs::VisitDeclStmt(DeclStmt *DS) {
-  for (auto *DI : DS->decls()) {
-    VarDecl *VD = dyn_cast<VarDecl>(DI);
+  for (DeclStmt::decl_iterator DI = DS->decl_begin(), DE = DS->decl_end();
+       DI != DE; ++DI) {
+    VarDecl *VD = dyn_cast<VarDecl>(*DI);
     if (VD && isTrackedVar(VD))
       if (const DeclRefExpr *DRE = getSelfInitExpr(VD))
         Classification[DRE] = SelfInit;
@@ -534,9 +535,6 @@ public:
       for (CFGBlock::const_pred_iterator I = B->pred_begin(), E = B->pred_end();
            I != E; ++I) {
         const CFGBlock *Pred = *I;
-        if (!Pred)
-          continue;
-        
         Value AtPredExit = vals.getValue(Pred, B, vd);
         if (AtPredExit == Initialized)
           // This block initializes the variable.
@@ -632,11 +630,12 @@ void TransferFunctions::VisitObjCForCollectionStmt(ObjCForCollectionStmt *FS) {
 
 void TransferFunctions::VisitBlockExpr(BlockExpr *be) {
   const BlockDecl *bd = be->getBlockDecl();
-  for (const auto &I : bd->captures()) {
-    const VarDecl *vd = I.getVariable();
+  for (BlockDecl::capture_const_iterator i = bd->capture_begin(),
+        e = bd->capture_end() ; i != e; ++i) {
+    const VarDecl *vd = i->getVariable();
     if (!isTrackedVar(vd))
       continue;
-    if (I.isByRef()) {
+    if (i->isByRef()) {
       vals[vd] = Initialized;
       continue;
     }
@@ -692,8 +691,9 @@ void TransferFunctions::VisitBinaryOperator(BinaryOperator *BO) {
 }
 
 void TransferFunctions::VisitDeclStmt(DeclStmt *DS) {
-  for (auto *DI : DS->decls()) {
-    VarDecl *VD = dyn_cast<VarDecl>(DI);
+  for (DeclStmt::decl_iterator DI = DS->decl_begin(), DE = DS->decl_end();
+       DI != DE; ++DI) {
+    VarDecl *VD = dyn_cast<VarDecl>(*DI);
     if (VD && isTrackedVar(VD)) {
       if (getSelfInitExpr(VD)) {
         // If the initializer consists solely of a reference to itself, we
@@ -751,8 +751,6 @@ static bool runOnBlock(const CFGBlock *block, const CFG &cfg,
   for (CFGBlock::const_pred_iterator I = block->pred_begin(),
        E = block->pred_end(); I != E; ++I) {
     const CFGBlock *pred = *I;
-    if (!pred)
-      continue;
     if (wasAnalyzed[pred->getBlockID()]) {
       vals.mergeIntoScratch(vals.getValueVector(pred), isFirst);
       isFirst = false;
@@ -789,8 +787,8 @@ struct PruneBlocksHandler : public UninitVariablesHandler {
   /// The current block to scribble use information.
   unsigned currentBlock;
 
-  void handleUseOfUninitVariable(const VarDecl *vd,
-                                 const UninitUse &use) override {
+  virtual void handleUseOfUninitVariable(const VarDecl *vd,
+                                         const UninitUse &use) {
     hadUse[currentBlock] = true;
     hadAnyUse = true;
   }
@@ -798,7 +796,7 @@ struct PruneBlocksHandler : public UninitVariablesHandler {
   /// Called when the uninitialized variable analysis detects the
   /// idiom 'int x = x'.  All other uses of 'x' within the initializer
   /// are handled by handleUseOfUninitVariable.
-  void handleSelfInit(const VarDecl *vd) override {
+  virtual void handleSelfInit(const VarDecl *vd) {
     hadUse[currentBlock] = true;
     hadAnyUse = true;
   }

@@ -34,22 +34,17 @@ namespace {
 
 // Stub out module loading.
 class VoidModuleLoader : public ModuleLoader {
-  ModuleLoadResult loadModule(SourceLocation ImportLoc, 
-                              ModuleIdPath Path,
-                              Module::NameVisibilityKind Visibility,
-                              bool IsInclusionDirective) override {
+  virtual ModuleLoadResult loadModule(SourceLocation ImportLoc, 
+                                      ModuleIdPath Path,
+                                      Module::NameVisibilityKind Visibility,
+                                      bool IsInclusionDirective) {
     return ModuleLoadResult();
   }
 
-  void makeModuleVisible(Module *Mod,
-                         Module::NameVisibilityKind Visibility,
-                         SourceLocation ImportLoc,
-                         bool Complain) override { }
-
-  GlobalModuleIndex *loadGlobalModuleIndex(SourceLocation TriggerLoc) override
-    { return 0; }
-  bool lookupMissingImports(StringRef Name, SourceLocation TriggerLoc) override
-    { return 0; };
+  virtual void makeModuleVisible(Module *Mod,
+                                 Module::NameVisibilityKind Visibility,
+                                 SourceLocation ImportLoc,
+                                 bool Complain) { }
 };
 
 // Stub to collect data from InclusionDirective callbacks.
@@ -172,10 +167,12 @@ protected:
     AddFakeHeader(HeaderInfo, HeaderPath, SystemHeader);
 
     IntrusiveRefCntPtr<PreprocessorOptions> PPOpts = new PreprocessorOptions();
-    Preprocessor PP(PPOpts, Diags, LangOpts, SourceMgr, HeaderInfo, ModLoader,
-                    /*IILookup =*/0,
-                    /*OwnsHeaderSearch =*/false);
-    PP.Initialize(*Target);
+    Preprocessor PP(PPOpts, Diags, LangOpts,
+      Target.getPtr(),
+      SourceMgr, HeaderInfo, ModLoader,
+      /*IILookup =*/ 0,
+      /*OwnsHeaderSearch =*/false,
+      /*DelayInitialization =*/ false);
     InclusionDirectiveCallbacks* Callbacks = new InclusionDirectiveCallbacks;
     PP.addPPCallbacks(Callbacks); // Takes ownership.
 
@@ -205,19 +202,19 @@ protected:
     HeaderSearch HeaderInfo(new HeaderSearchOptions, SourceMgr, Diags, 
                             OpenCLLangOpts, Target.getPtr());
 
-    Preprocessor PP(new PreprocessorOptions(), Diags, OpenCLLangOpts, SourceMgr,
-                    HeaderInfo, ModLoader, /*IILookup =*/0,
-                    /*OwnsHeaderSearch =*/false);
-    PP.Initialize(*Target);
+    Preprocessor PP(new PreprocessorOptions(), Diags, OpenCLLangOpts, 
+                    Target.getPtr(),
+                    SourceMgr, HeaderInfo, ModLoader,
+                   /*IILookup =*/ 0,
+                    /*OwnsHeaderSearch =*/false,
+                    /*DelayInitialization =*/ false);
 
     // parser actually sets correct pragma handlers for preprocessor
     // according to LangOptions, so we init Parser to register opencl
     // pragma handlers
-    ASTContext Context(OpenCLLangOpts, SourceMgr,
+    ASTContext Context(OpenCLLangOpts, SourceMgr, Target.getPtr(), 
                        PP.getIdentifierTable(), PP.getSelectorTable(), 
-                       PP.getBuiltinInfo());
-    Context.InitBuiltinTypes(*Target);
-
+                       PP.getBuiltinInfo(), 0);    
     ASTConsumer Consumer;
     Sema S(PP, Context, Consumer);
     Parser P(PP, S, false);

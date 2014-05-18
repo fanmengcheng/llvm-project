@@ -14,6 +14,7 @@
 #include "clang/Sema/SemaInternal.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/Basic/SourceManager.h"
+#include "clang/Lex/Lexer.h"
 #include "clang/Sema/DelayedDiagnostic.h"
 #include "clang/Sema/Lookup.h"
 #include "clang/Sema/ScopeInfo.h"
@@ -28,7 +29,8 @@ static Attr *handleFallThroughAttr(Sema &S, Stmt *St, const AttributeList &A,
     S.Diag(A.getRange().getBegin(), diag::err_fallthrough_attr_wrong_target)
         << St->getLocStart();
     if (isa<SwitchCase>(St)) {
-      SourceLocation L = S.getLocForEndOfToken(Range.getEnd());
+      SourceLocation L = Lexer::getLocForEndOfToken(Range.getEnd(), 0,
+                                  S.getSourceManager(), S.getLangOpts());
       S.Diag(L, diag::note_fallthrough_insert_semi_fixit)
           << FixItHint::CreateInsertion(L, ";");
     }
@@ -38,8 +40,7 @@ static Attr *handleFallThroughAttr(Sema &S, Stmt *St, const AttributeList &A,
     S.Diag(A.getRange().getBegin(), diag::err_fallthrough_attr_outside_switch);
     return 0;
   }
-  return ::new (S.Context) FallThroughAttr(A.getRange(), S.Context,
-                                           A.getAttributeSpellingListIndex());
+  return ::new (S.Context) FallThroughAttr(A.getRange(), S.Context);
 }
 
 

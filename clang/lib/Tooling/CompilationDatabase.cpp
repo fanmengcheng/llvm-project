@@ -43,7 +43,7 @@ CompilationDatabase::loadFromDirectory(StringRef BuildDirectory,
        Ie = CompilationDatabasePluginRegistry::end();
        It != Ie; ++It) {
     std::string DatabaseErrorMessage;
-    std::unique_ptr<CompilationDatabasePlugin> Plugin(It->instantiate());
+    OwningPtr<CompilationDatabasePlugin> Plugin(It->instantiate());
     if (CompilationDatabase *DB =
         Plugin->loadFromDirectory(BuildDirectory, DatabaseErrorMessage))
       return DB;
@@ -157,7 +157,7 @@ public:
   UnusedInputDiagConsumer(DiagnosticConsumer *Other) : Other(Other) {}
 
   virtual void HandleDiagnostic(DiagnosticsEngine::Level DiagLevel,
-                                const Diagnostic &Info) override {
+                                const Diagnostic &Info) LLVM_OVERRIDE {
     if (Info.getID() == clang::diag::warn_drv_input_file_unused) {
       // Arg 1 for this diagnostic is the option that didn't get used.
       UnusedInputs.push_back(Info.getArgStdStr(0));
@@ -213,7 +213,7 @@ static bool stripPositionalArgs(std::vector<const char *> Args,
 
   // Neither clang executable nor default image name are required since the
   // jobs the driver builds will not be executed.
-  std::unique_ptr<driver::Driver> NewDriver(new driver::Driver(
+  OwningPtr<driver::Driver> NewDriver(new driver::Driver(
       /* ClangExecutable= */ "", llvm::sys::getDefaultTargetTriple(),
       /* DefaultImageName= */ "", Diagnostics));
   NewDriver->setCheckInputsExist(false);
@@ -238,11 +238,10 @@ static bool stripPositionalArgs(std::vector<const char *> Args,
 
   // Remove -no-integrated-as; it's not used for syntax checking,
   // and it confuses targets which don't support this option.
-  Args.erase(std::remove_if(Args.begin(), Args.end(),
-                            MatchesAny(std::string("-no-integrated-as"))),
-             Args.end());
+  std::remove_if(Args.begin(), Args.end(),
+                 MatchesAny(std::string("-no-integrated-as")));
 
-  const std::unique_ptr<driver::Compilation> Compilation(
+  const OwningPtr<driver::Compilation> Compilation(
       NewDriver->BuildCompilation(Args));
 
   const driver::JobList &Jobs = Compilation->getJobs();
@@ -304,8 +303,7 @@ FixedCompilationDatabase(Twine Directory, ArrayRef<std::string> CommandLine) {
   std::vector<std::string> ToolCommandLine(1, "clang-tool");
   ToolCommandLine.insert(ToolCommandLine.end(),
                          CommandLine.begin(), CommandLine.end());
-  CompileCommands.push_back(
-      CompileCommand(Directory, std::move(ToolCommandLine)));
+  CompileCommands.push_back(CompileCommand(Directory, ToolCommandLine));
 }
 
 std::vector<CompileCommand>

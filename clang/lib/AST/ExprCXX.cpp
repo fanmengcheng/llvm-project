@@ -108,8 +108,10 @@ UuidAttr *CXXUuidofExpr::GetUuidAttrOfType(QualType QT,
     return UuidForRD;
   }
 
-  for (auto I : RD->redecls())
-    if (auto Uuid = I->getAttr<UuidAttr>())
+  for (CXXRecordDecl::redecl_iterator I = RD->redecls_begin(),
+                                      E = RD->redecls_end();
+       I != E; ++I)
+    if (UuidAttr *Uuid = I->getAttr<UuidAttr>())
       return Uuid;
 
   return 0;
@@ -1289,11 +1291,16 @@ static bool hasOnlyNonStaticMemberFunctions(UnresolvedSetIterator begin,
     NamedDecl *decl = *begin;
     if (isa<UnresolvedUsingValueDecl>(decl))
       return false;
+    if (isa<UsingShadowDecl>(decl))
+      decl = cast<UsingShadowDecl>(decl)->getUnderlyingDecl();
 
     // Unresolved member expressions should only contain methods and
     // method templates.
-    if (cast<CXXMethodDecl>(decl->getUnderlyingDecl()->getAsFunction())
-            ->isStatic())
+    assert(isa<CXXMethodDecl>(decl) || isa<FunctionTemplateDecl>(decl));
+
+    if (isa<FunctionTemplateDecl>(decl))
+      decl = cast<FunctionTemplateDecl>(decl)->getTemplatedDecl();
+    if (cast<CXXMethodDecl>(decl)->isStatic())
       return false;
   } while (++begin != end);
 
@@ -1444,25 +1451,6 @@ FunctionParmPackExpr::CreateEmpty(const ASTContext &Context,
   return new (Context.Allocate(sizeof(FunctionParmPackExpr) +
                                sizeof(ParmVarDecl*) * NumParams))
     FunctionParmPackExpr(QualType(), 0, SourceLocation(), 0, 0);
-}
-
-void MaterializeTemporaryExpr::setExtendingDecl(const ValueDecl *ExtendedBy,
-                                                unsigned ManglingNumber) {
-  // We only need extra state if we have to remember more than just the Stmt.
-  if (!ExtendedBy)
-    return;
-
-  // We may need to allocate extra storage for the mangling number and the
-  // extended-by ValueDecl.
-  if (!State.is<ExtraState *>()) {
-    auto ES = new (ExtendedBy->getASTContext()) ExtraState;
-    ES->Temporary = State.get<Stmt *>();
-    State = ES;
-  }
-
-  auto ES = State.get<ExtraState *>();
-  ES->ExtendingDecl = ExtendedBy;
-  ES->ManglingNumber = ManglingNumber;
 }
 
 TypeTraitExpr::TypeTraitExpr(QualType T, SourceLocation Loc, TypeTrait Kind,

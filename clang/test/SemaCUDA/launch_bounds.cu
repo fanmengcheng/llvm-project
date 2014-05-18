@@ -1,6 +1,6 @@
 // RUN: %clang_cc1 -fsyntax-only -verify %s
 
-#include "Inputs/cuda.h"
+#include "cuda.h"
 
 __launch_bounds__(128, 7) void Test1(void);
 __launch_bounds__(128) void Test2(void);

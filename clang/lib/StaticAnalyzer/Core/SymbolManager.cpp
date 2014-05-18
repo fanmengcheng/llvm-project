@@ -326,7 +326,11 @@ QualType SymbolRegionValue::getType() const {
 }
 
 SymbolManager::~SymbolManager() {
-  llvm::DeleteContainerSeconds(SymbolDependencies);
+  for (SymbolDependTy::const_iterator I = SymbolDependencies.begin(),
+       E = SymbolDependencies.end(); I != E; ++I) {
+    delete I->second;
+  }
+
 }
 
 bool SymbolManager::canSymbolicate(QualType T) {

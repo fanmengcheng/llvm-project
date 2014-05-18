@@ -31,7 +31,6 @@ LogDiagnosticPrinter::~LogDiagnosticPrinter() {
 static StringRef getLevelName(DiagnosticsEngine::Level Level) {
   switch (Level) {
   case DiagnosticsEngine::Ignored: return "ignored";
-  case DiagnosticsEngine::Remark:  return "remark";
   case DiagnosticsEngine::Note:    return "note";
   case DiagnosticsEngine::Warning: return "warning";
   case DiagnosticsEngine::Error:   return "error";
@@ -131,7 +130,7 @@ void LogDiagnosticPrinter::HandleDiagnostic(DiagnosticsEngine::Level Level,
     FileID FID = SM.getMainFileID();
     if (!FID.isInvalid()) {
       const FileEntry *FE = SM.getFileEntryForID(FID);
-      if (FE && FE->isValid())
+      if (FE && FE->getName())
         MainFilename = FE->getName();
     }
   }
@@ -158,7 +157,7 @@ void LogDiagnosticPrinter::HandleDiagnostic(DiagnosticsEngine::Level Level,
       FileID FID = SM.getFileID(Info.getLocation());
       if (!FID.isInvalid()) {
         const FileEntry *FE = SM.getFileEntryForID(FID);
-        if (FE && FE->isValid())
+        if (FE && FE->getName())
           DE.Filename = FE->getName();
       }
     } else {

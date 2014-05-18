@@ -12,6 +12,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#define DEBUG_TYPE "CoreEngine"
+
 #include "clang/StaticAnalyzer/Core/PathSensitive/CoreEngine.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/StmtCXX.h"
@@ -23,8 +25,6 @@
 
 using namespace clang;
 using namespace ento;
-
-#define DEBUG_TYPE "CoreEngine"
 
 STATISTIC(NumSteps,
             "The # of steps executed.");
@@ -43,22 +43,22 @@ namespace {
 class DFS : public WorkList {
   SmallVector<WorkListUnit,20> Stack;
 public:
-  bool hasWork() const override {
+  virtual bool hasWork() const {
     return !Stack.empty();
   }
 
-  void enqueue(const WorkListUnit& U) override {
+  virtual void enqueue(const WorkListUnit& U) {
     Stack.push_back(U);
   }
 
-  WorkListUnit dequeue() override {
+  virtual WorkListUnit dequeue() {
     assert (!Stack.empty());
     const WorkListUnit& U = Stack.back();
     Stack.pop_back(); // This technically "invalidates" U, but we are fine.
     return U;
   }
-
-  bool visitItemsInWorkList(Visitor &V) override {
+  
+  virtual bool visitItemsInWorkList(Visitor &V) {
     for (SmallVectorImpl<WorkListUnit>::iterator
          I = Stack.begin(), E = Stack.end(); I != E; ++I) {
       if (V.visit(*I))
@@ -71,21 +71,21 @@ public:
 class BFS : public WorkList {
   std::deque<WorkListUnit> Queue;
 public:
-  bool hasWork() const override {
+  virtual bool hasWork() const {
     return !Queue.empty();
   }
 
-  void enqueue(const WorkListUnit& U) override {
+  virtual void enqueue(const WorkListUnit& U) {
     Queue.push_back(U);
   }
 
-  WorkListUnit dequeue() override {
+  virtual WorkListUnit dequeue() {
     WorkListUnit U = Queue.front();
     Queue.pop_front();
     return U;
   }
-
-  bool visitItemsInWorkList(Visitor &V) override {
+  
+  virtual bool visitItemsInWorkList(Visitor &V) {
     for (std::deque<WorkListUnit>::iterator
          I = Queue.begin(), E = Queue.end(); I != E; ++I) {
       if (V.visit(*I))
@@ -109,18 +109,18 @@ namespace {
     std::deque<WorkListUnit> Queue;
     SmallVector<WorkListUnit,20> Stack;
   public:
-    bool hasWork() const override {
+    virtual bool hasWork() const {
       return !Queue.empty() || !Stack.empty();
     }
 
-    void enqueue(const WorkListUnit& U) override {
+    virtual void enqueue(const WorkListUnit& U) {
       if (U.getNode()->getLocation().getAs<BlockEntrance>())
         Queue.push_front(U);
       else
         Stack.push_back(U);
     }
 
-    WorkListUnit dequeue() override {
+    virtual WorkListUnit dequeue() {
       // Process all basic blocks to completion.
       if (!Stack.empty()) {
         const WorkListUnit& U = Stack.back();
@@ -135,7 +135,7 @@ namespace {
       Queue.pop_front();
       return U;
     }
-    bool visitItemsInWorkList(Visitor &V) override {
+    virtual bool visitItemsInWorkList(Visitor &V) {
       for (SmallVectorImpl<WorkListUnit>::iterator
            I = Stack.begin(), E = Stack.end(); I != E; ++I) {
         if (V.visit(*I))
@@ -529,11 +529,6 @@ void CoreEngine::enqueueStmtNode(ExplodedNode *N,
 
   if (N->getLocation().getAs<EpsilonPoint>()) {
     WList->enqueue(N, Block, Idx);
-    return;
-  }
-
-  if ((*Block)[Idx].getKind() == CFGElement::NewAllocator) {
-    WList->enqueue(N, Block, Idx+1);
     return;
   }
 

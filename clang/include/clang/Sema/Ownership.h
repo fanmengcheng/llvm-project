@@ -49,7 +49,7 @@ namespace clang {
     typedef llvm::PointerLikeTypeTraits<PtrTy> Traits;
 
   public:
-    OpaquePtr() : Ptr(nullptr) {}
+    OpaquePtr() : Ptr(0) {}
 
     static OpaquePtr make(PtrTy P) { OpaquePtr OP; OP.set(P); return OP; }
 
@@ -79,7 +79,7 @@ namespace clang {
       Ptr = Traits::getAsVoidPointer(P);
     }
 
-    LLVM_EXPLICIT operator bool() const { return Ptr != nullptr; }
+    LLVM_EXPLICIT operator bool() const { return Ptr != 0; }
 
     void *getAsOpaquePtr() const { return Ptr; }
     static OpaquePtr getFromOpaquePtr(void *P) { return OpaquePtr(P); }
@@ -158,7 +158,6 @@ namespace clang {
 
     bool isInvalid() const { return Invalid; }
     bool isUsable() const { return !Invalid && Val; }
-    bool isUnset() const { return !Invalid && !Val; }
 
     PtrTy get() const { return Val; }
     // FIXME: Replace with get.
@@ -200,7 +199,6 @@ namespace clang {
 
     bool isInvalid() const { return PtrWithInvalid & 0x01; }
     bool isUsable() const { return PtrWithInvalid > 0x01; }
-    bool isUnset() const { return PtrWithInvalid == 0; }
 
     PtrTy get() const {
       void *VP = reinterpret_cast<void *>(PtrWithInvalid & ~0x01);

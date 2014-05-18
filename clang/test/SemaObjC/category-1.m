@@ -2,8 +2,7 @@
 
 @interface MyClass1 @end
 
-@protocol p1,p2,p3; // expected-note {{protocol 'p1' has no definition}} \
-                    // expected-note {{protocol 'p2' has no definition}}
+@protocol p1,p2,p3;
 
 @interface MyClass1 (Category1)  <p1> // expected-warning {{cannot find protocol definition for 'p1'}} expected-note {{previous definition is here}}
 @end

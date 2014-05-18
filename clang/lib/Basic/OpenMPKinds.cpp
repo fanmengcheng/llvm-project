@@ -75,22 +75,11 @@ unsigned clang::getOpenMPSimpleClauseType(OpenMPClauseKind Kind,
              .Case(#Name, OMPC_DEFAULT_##Name)
 #include "clang/Basic/OpenMPKinds.def"
              .Default(OMPC_DEFAULT_unknown);
-  case OMPC_proc_bind:
-    return llvm::StringSwitch<OpenMPProcBindClauseKind>(Str)
-#define OPENMP_PROC_BIND_KIND(Name) \
-             .Case(#Name, OMPC_PROC_BIND_##Name)
-#include "clang/Basic/OpenMPKinds.def"
-             .Default(OMPC_PROC_BIND_unknown);
   case OMPC_unknown:
   case OMPC_threadprivate:
-  case OMPC_if:
-  case OMPC_num_threads:
-  case OMPC_safelen:
   case OMPC_private:
   case OMPC_firstprivate:
   case OMPC_shared:
-  case OMPC_linear:
-  case OMPC_copyin:
   case NUM_OPENMP_CLAUSES:
     break;
   }
@@ -109,25 +98,11 @@ const char *clang::getOpenMPSimpleClauseTypeName(OpenMPClauseKind Kind,
 #include "clang/Basic/OpenMPKinds.def"
     }
     llvm_unreachable("Invalid OpenMP 'default' clause type");
-  case OMPC_proc_bind:
-    switch (Type) {
-    case OMPC_PROC_BIND_unknown:
-      return "unknown";
-#define OPENMP_PROC_BIND_KIND(Name) \
-    case OMPC_PROC_BIND_##Name : return #Name;
-#include "clang/Basic/OpenMPKinds.def"
-    }
-    llvm_unreachable("Invalid OpenMP 'proc_bind' clause type");
   case OMPC_unknown:
   case OMPC_threadprivate:
-  case OMPC_if:
-  case OMPC_num_threads:
-  case OMPC_safelen:
   case OMPC_private:
   case OMPC_firstprivate:
   case OMPC_shared:
-  case OMPC_linear:
-  case OMPC_copyin:
   case NUM_OPENMP_CLAUSES:
     break;
   }
@@ -142,15 +117,6 @@ bool clang::isAllowedClauseForDirective(OpenMPDirectiveKind DKind,
   case OMPD_parallel:
     switch (CKind) {
 #define OPENMP_PARALLEL_CLAUSE(Name) \
-    case OMPC_##Name: return true;
-#include "clang/Basic/OpenMPKinds.def"
-    default:
-      break;
-    }
-    break;
-  case OMPD_simd:
-    switch (CKind) {
-#define OPENMP_SIMD_CLAUSE(Name) \
     case OMPC_##Name: return true;
 #include "clang/Basic/OpenMPKinds.def"
     default:

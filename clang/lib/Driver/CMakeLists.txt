@@ -11,7 +11,6 @@ add_clang_library(clangDriver
   Driver.cpp
   DriverOptions.cpp
   Job.cpp
-  Multilib.cpp
   Phases.cpp
   SanitizerArgs.cpp
   Tool.cpp
@@ -20,11 +19,16 @@ add_clang_library(clangDriver
   WindowsToolChain.cpp
   Tools.cpp
   Types.cpp
+  )
 
-  DEPENDS
+add_dependencies(clangDriver
+  ClangAttrList
   ClangCC1AsOptions
+  ClangDiagnosticCommon
+  ClangDiagnosticDriver
   ClangDriverOptions
+  )
 
-  LINK_LIBS
+target_link_libraries(clangDriver
   clangBasic
   )

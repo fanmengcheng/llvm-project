@@ -137,10 +137,6 @@ documentation <LibTooling.html>`_.
       using namespace clang::tooling;
       using namespace llvm;
 
-      // Apply a custom category to all command-line options so that they are the
-      // only ones displayed.
-      static llvm::cl::OptionCategory MyToolCategory("my-tool options");
-
       // CommonOptionsParser declares HelpMessage with a description of the common
       // command-line options related to the compilation database and input files.
       // It's nice to have this help message in all tools.
@@ -150,10 +146,10 @@ documentation <LibTooling.html>`_.
       static cl::extrahelp MoreHelp("\nMore help text...");
 
       int main(int argc, const char **argv) {
-        CommonOptionsParser OptionsParser(argc, argv, MyToolCategory);
+        CommonOptionsParser OptionsParser(argc, argv);
         ClangTool Tool(OptionsParser.getCompilations(),
                        OptionsParser.getSourcePathList());
-        return Tool.run(newFrontendActionFactory<clang::SyntaxOnlyAction>().get());
+        return Tool.run(newFrontendActionFactory<clang::SyntaxOnlyAction>());
       }
 
 And that's it! You can compile our new tool by running ninja from the
@@ -291,7 +287,7 @@ And change ``main()`` to:
 .. code-block:: c++
 
       int main(int argc, const char **argv) {
-        CommonOptionsParser OptionsParser(argc, argv, MyToolCategory);
+        CommonOptionsParser OptionsParser(argc, argv);
         ClangTool Tool(OptionsParser.getCompilations(),
                        OptionsParser.getSourcePathList());
 
@@ -299,7 +295,7 @@ And change ``main()`` to:
         MatchFinder Finder;
         Finder.addMatcher(LoopMatcher, &Printer);
 
-        return Tool.run(newFrontendActionFactory(&Finder).get());
+        return Tool.run(newFrontendActionFactory(&Finder));
       }
 
 Now, you should be able to recompile and run the code to discover for

@@ -106,6 +106,14 @@ void AttributePool::takePool(AttributeList *pool) {
   } while (pool);
 }
 
+AttributeList *
+AttributePool::createIntegerAttribute(ASTContext &C, IdentifierInfo *Name,
+                                      SourceLocation TokLoc, int Arg) {
+  ArgsUnion IArg = IntegerLiteral::Create(C, llvm::APInt(32, (uint64_t) Arg),
+                                      C.IntTy, TokLoc);
+  return create(Name, TokLoc, 0, TokLoc, &IArg, 1, AttributeList::AS_GNU);
+}
+
 #include "clang/Sema/AttrParsedAttrKinds.inc"
 
 AttributeList::Kind AttributeList::getKind(const IdentifierInfo *Name,
@@ -120,7 +128,7 @@ AttributeList::Kind AttributeList::getKind(const IdentifierInfo *Name,
   // Normalize the attribute name, __foo__ becomes foo. This is only allowable
   // for GNU attributes.
   bool IsGNU = SyntaxUsed == AS_GNU || (SyntaxUsed == AS_CXX11 &&
-                                        FullName == "gnu");
+                                        FullName.equals("gnu"));
   if (IsGNU && AttrName.size() >= 4 && AttrName.startswith("__") &&
       AttrName.endswith("__"))
     AttrName = AttrName.slice(2, AttrName.size() - 2);
@@ -150,13 +158,11 @@ struct ParsedAttrInfo {
   unsigned HasCustomParsing : 1;
   unsigned IsTargetSpecific : 1;
   unsigned IsType : 1;
-  unsigned IsKnownToGCC : 1;
 
   bool (*DiagAppertainsToDecl)(Sema &S, const AttributeList &Attr,
                                const Decl *);
   bool (*DiagLangOpts)(Sema &S, const AttributeList &Attr);
-  bool (*ExistsInTarget)(const llvm::Triple &T);
-  unsigned (*SpellingIndexToSemanticSpelling)(const AttributeList &Attr);
+  bool (*ExistsInTarget)(llvm::Triple T);
 };
 
 namespace {
@@ -195,14 +201,6 @@ bool AttributeList::isTypeAttr() const {
   return getInfo(*this).IsType;
 }
 
-bool AttributeList::existsInTarget(const llvm::Triple &T) const {
+bool AttributeList::existsInTarget(llvm::Triple T) const {
   return getInfo(*this).ExistsInTarget(T);
-}
-
-bool AttributeList::isKnownToGCC() const {
-  return getInfo(*this).IsKnownToGCC;
-}
-
-unsigned AttributeList::getSemanticSpelling() const {
-  return getInfo(*this).SpellingIndexToSemanticSpelling(*this);
 }

@@ -60,7 +60,7 @@ namespace {
   class EmptyLookupIterator : public IdentifierIterator
   {
   public:
-    StringRef Next() override { return StringRef(); }
+    virtual StringRef Next() { return StringRef(); }
   };
 }
 
@@ -105,7 +105,6 @@ namespace {
     KEYARC = 0x800,
     KEYNOMS = 0x01000,
     WCHARSUPPORT = 0x02000,
-    HALFSUPPORT = 0x04000,
     KEYALL = (0xffff & ~KEYNOMS) // Because KEYNOMS is used to exclude.
   };
 }
@@ -130,7 +129,6 @@ static void AddKeyword(StringRef Keyword,
   else if (LangOpts.MicrosoftExt && (Flags & KEYMS)) AddResult = 1;
   else if (LangOpts.Borland && (Flags & KEYBORLAND)) AddResult = 1;
   else if (LangOpts.Bool && (Flags & BOOLSUPPORT)) AddResult = 2;
-  else if (LangOpts.Half && (Flags & HALFSUPPORT)) AddResult = 2;
   else if (LangOpts.WChar && (Flags & WCHARSUPPORT)) AddResult = 2;
   else if (LangOpts.AltiVec && (Flags & KEYALTIVEC)) AddResult = 2;
   else if (LangOpts.OpenCL && (Flags & KEYOPENCL)) AddResult = 2;
@@ -141,8 +139,8 @@ static void AddKeyword(StringRef Keyword,
   else if (LangOpts.ObjC2 && (Flags & KEYARC)) AddResult = 2;
   else if (LangOpts.CPlusPlus && (Flags & KEYCXX11)) AddResult = 3;
 
-  // Don't add this keyword under MSVCCompat.
-  if (LangOpts.MSVCCompat && (Flags & KEYNOMS))
+  // Don't add this keyword under MicrosoftMode.
+  if (LangOpts.MicrosoftMode && (Flags & KEYNOMS))
      return;
   // Don't add this keyword if disabled in this language.
   if (AddResult == 0) return;

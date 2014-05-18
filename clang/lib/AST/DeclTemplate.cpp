@@ -472,7 +472,7 @@ TemplateTypeParmDecl::Create(const ASTContext &C, DeclContext *DC,
   TemplateTypeParmDecl *TTPDecl =
     new (C, DC) TemplateTypeParmDecl(DC, KeyLoc, NameLoc, Id, Typename);
   QualType TTPType = C.getTemplateTypeParmType(D, P, ParameterPack, TTPDecl);
-  TTPDecl->setTypeForDecl(TTPType.getTypePtr());
+  TTPDecl->TypeForDecl = TTPType.getTypePtr();
   return TTPDecl;
 }
 
@@ -497,15 +497,15 @@ SourceRange TemplateTypeParmDecl::getSourceRange() const {
 }
 
 unsigned TemplateTypeParmDecl::getDepth() const {
-  return getTypeForDecl()->getAs<TemplateTypeParmType>()->getDepth();
+  return TypeForDecl->getAs<TemplateTypeParmType>()->getDepth();
 }
 
 unsigned TemplateTypeParmDecl::getIndex() const {
-  return getTypeForDecl()->getAs<TemplateTypeParmType>()->getIndex();
+  return TypeForDecl->getAs<TemplateTypeParmType>()->getIndex();
 }
 
 bool TemplateTypeParmDecl::isParameterPack() const {
-  return getTypeForDecl()->getAs<TemplateTypeParmType>()->isParameterPack();
+  return TypeForDecl->getAs<TemplateTypeParmType>()->isParameterPack();
 }
 
 //===----------------------------------------------------------------------===//
@@ -941,8 +941,11 @@ VarTemplateDecl *VarTemplateDecl::getDefinition() {
 VarTemplateDecl *VarTemplateDecl::Create(ASTContext &C, DeclContext *DC,
                                          SourceLocation L, DeclarationName Name,
                                          TemplateParameterList *Params,
-                                         VarDecl *Decl) {
-  return new (C, DC) VarTemplateDecl(DC, L, Name, Params, Decl);
+                                         NamedDecl *Decl,
+                                         VarTemplateDecl *PrevDecl) {
+  VarTemplateDecl *New = new (C, DC) VarTemplateDecl(DC, L, Name, Params, Decl);
+  New->setPreviousDecl(PrevDecl);
+  return New;
 }
 
 VarTemplateDecl *VarTemplateDecl::CreateDeserialized(ASTContext &C,

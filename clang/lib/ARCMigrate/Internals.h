@@ -95,8 +95,6 @@ public:
     return CapturedDiags.hasDiagnostic(IDs, range);
   }
 
-  DiagnosticBuilder report(SourceLocation loc, unsigned diagId,
-                           SourceRange range = SourceRange());
   void reportError(StringRef error, SourceLocation loc,
                    SourceRange range = SourceRange());
   void reportWarning(StringRef warning, SourceLocation loc,
@@ -163,6 +161,8 @@ public:
   const CapturedDiagList &getDiags() const { return CapturedDiags; }
 
   bool isGCMigration() const { return OrigGCMode != LangOptions::NonGC; }
+  bool noNSAllocReallocError() const { return MigOptions.NoNSAllocReallocError; }
+  void setNSAllocReallocError(bool val) { MigOptions.NoNSAllocReallocError = val; }
   bool noFinalizeRemoval() const { return MigOptions.NoFinalizeRemoval; }
   void setNoFinalizeRemoval(bool val) {MigOptions.NoFinalizeRemoval = val; }
 

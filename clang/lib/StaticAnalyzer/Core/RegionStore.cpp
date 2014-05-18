@@ -372,9 +372,9 @@ public:
   ///  version of that lvalue (i.e., a pointer to the first element of
   ///  the array).  This is called by ExprEngine when evaluating
   ///  casts from arrays to pointers.
-  SVal ArrayToPointer(Loc Array, QualType ElementTy) override;
+  SVal ArrayToPointer(Loc Array, QualType ElementTy);
 
-  StoreRef getInitialStore(const LocationContext *InitLoc) override {
+  StoreRef getInitialStore(const LocationContext *InitLoc) {
     return StoreRef(RBFactory.getEmptyMap().getRootWithoutRetain(), *this);
   }
 
@@ -396,24 +396,24 @@ public:
                              InvalidatedSymbols &IS,
                              RegionAndSymbolInvalidationTraits &ITraits,
                              InvalidatedRegions *Invalidated,
-                             InvalidatedRegions *InvalidatedTopLevel) override;
+                             InvalidatedRegions *InvalidatedTopLevel);
 
   bool scanReachableSymbols(Store S, const MemRegion *R,
-                            ScanReachableSymbols &Callbacks) override;
+                            ScanReachableSymbols &Callbacks);
 
   RegionBindingsRef removeSubRegionBindings(RegionBindingsConstRef B,
                                             const SubRegion *R);
 
 public: // Part of public interface to class.
 
-  StoreRef Bind(Store store, Loc LV, SVal V) override {
+  virtual StoreRef Bind(Store store, Loc LV, SVal V) {
     return StoreRef(bind(getRegionBindings(store), LV, V).asStore(), *this);
   }
 
   RegionBindingsRef bind(RegionBindingsConstRef B, Loc LV, SVal V);
 
   // BindDefault is only used to initialize a region with a default value.
-  StoreRef BindDefault(Store store, const MemRegion *R, SVal V) override {
+  StoreRef BindDefault(Store store, const MemRegion *R, SVal V) {
     RegionBindingsRef B = getRegionBindings(store);
     assert(!B.lookup(R, BindingKey::Direct));
 
@@ -467,20 +467,20 @@ public: // Part of public interface to class.
   /// \brief Create a new store with the specified binding removed.
   /// \param ST the original store, that is the basis for the new store.
   /// \param L the location whose binding should be removed.
-  StoreRef killBinding(Store ST, Loc L) override;
+  virtual StoreRef killBinding(Store ST, Loc L);
 
-  void incrementReferenceCount(Store store) override {
+  void incrementReferenceCount(Store store) {
     getRegionBindings(store).manualRetain();    
   }
   
   /// If the StoreManager supports it, decrement the reference count of
   /// the specified Store object.  If the reference count hits 0, the memory
   /// associated with the object is recycled.
-  void decrementReferenceCount(Store store) override {
+  void decrementReferenceCount(Store store) {
     getRegionBindings(store).manualRelease();
   }
-
-  bool includedInBindings(Store store, const MemRegion *region) const override;
+  
+  bool includedInBindings(Store store, const MemRegion *region) const;
 
   /// \brief Return the value bound to specified location in a given state.
   ///
@@ -495,7 +495,7 @@ public: // Part of public interface to class.
   ///       return undefined
   ///     else
   ///       return symbolic
-  SVal getBinding(Store S, Loc L, QualType T) override {
+  virtual SVal getBinding(Store S, Loc L, QualType T) {
     return getBinding(getRegionBindings(S), L, T);
   }
 
@@ -560,16 +560,15 @@ public: // Part of public interface to class.
   /// removeDeadBindings - Scans the RegionStore of 'state' for dead values.
   ///  It returns a new Store with these values removed.
   StoreRef removeDeadBindings(Store store, const StackFrameContext *LCtx,
-                              SymbolReaper& SymReaper) override;
-
+                              SymbolReaper& SymReaper);
+  
   //===------------------------------------------------------------------===//
   // Region "extents".
   //===------------------------------------------------------------------===//
 
   // FIXME: This method will soon be eliminated; see the note in Store.h.
   DefinedOrUnknownSVal getSizeInElements(ProgramStateRef state,
-                                         const MemRegion* R,
-                                         QualType EleTy) override;
+                                         const MemRegion* R, QualType EleTy);
 
   //===------------------------------------------------------------------===//
   // Utility methods.
@@ -582,9 +581,9 @@ public: // Part of public interface to class.
   }
 
   void print(Store store, raw_ostream &Out, const char* nl,
-             const char *sep) override;
+             const char *sep);
 
-  void iterBindings(Store store, BindingsHandler& f) override {
+  void iterBindings(Store store, BindingsHandler& f) {
     RegionBindingsRef B = getRegionBindings(store);
     for (RegionBindingsRef::iterator I = B.begin(), E = B.end(); I != E; ++I) {
       const ClusterBindings &Cluster = I.getData();
@@ -1627,7 +1626,7 @@ RegionStoreManager::getBindingForFieldOrElementCommon(RegionBindingsConstRef B,
   // Lazy binding?
   Store lazyBindingStore = NULL;
   const SubRegion *lazyBindingRegion = NULL;
-  std::tie(lazyBindingStore, lazyBindingRegion) = findLazyBinding(B, R, R);
+  llvm::tie(lazyBindingStore, lazyBindingRegion) = findLazyBinding(B, R, R);
   if (lazyBindingRegion)
     return getLazyBinding(lazyBindingRegion,
                           getRegionBindings(lazyBindingStore));
@@ -1788,7 +1787,7 @@ RegionStoreManager::getInterestingValues(nonloc::LazyCompoundVal LCV) {
   // values to return.
   const ClusterBindings *Cluster = B.lookup(LazyR->getBaseRegion());
   if (!Cluster)
-    return (LazyBindingsMap[LCV.getCVData()] = std::move(List));
+    return (LazyBindingsMap[LCV.getCVData()] = llvm_move(List));
 
   SmallVector<BindingPair, 32> Bindings;
   collectSubRegionBindings(Bindings, svalBuilder, *Cluster, LazyR,
@@ -1810,7 +1809,7 @@ RegionStoreManager::getInterestingValues(nonloc::LazyCompoundVal LCV) {
     List.push_back(V);
   }
 
-  return (LazyBindingsMap[LCV.getCVData()] = std::move(List));
+  return (LazyBindingsMap[LCV.getCVData()] = llvm_move(List));
 }
 
 NonLoc RegionStoreManager::createLazyBinding(RegionBindingsConstRef B,
@@ -2063,7 +2062,9 @@ RegionStoreManager::tryBindSmallStruct(RegionBindingsConstRef B,
     if (Class->getNumBases() != 0 || Class->getNumVBases() != 0)
       return None;
 
-  for (const auto *FD : RD->fields()) {
+  for (RecordDecl::field_iterator I = RD->field_begin(), E = RD->field_end();
+       I != E; ++I) {
+    const FieldDecl *FD = *I;
     if (FD->isUnnamedBitfield())
       continue;
 
@@ -2076,7 +2077,7 @@ RegionStoreManager::tryBindSmallStruct(RegionBindingsConstRef B,
     if (!(Ty->isScalarType() || Ty->isReferenceType()))
       return None;
 
-    Fields.push_back(FD);
+    Fields.push_back(*I);
   }
 
   RegionBindingsRef NewB = B;

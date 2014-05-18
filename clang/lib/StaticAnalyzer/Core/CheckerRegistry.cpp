@@ -84,10 +84,10 @@ void CheckerRegistry::addChecker(InitializationFunction fn, StringRef name,
 
   // Record the presence of the checker in its packages.
   StringRef packageName, leafName;
-  std::tie(packageName, leafName) = name.rsplit(PackageSeparator);
+  llvm::tie(packageName, leafName) = name.rsplit(PackageSeparator);
   while (!leafName.empty()) {
     Packages[packageName] += 1;
-    std::tie(packageName, leafName) = packageName.rsplit(PackageSeparator);
+    llvm::tie(packageName, leafName) = packageName.rsplit(PackageSeparator);
   }
 }
 
@@ -106,7 +106,6 @@ void CheckerRegistry::initializeManager(CheckerManager &checkerMgr,
   // Initialize the CheckerManager with all enabled checkers.
   for (CheckerInfoSet::iterator
          i = enabledCheckers.begin(), e = enabledCheckers.end(); i != e; ++i) {
-    checkerMgr.setCurrentCheckName(CheckName((*i)->FullName));
     (*i)->Initialize(checkerMgr);
   }
 }

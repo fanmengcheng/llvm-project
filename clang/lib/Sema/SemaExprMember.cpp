@@ -292,7 +292,7 @@ CheckExtVectorComponent(Sema &S, QualType baseType, ExprValueKind &VK,
 
   // This flag determines whether or not CompName has an 's' char prefix,
   // indicating that it is a string of hex values to be used as vector indices.
-  bool HexSwizzle = (*compStr == 's' || *compStr == 'S') && compStr[1];
+  bool HexSwizzle = *compStr == 's' || *compStr == 'S';
 
   bool HasRepeated = false;
   bool HasIndex[16] = {};
@@ -384,8 +384,9 @@ static Decl *FindGetterSetterNameDeclFromProtocolList(const ObjCProtocolDecl*PDe
   if (ObjCMethodDecl *OMD = PDecl->getInstanceMethod(Sel))
     return OMD;
 
-  for (const auto *I : PDecl->protocols()) {
-    if (Decl *D = FindGetterSetterNameDeclFromProtocolList(I, Member, Sel,
+  for (ObjCProtocolDecl::protocol_iterator I = PDecl->protocol_begin(),
+       E = PDecl->protocol_end(); I != E; ++I) {
+    if (Decl *D = FindGetterSetterNameDeclFromProtocolList(*I, Member, Sel,
                                                            Context))
       return D;
   }
@@ -398,22 +399,25 @@ static Decl *FindGetterSetterNameDecl(const ObjCObjectPointerType *QIdTy,
                                       ASTContext &Context) {
   // Check protocols on qualified interfaces.
   Decl *GDecl = 0;
-  for (const auto *I : QIdTy->quals()) {
+  for (ObjCObjectPointerType::qual_iterator I = QIdTy->qual_begin(),
+       E = QIdTy->qual_end(); I != E; ++I) {
     if (Member)
-      if (ObjCPropertyDecl *PD = I->FindPropertyDeclaration(Member)) {
+      if (ObjCPropertyDecl *PD = (*I)->FindPropertyDeclaration(Member)) {
         GDecl = PD;
         break;
       }
     // Also must look for a getter or setter name which uses property syntax.
-    if (ObjCMethodDecl *OMD = I->getInstanceMethod(Sel)) {
+    if (ObjCMethodDecl *OMD = (*I)->getInstanceMethod(Sel)) {
       GDecl = OMD;
       break;
     }
   }
   if (!GDecl) {
-    for (const auto *I : QIdTy->quals()) {
+    for (ObjCObjectPointerType::qual_iterator I = QIdTy->qual_begin(),
+         E = QIdTy->qual_end(); I != E; ++I) {
       // Search in the protocol-qualifier list of current protocol.
-      GDecl = FindGetterSetterNameDeclFromProtocolList(I, Member, Sel, Context);
+      GDecl = FindGetterSetterNameDeclFromProtocolList(*I, Member, Sel, 
+                                                       Context);
       if (GDecl)
         return GDecl;
     }
@@ -542,7 +546,7 @@ class RecordMemberExprValidatorCCC : public CorrectionCandidateCallback {
   explicit RecordMemberExprValidatorCCC(const RecordType *RTy)
       : Record(RTy->getDecl()) {}
 
-  bool ValidateCandidate(const TypoCorrection &candidate) override {
+  virtual bool ValidateCandidate(const TypoCorrection &candidate) {
     NamedDecl *ND = candidate.getCorrectionDecl();
     // Don't accept candidates that cannot be member functions, constants,
     // variables, or templates.
@@ -555,9 +559,11 @@ class RecordMemberExprValidatorCCC : public CorrectionCandidateCallback {
 
     if (const CXXRecordDecl *RD = dyn_cast<CXXRecordDecl>(Record)) {
       // Accept candidates that occur in any of the current class' base classes.
-      for (const auto &BS : RD->bases()) {
+      for (CXXRecordDecl::base_class_const_iterator BS = RD->bases_begin(),
+                                                    BSEnd = RD->bases_end();
+           BS != BSEnd; ++BS) {
         if (const RecordType *BSTy = dyn_cast_or_null<RecordType>(
-                BS.getType().getTypePtrOrNull())) {
+                BS->getType().getTypePtrOrNull())) {
           if (BSTy->getDecl()->containsDecl(ND))
             return true;
         }
@@ -627,8 +633,7 @@ LookupMemberExprInRecord(Sema &SemaRef, LookupResult &R,
   RecordMemberExprValidatorCCC Validator(RTy);
   TypoCorrection Corrected = SemaRef.CorrectTypo(R.getLookupNameInfo(),
                                                  R.getLookupKind(), NULL,
-                                                 &SS, Validator,
-                                                 Sema::CTK_ErrorRecovery, DC);
+                                                 &SS, Validator, DC);
   R.clear();
   if (Corrected.isResolved() && !Corrected.isKeyword()) {
     R.setLookupName(Corrected.getCorrection());
@@ -806,6 +811,8 @@ Sema::BuildAnonymousStructUnionMemberReference(const CXXScopeSpec &SS,
     if (!result)
       return ExprError();
 
+    baseObjectIsPointer = false;
+    
     // FIXME: check qualified member access
   }
   
@@ -1271,8 +1278,7 @@ Sema::LookupMemberExpr(LookupResult &R, ExprResult &BaseExpr,
       Validator.IsObjCIvarLookup = IsArrow;
       if (TypoCorrection Corrected = CorrectTypo(R.getLookupNameInfo(),
                                                  LookupMemberName, NULL, NULL,
-                                                 Validator, CTK_ErrorRecovery,
-                                                 IDecl)) {
+                                                 Validator, IDecl)) {
         IV = Corrected.getCorrectionDeclAs<ObjCIvarDecl>();
         diagnoseTypo(Corrected,
                      PDiag(diag::err_typecheck_member_reference_ivar_suggest)
@@ -1746,7 +1752,14 @@ Sema::BuildImplicitMemberExpr(const CXXScopeSpec &SS,
   assert(!R.empty() && !R.isAmbiguous());
   
   SourceLocation loc = R.getNameLoc();
-
+  
+  // We may have found a field within an anonymous union or struct
+  // (C++ [class.union]).
+  // FIXME: template-ids inside anonymous structs?
+  if (IndirectFieldDecl *FD = R.getAsSingle<IndirectFieldDecl>())
+    return BuildAnonymousStructUnionMemberReference(SS, R.getNameLoc(), FD,
+                                                    R.begin().getPair());
+  
   // If this is known to be an instance access, go ahead and build an
   // implicit 'this' expression now.
   // 'this' expression now.

@@ -82,6 +82,7 @@ private:
   void parseStructuralElement();
   bool tryToParseBracedList();
   bool parseBracedList(bool ContinueOnSemicolons = false);
+  void parseReturn();
   void parseParens();
   void parseSquare();
   void parseIfThenElse();
@@ -107,22 +108,12 @@ private:
   void flushComments(bool NewlineBeforeNext);
   void pushToken(FormatToken *Tok);
   void calculateBraceTypes();
-
-  // Marks a conditional compilation edge (for example, an '#if', '#ifdef',
-  // '#else' or merge conflict marker). If 'Unreachable' is true, assumes
-  // this branch either cannot be taken (for example '#if false'), or should
-  // not be taken in this round.
-  void conditionalCompilationCondition(bool Unreachable);
-  void conditionalCompilationStart(bool Unreachable);
-  void conditionalCompilationAlternative();
-  void conditionalCompilationEnd();
-
-  bool isOnNewLine(const FormatToken& FormatTok);
+  void pushPPConditional();
 
   // FIXME: We are constantly running into bugs where Line.Level is incorrectly
   // subtracted from beyond 0. Introduce a method to subtract from Line.Level
   // and use that everywhere in the Parser.
-  std::unique_ptr<UnwrappedLine> Line;
+  OwningPtr<UnwrappedLine> Line;
 
   // Comments are sorted into unwrapped lines by whether they are in the same
   // line as the previous token, or not. If not, they belong to the next token.

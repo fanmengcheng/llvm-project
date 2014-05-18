@@ -18,10 +18,7 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/ManagedStatic.h"
-#include <set>
 #include <utility>
-
-using namespace clang::ast_type_traits;
 
 namespace clang {
 namespace ast_matchers {
@@ -80,6 +77,7 @@ RegistryMaps::RegistryMaps() {
   // findAll
   //
   // Other:
+  // loc
   // equals
   // equalsNode
 
@@ -88,7 +86,6 @@ RegistryMaps::RegistryMaps() {
   REGISTER_OVERLOADED_2(hasType);
   REGISTER_OVERLOADED_2(isDerivedFrom);
   REGISTER_OVERLOADED_2(isSameOrDerivedFrom);
-  REGISTER_OVERLOADED_2(loc);
   REGISTER_OVERLOADED_2(pointsTo);
   REGISTER_OVERLOADED_2(references);
   REGISTER_OVERLOADED_2(thisPointerType);
@@ -149,7 +146,6 @@ RegistryMaps::RegistryMaps() {
   REGISTER_MATCHER(equalsBoundNode);
   REGISTER_MATCHER(explicitCastExpr);
   REGISTER_MATCHER(expr);
-  REGISTER_MATCHER(exprWithCleanups);
   REGISTER_MATCHER(fieldDecl);
   REGISTER_MATCHER(floatLiteral);
   REGISTER_MATCHER(forEach);
@@ -229,11 +225,9 @@ RegistryMaps::RegistryMaps() {
   REGISTER_MATCHER(isConstQualified);
   REGISTER_MATCHER(isDefinition);
   REGISTER_MATCHER(isExplicitTemplateSpecialization);
-  REGISTER_MATCHER(isExpr);
   REGISTER_MATCHER(isExternC);
   REGISTER_MATCHER(isImplicit);
   REGISTER_MATCHER(isInteger);
-  REGISTER_MATCHER(isListInitialization);
   REGISTER_MATCHER(isOverride);
   REGISTER_MATCHER(isPrivate);
   REGISTER_MATCHER(isProtected);
@@ -325,158 +319,17 @@ static llvm::ManagedStatic<RegistryMaps> RegistryData;
 } // anonymous namespace
 
 // static
-llvm::Optional<MatcherCtor> Registry::lookupMatcherCtor(StringRef MatcherName) {
+llvm::Optional<MatcherCtor>
+Registry::lookupMatcherCtor(StringRef MatcherName, const SourceRange &NameRange,
+                            Diagnostics *Error) {
   ConstructorMap::const_iterator it =
       RegistryData->constructors().find(MatcherName);
-  return it == RegistryData->constructors().end()
-             ? llvm::Optional<MatcherCtor>()
-             : it->second;
-}
-
-namespace {
-
-llvm::raw_ostream &operator<<(llvm::raw_ostream &OS,
-                              const std::set<ASTNodeKind> &KS) {
-  unsigned Count = 0;
-  for (std::set<ASTNodeKind>::const_iterator I = KS.begin(), E = KS.end();
-       I != E; ++I) {
-    if (I != KS.begin())
-      OS << "|";
-    if (Count++ == 3) {
-      OS << "...";
-      break;
-    }
-    OS << *I;
-  }
-  return OS;
-}
-
-struct ReverseSpecificityThenName {
-  bool operator()(const std::pair<unsigned, std::string> &A,
-                  const std::pair<unsigned, std::string> &B) const {
-    return A.first > B.first || (A.first == B.first && A.second < B.second);
-  }
-};
-
-}
-
-std::vector<MatcherCompletion> Registry::getCompletions(
-    llvm::ArrayRef<std::pair<MatcherCtor, unsigned> > Context) {
-  ASTNodeKind InitialTypes[] = {
-    ASTNodeKind::getFromNodeKind<Decl>(),
-    ASTNodeKind::getFromNodeKind<QualType>(),
-    ASTNodeKind::getFromNodeKind<Type>(),
-    ASTNodeKind::getFromNodeKind<Stmt>(),
-    ASTNodeKind::getFromNodeKind<NestedNameSpecifier>(),
-    ASTNodeKind::getFromNodeKind<NestedNameSpecifierLoc>(),
-    ASTNodeKind::getFromNodeKind<TypeLoc>()
-  };
-  llvm::ArrayRef<ASTNodeKind> InitialTypesRef(InitialTypes);
-
-  // Starting with the above seed of acceptable top-level matcher types, compute
-  // the acceptable type set for the argument indicated by each context element.
-  std::set<ASTNodeKind> TypeSet(InitialTypesRef.begin(), InitialTypesRef.end());
-  for (llvm::ArrayRef<std::pair<MatcherCtor, unsigned> >::iterator
-           CtxI = Context.begin(),
-           CtxE = Context.end();
-       CtxI != CtxE; ++CtxI) {
-    std::vector<internal::ArgKind> NextTypeSet;
-    for (std::set<ASTNodeKind>::iterator I = TypeSet.begin(), E = TypeSet.end();
-         I != E; ++I) {
-      if (CtxI->first->isConvertibleTo(*I) &&
-          (CtxI->first->isVariadic() ||
-           CtxI->second < CtxI->first->getNumArgs()))
-        CtxI->first->getArgKinds(*I, CtxI->second, NextTypeSet);
-    }
-    TypeSet.clear();
-    for (std::vector<internal::ArgKind>::iterator I = NextTypeSet.begin(),
-                                                  E = NextTypeSet.end();
-         I != E; ++I) {
-      if (I->getArgKind() == internal::ArgKind::AK_Matcher)
-        TypeSet.insert(I->getMatcherKind());
-    }
+  if (it == RegistryData->constructors().end()) {
+    Error->addError(NameRange, Error->ET_RegistryNotFound) << MatcherName;
+    return llvm::Optional<MatcherCtor>();
   }
 
-  typedef std::map<std::pair<unsigned, std::string>, MatcherCompletion,
-                   ReverseSpecificityThenName> CompletionsTy;
-  CompletionsTy Completions;
-
-  // TypeSet now contains the list of acceptable types for the argument we are
-  // completing.  Search the registry for acceptable matchers.
-  for (ConstructorMap::const_iterator I = RegistryData->constructors().begin(),
-                                      E = RegistryData->constructors().end();
-       I != E; ++I) {
-    std::set<ASTNodeKind> RetKinds;
-    unsigned NumArgs = I->second->isVariadic() ? 1 : I->second->getNumArgs();
-    bool IsPolymorphic = I->second->isPolymorphic();
-    std::vector<std::vector<internal::ArgKind> > ArgsKinds(NumArgs);
-    unsigned MaxSpecificity = 0;
-    for (std::set<ASTNodeKind>::iterator TI = TypeSet.begin(),
-                                         TE = TypeSet.end();
-         TI != TE; ++TI) {
-      unsigned Specificity;
-      ASTNodeKind LeastDerivedKind;
-      if (I->second->isConvertibleTo(*TI, &Specificity, &LeastDerivedKind)) {
-        if (MaxSpecificity < Specificity)
-          MaxSpecificity = Specificity;
-        RetKinds.insert(LeastDerivedKind);
-        for (unsigned Arg = 0; Arg != NumArgs; ++Arg)
-          I->second->getArgKinds(*TI, Arg, ArgsKinds[Arg]);
-        if (IsPolymorphic)
-          break;
-      }
-    }
-
-    if (!RetKinds.empty() && MaxSpecificity > 0) {
-      std::string Decl;
-      llvm::raw_string_ostream OS(Decl);
-
-      if (IsPolymorphic) {
-        OS << "Matcher<T> " << I->first() << "(Matcher<T>";
-      } else {
-        OS << "Matcher<" << RetKinds << "> " << I->first() << "(";
-        for (std::vector<std::vector<internal::ArgKind> >::iterator
-                 KI = ArgsKinds.begin(),
-                 KE = ArgsKinds.end();
-             KI != KE; ++KI) {
-          if (KI != ArgsKinds.begin())
-            OS << ", ";
-          // This currently assumes that a matcher may not overload a
-          // non-matcher, and all non-matcher overloads have identical
-          // arguments.
-          if ((*KI)[0].getArgKind() == internal::ArgKind::AK_Matcher) {
-            std::set<ASTNodeKind> MatcherKinds;
-            std::transform(
-                KI->begin(), KI->end(),
-                std::inserter(MatcherKinds, MatcherKinds.end()),
-                std::mem_fun_ref(&internal::ArgKind::getMatcherKind));
-            OS << "Matcher<" << MatcherKinds << ">";
-          } else {
-            OS << (*KI)[0].asString();
-          }
-        }
-      }
-      if (I->second->isVariadic())
-        OS << "...";
-      OS << ")";
-
-      std::string TypedText = I->first();
-      TypedText += "(";
-      if (ArgsKinds.empty())
-        TypedText += ")";
-      else if (ArgsKinds[0][0].getArgKind() == internal::ArgKind::AK_String)
-        TypedText += "\"";
-
-      Completions[std::make_pair(MaxSpecificity, I->first())] =
-          MatcherCompletion(TypedText, OS.str());
-    }
-  }
-
-  std::vector<MatcherCompletion> RetVal;
-  for (CompletionsTy::iterator I = Completions.begin(), E = Completions.end();
-       I != E; ++I)
-    RetVal.push_back(I->second);
-  return RetVal;
+  return it->second;
 }
 
 // static

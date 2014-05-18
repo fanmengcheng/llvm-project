@@ -213,6 +213,9 @@ namespace clang {
       /// types and decls used within the AST file.
       DECLTYPES_BLOCK_ID,
 
+      /// \brief The block containing DECL_UPDATES records.
+      DECL_UPDATES_BLOCK_ID,
+      
       /// \brief The block containing the detailed preprocessing record.
       PREPROCESSOR_DETAIL_BLOCK_ID,
       
@@ -281,14 +284,7 @@ namespace clang {
       HEADER_SEARCH_OPTIONS = 11,
 
       /// \brief Record code for the preprocessor options table.
-      PREPROCESSOR_OPTIONS = 12,
-
-      /// \brief Record code for the module name.
-      MODULE_NAME = 13,
-
-      /// \brief Record code for the module map file that was used to build this
-      /// AST file.
-      MODULE_MAP_FILE = 14
+      PREPROCESSOR_OPTIONS = 12
     };
 
     /// \brief Record types that occur within the input-files block
@@ -353,15 +349,15 @@ namespace clang {
       /// IDs).
       IDENTIFIER_TABLE = 5,
 
-      /// \brief Record code for the array of eagerly deserialized decls.
+      /// \brief Record code for the array of external definitions.
       ///
-      /// The AST file contains a list of all of the declarations that should be
-      /// eagerly deserialized present within the parsed headers, stored as an
-      /// array of declaration IDs. These declarations will be
+      /// The AST file contains a list of all of the unnamed external
+      /// definitions present within the parsed headers, stored as an
+      /// array of declaration IDs. These external definitions will be
       /// reported to the AST consumer after the AST file has been
       /// read, since their presence can affect the semantics of the
       /// program (e.g., for code generation).
-      EAGERLY_DESERIALIZED_DECLS = 6,
+      EXTERNAL_DEFINITIONS = 6,
 
       /// \brief Record code for the set of non-builtin, special
       /// types.
@@ -746,7 +742,11 @@ namespace clang {
       /// \brief OpenCL event type.
       PREDEF_TYPE_EVENT_ID      = 44,
       /// \brief OpenCL sampler type.
-      PREDEF_TYPE_SAMPLER_ID    = 45
+      PREDEF_TYPE_SAMPLER_ID    = 45,
+      /// \brief The '__uintcap_t' type.
+      PREDEF_TYPE_UINTCAP_ID    = 46,
+      /// \brief The '__intcap_t' type.
+      PREDEF_TYPE_INTCAP_ID     = 47
     };
 
     /// \brief The number of predefined type IDs that are reserved for
@@ -1337,7 +1337,6 @@ namespace clang {
 
       // OpenMP drectives
       STMT_OMP_PARALLEL_DIRECTIVE,
-      STMT_OMP_SIMD_DIRECTIVE,
 
       // ARC
       EXPR_OBJC_BRIDGED_CAST,     // ObjCBridgedCastExpr

@@ -264,8 +264,9 @@ public:
   }
   
   bool VisitCompoundStmt(CompoundStmt *S) {
-    for (auto *I : S->body())
-      mark(I);
+    for (CompoundStmt::body_iterator
+        I = S->body_begin(), E = S->body_end(); I != E; ++I)
+      mark(*I);
     return true;
   }
   
@@ -537,12 +538,15 @@ static void GCRewriteFinalize(MigrationPass &pass) {
   impl_iterator;
   for (impl_iterator I = impl_iterator(DC->decls_begin()),
        E = impl_iterator(DC->decls_end()); I != E; ++I) {
-    for (const auto *MD : I->instance_methods()) {
+    for (ObjCImplementationDecl::instmeth_iterator
+         MI = I->instmeth_begin(),
+         ME = I->instmeth_end(); MI != ME; ++MI) {
+      ObjCMethodDecl *MD = *MI;
       if (!MD->hasBody())
         continue;
       
       if (MD->isInstanceMethod() && MD->getSelector() == FinalizeSel) {
-        const ObjCMethodDecl *FinalizeM = MD;
+        ObjCMethodDecl *FinalizeM = MD;
         Transaction Trans(TA);
         TA.insert(FinalizeM->getSourceRange().getBegin(), 
                   "#if !__has_feature(objc_arc)\n");

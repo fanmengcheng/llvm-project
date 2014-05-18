@@ -31,8 +31,8 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/IR/ValueHandle.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ValueHandle.h"
 
 namespace llvm {
   class BasicBlock;
@@ -195,8 +195,6 @@ public:
 
     /// \brief Emit the captured statement body.
     virtual void EmitBody(CodeGenFunction &CGF, Stmt *S) {
-      RegionCounter Cnt = CGF.getPGORegionCounter(S);
-      Cnt.beginRegion(CGF.Builder);
       CGF.EmitStmt(S);
     }
 
@@ -690,8 +688,8 @@ public:
       // act exactly like l-values but are formally required to be
       // r-values in C.
       return expr->isGLValue() ||
-             expr->getType()->isFunctionType() ||
-             hasAggregateEvaluationKind(expr->getType());
+             expr->getType()->isRecordType() ||
+             expr->getType()->isFunctionType();
     }
 
     static OpaqueValueMappingData bind(CodeGenFunction &CGF,
@@ -820,13 +818,18 @@ private:
   llvm::DenseMap<const LabelDecl*, JumpDest> LabelMap;
 
   // BreakContinueStack - This keeps track of where break and continue
-  // statements should jump to.
+  // statements should jump to and the associated base counter for
+  // instrumentation.
   struct BreakContinue {
-    BreakContinue(JumpDest Break, JumpDest Continue)
-      : BreakBlock(Break), ContinueBlock(Continue) {}
+    BreakContinue(JumpDest Break, JumpDest Continue, RegionCounter *LoopCnt,
+                  bool CountBreak = true)
+      : BreakBlock(Break), ContinueBlock(Continue), LoopCnt(LoopCnt),
+        CountBreak(CountBreak) {}
 
     JumpDest BreakBlock;
     JumpDest ContinueBlock;
+    RegionCounter *LoopCnt;
+    bool CountBreak;
   };
   SmallVector<BreakContinue, 8> BreakContinueStack;
 
@@ -1034,7 +1037,6 @@ public:
   void pushLifetimeExtendedDestroy(CleanupKind kind, llvm::Value *addr,
                                    QualType type, Destroyer *destroyer,
                                    bool useEHCleanupForArray);
-  void pushStackRestore(CleanupKind kind, llvm::Value *SPMem);
   void emitDestroy(llvm::Value *addr, QualType type, Destroyer *destroyer,
                    bool useEHCleanupForArray);
   llvm::Function *generateDestroyHelper(llvm::Constant *addr, QualType type,
@@ -1142,22 +1144,17 @@ public:
 
   void GenerateCode(GlobalDecl GD, llvm::Function *Fn,
                     const CGFunctionInfo &FnInfo);
-  /// \brief Emit code for the start of a function.
-  /// \param Loc       The location to be associated with the function.
-  /// \param StartLoc  The location of the function body.
   void StartFunction(GlobalDecl GD,
                      QualType RetTy,
                      llvm::Function *Fn,
                      const CGFunctionInfo &FnInfo,
                      const FunctionArgList &Args,
-                     SourceLocation Loc = SourceLocation(),
-                     SourceLocation StartLoc = SourceLocation());
+                     SourceLocation StartLoc);
 
   void EmitConstructorBody(FunctionArgList &Args);
   void EmitDestructorBody(FunctionArgList &Args);
   void emitImplicitAssignmentOperatorBody(FunctionArgList &Args);
   void EmitFunctionBody(FunctionArgList &Args, const Stmt *Body);
-  void EmitBlockWithFallThrough(llvm::BasicBlock *BB, RegionCounter &Cnt);
 
   void EmitForwardingCallToLambda(const CXXMethodDecl *LambdaCallOperator,
                                   CallArgList &CallArgs);
@@ -1400,10 +1397,6 @@ public:
                                  AggValueSlot::DoesNotNeedGCBarriers,
                                  AggValueSlot::IsNotAliased);
   }
-
-  /// CreateInAllocaTmp - Create a temporary memory object for the given
-  /// aggregate type.
-  AggValueSlot CreateInAllocaTmp(QualType T, const Twine &Name = "inalloca");
 
   /// Emit a cast to void* in the appropriate address space.
   llvm::Value *EmitCastToVoidPtr(llvm::Value *value);
@@ -1654,6 +1647,14 @@ public:
   llvm::Value *EmitDynamicCast(llvm::Value *V, const CXXDynamicCastExpr *DCE);
   llvm::Value* EmitCXXUuidofExpr(const CXXUuidofExpr *E);
 
+  /// Emit a pointer cast.  This should be used for all pointer casts and will
+  /// emit a simple bitcast where applicable or a more complex sequence for
+  /// different address spaces.
+  llvm::Value* EmitPointerCast(llvm::Value *From,
+                               QualType FromTy,
+                               QualType ToTy);
+  llvm::Value* EmitPointerCast(llvm::Value *From, llvm::PointerType *ToType);
+
   /// \brief Situations in which we might emit a check for the suitability of a
   ///        pointer or glvalue.
   enum TypeCheckKind {
@@ -1792,8 +1793,7 @@ public:
                          llvm::GlobalValue::LinkageTypes Linkage);
 
   /// EmitParmDecl - Emit a ParmVarDecl or an ImplicitParamDecl.
-  void EmitParmDecl(const VarDecl &D, llvm::Value *Arg, bool ArgIsPointer,
-                    unsigned ArgNo);
+  void EmitParmDecl(const VarDecl &D, llvm::Value *Arg, unsigned ArgNo);
 
   /// protectFromPeepholes - Protect a value that we're intending to
   /// store to the side, but which will probably be used later, from
@@ -1878,9 +1878,6 @@ public:
   llvm::Function *GenerateCapturedStmtFunction(const CapturedDecl *CD,
                                                const RecordDecl *RD,
                                                SourceLocation Loc);
-  llvm::Value *GenerateCapturedStmtArgument(const CapturedStmt &S);
-
-  void EmitOMPParallelDirective(const OMPParallelDirective &S);
 
   //===--------------------------------------------------------------------===//
   //                         LValue Expression Emission
@@ -2188,18 +2185,6 @@ public:
   llvm::Value *EmitAArch64CompareBuiltinExpr(llvm::Value *Op, llvm::Type *Ty);
   llvm::Value *EmitAArch64BuiltinExpr(unsigned BuiltinID, const CallExpr *E);
   llvm::Value *EmitARMBuiltinExpr(unsigned BuiltinID, const CallExpr *E);
-
-  llvm::Value *EmitCommonNeonBuiltinExpr(unsigned BuiltinID,
-                                         unsigned LLVMIntrinsic,
-                                         unsigned AltLLVMIntrinsic,
-                                         const char *NameHint,
-                                         unsigned Modifier,
-                                         const CallExpr *E,
-                                         SmallVectorImpl<llvm::Value *> &Ops,
-                                         llvm::Value *Align = 0);
-  llvm::Function *LookupNeonLLVMIntrinsic(unsigned IntrinsicID,
-                                          unsigned Modifier, llvm::Type *ArgTy,
-                                          const CallExpr *E);
   llvm::Value *EmitNeonCall(llvm::Function *F,
                             SmallVectorImpl<llvm::Value*> &O,
                             const char *name,
@@ -2209,24 +2194,11 @@ public:
                                    bool negateForRightShift);
   llvm::Value *EmitNeonRShiftImm(llvm::Value *Vec, llvm::Value *Amt,
                                  llvm::Type *Ty, bool usgn, const char *name);
-  llvm::Value *EmitConcatVectors(llvm::Value *Lo, llvm::Value *Hi,
-                                 llvm::Type *ArgTy);
-  llvm::Value *EmitExtractHigh(llvm::Value *In, llvm::Type *ResTy);
-  // Helper functions for EmitARM64BuiltinExpr.
-  llvm::Value *vectorWrapScalar8(llvm::Value *Op);
-  llvm::Value *vectorWrapScalar16(llvm::Value *Op);
-  llvm::Value *emitVectorWrappedScalar8Intrinsic(
-      unsigned Int, SmallVectorImpl<llvm::Value *> &Ops, const char *Name);
-  llvm::Value *emitVectorWrappedScalar16Intrinsic(
-      unsigned Int, SmallVectorImpl<llvm::Value *> &Ops, const char *Name);
-  llvm::Value *EmitARM64BuiltinExpr(unsigned BuiltinID, const CallExpr *E);
-  llvm::Value *EmitNeon64Call(llvm::Function *F,
-                              llvm::SmallVectorImpl<llvm::Value *> &O,
-                              const char *name);
 
   llvm::Value *BuildVector(ArrayRef<llvm::Value*> Ops);
   llvm::Value *EmitX86BuiltinExpr(unsigned BuiltinID, const CallExpr *E);
   llvm::Value *EmitPPCBuiltinExpr(unsigned BuiltinID, const CallExpr *E);
+  llvm::Value *EmitMIPSBuiltinExpr(unsigned BuiltinID, const CallExpr *E);
 
   llvm::Value *EmitObjCProtocolExpr(const ObjCProtocolExpr *E);
   llvm::Value *EmitObjCStringLiteral(const ObjCStringLiteral *E);
@@ -2359,9 +2331,9 @@ public:
 
   /// CreateStaticVarDecl - Create a zero-initialized LLVM global for
   /// a static local variable.
-  llvm::Constant *CreateStaticVarDecl(const VarDecl &D,
-                                      const char *Separator,
-                                      llvm::GlobalValue::LinkageTypes Linkage);
+  llvm::GlobalVariable *CreateStaticVarDecl(const VarDecl &D,
+                                            const char *Separator,
+                                       llvm::GlobalValue::LinkageTypes Linkage);
 
   /// AddInitializerToStaticVarDecl - Add the initializer for 'D' to the
   /// global variable that has already been created for it.  If the initializer
@@ -2524,11 +2496,6 @@ private:
   llvm::MDNode *getRangeForLoadFromType(QualType Ty);
   void EmitReturnOfRValue(RValue RV, QualType Ty);
 
-  void deferPlaceholderReplacement(llvm::Instruction *Old, llvm::Value *New);
-
-  llvm::SmallVector<std::pair<llvm::Instruction *, llvm::Value *>, 4>
-  DeferredReplacements;
-
   /// ExpandTypeFromArgs - Reconstruct a structure of type \arg Ty
   /// from function arguments into \arg Dst. See ABIArgInfo::Expand.
   ///
@@ -2563,11 +2530,11 @@ public:
                     bool ForceColumnInfo = false) {
     if (CallArgTypeInfo) {
       EmitCallArgs(Args, CallArgTypeInfo->isVariadic(),
-                   CallArgTypeInfo->param_type_begin(),
-                   CallArgTypeInfo->param_type_end(), ArgBeg, ArgEnd,
+                   CallArgTypeInfo->arg_type_begin(),
+                   CallArgTypeInfo->arg_type_end(), ArgBeg, ArgEnd,
                    ForceColumnInfo);
     } else {
-      // T::param_type_iterator might not have a default ctor.
+      // T::arg_type_iterator might not have a default ctor.
       const QualType *NoIter = 0;
       EmitCallArgs(Args, /*AllowExtraArguments=*/true, NoIter, NoIter, ArgBeg,
                    ArgEnd, ForceColumnInfo);

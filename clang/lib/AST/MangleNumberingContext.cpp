@@ -24,7 +24,7 @@ MangleNumberingContext::getManglingNumber(const CXXMethodDecl *CallOperator) {
     = CallOperator->getType()->getAs<FunctionProtoType>();
   ASTContext &Context = CallOperator->getASTContext();
 
-  QualType Key = Context.getFunctionType(Context.VoidTy, Proto->getParamTypes(),
+  QualType Key = Context.getFunctionType(Context.VoidTy, Proto->getArgTypes(),
                                          FunctionProtoType::ExtProtoInfo());
   Key = Context.getCanonicalType(Key);
   return ++ManglingNumbers[Key->castAs<FunctionProtoType>()];
@@ -38,8 +38,6 @@ MangleNumberingContext::getManglingNumber(const BlockDecl *BD) {
 }
 
 unsigned
-MangleNumberingContext::getStaticLocalNumber(const VarDecl *VD) {
-  // FIXME: Compute a BlockPointerType?  Not obvious how.
-  const Type *Ty = 0;
-  return ++ManglingNumbers[Ty];
+MangleNumberingContext::getManglingNumber(const TagDecl *TD) {
+  return ++TagManglingNumbers[TD->getIdentifier()];
 }

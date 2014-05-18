@@ -118,15 +118,15 @@ std::vector<std::string> unescapeCommandLine(
 }
 
 class JSONCompilationDatabasePlugin : public CompilationDatabasePlugin {
-  CompilationDatabase *loadFromDirectory(StringRef Directory,
-                                         std::string &ErrorMessage) override {
+  virtual CompilationDatabase *loadFromDirectory(
+      StringRef Directory, std::string &ErrorMessage) {
     SmallString<1024> JSONDatabasePath(Directory);
     llvm::sys::path::append(JSONDatabasePath, "compile_commands.json");
-    std::unique_ptr<CompilationDatabase> Database(
+    OwningPtr<CompilationDatabase> Database(
         JSONCompilationDatabase::loadFromFile(JSONDatabasePath, ErrorMessage));
     if (!Database)
       return NULL;
-    return Database.release();
+    return Database.take();
   }
 };
 
@@ -144,30 +144,30 @@ volatile int JSONAnchorSource = 0;
 JSONCompilationDatabase *
 JSONCompilationDatabase::loadFromFile(StringRef FilePath,
                                       std::string &ErrorMessage) {
-  std::unique_ptr<llvm::MemoryBuffer> DatabaseBuffer;
+  OwningPtr<llvm::MemoryBuffer> DatabaseBuffer;
   llvm::error_code Result =
     llvm::MemoryBuffer::getFile(FilePath, DatabaseBuffer);
   if (Result != 0) {
     ErrorMessage = "Error while opening JSON database: " + Result.message();
     return NULL;
   }
-  std::unique_ptr<JSONCompilationDatabase> Database(
-      new JSONCompilationDatabase(DatabaseBuffer.release()));
+  OwningPtr<JSONCompilationDatabase> Database(
+    new JSONCompilationDatabase(DatabaseBuffer.take()));
   if (!Database->parse(ErrorMessage))
     return NULL;
-  return Database.release();
+  return Database.take();
 }
 
 JSONCompilationDatabase *
 JSONCompilationDatabase::loadFromBuffer(StringRef DatabaseString,
                                         std::string &ErrorMessage) {
-  std::unique_ptr<llvm::MemoryBuffer> DatabaseBuffer(
+  OwningPtr<llvm::MemoryBuffer> DatabaseBuffer(
       llvm::MemoryBuffer::getMemBuffer(DatabaseString));
-  std::unique_ptr<JSONCompilationDatabase> Database(
-      new JSONCompilationDatabase(DatabaseBuffer.release()));
+  OwningPtr<JSONCompilationDatabase> Database(
+      new JSONCompilationDatabase(DatabaseBuffer.take()));
   if (!Database->parse(ErrorMessage))
     return NULL;
-  return Database.release();
+  return Database.take();
 }
 
 std::vector<CompileCommand>

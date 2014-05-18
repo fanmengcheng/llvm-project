@@ -10,6 +10,8 @@
 //  This file defines the AST-based CallGraph.
 //
 //===----------------------------------------------------------------------===//
+#define DEBUG_TYPE "CallGraph"
+
 #include "clang/Analysis/CallGraph.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
@@ -19,8 +21,6 @@
 #include "llvm/Support/GraphWriter.h"
 
 using namespace clang;
-
-#define DEBUG_TYPE "CallGraph"
 
 STATISTIC(NumObjCCallEdges, "Number of Objective-C method call edges");
 STATISTIC(NumBlockCallEdges, "Number of block call edges");
@@ -95,8 +95,9 @@ void CallGraph::addNodesForBlocks(DeclContext *D) {
   if (BlockDecl *BD = dyn_cast<BlockDecl>(D))
     addNodeForDecl(BD, true);
 
-  for (auto *I : D->decls())
-    if (auto *DC = dyn_cast<DeclContext>(I))
+  for (DeclContext::decl_iterator I = D->decls_begin(), E = D->decls_end();
+       I!=E; ++I)
+    if (DeclContext *DC = dyn_cast<DeclContext>(*I))
       addNodesForBlocks(DC);
 }
 
@@ -105,7 +106,12 @@ CallGraph::CallGraph() {
 }
 
 CallGraph::~CallGraph() {
-  llvm::DeleteContainerSeconds(FunctionMap);
+  if (!FunctionMap.empty()) {
+    for (FunctionMapTy::iterator I = FunctionMap.begin(), E = FunctionMap.end();
+        I != E; ++I)
+      delete I->second;
+    FunctionMap.clear();
+  }
 }
 
 bool CallGraph::includeInGraph(const Decl *D) {

@@ -24,15 +24,12 @@ void stuff() {
   register int m asm("rbx"); // no-warning
 
   int k = to_int(n); // no-warning
+
   bool b;
   ++b; // expected-warning {{incrementing expression of type bool is deprecated}}
 
-  char *p = "foo";
-#if __cplusplus < 201103L
-  // expected-warning@-2 {{conversion from string literal to 'char *' is deprecated}}
-#else
-  // expected-warning@-4 {{ISO C++11 does not allow conversion from string literal to 'char *'}}
-#endif
+  // FIXME: This is ill-formed in C++11.
+  char *p = "foo"; // expected-warning {{conversion from string literal to 'char *' is deprecated}}
 }
 
 struct S { int n; };

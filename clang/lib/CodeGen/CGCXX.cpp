@@ -56,20 +56,22 @@ bool CodeGenModule::TryEmitBaseDestructorAsAlias(const CXXDestructorDecl *D) {
 
   // If any field has a non-trivial destructor, we have to emit the
   // destructor separately.
-  for (const auto *I : Class->fields())
+  for (CXXRecordDecl::field_iterator I = Class->field_begin(),
+         E = Class->field_end(); I != E; ++I)
     if (I->getType().isDestructedType())
       return true;
 
   // Try to find a unique base class with a non-trivial destructor.
   const CXXRecordDecl *UniqueBase = 0;
-  for (const auto &I : Class->bases()) {
+  for (CXXRecordDecl::base_class_const_iterator I = Class->bases_begin(),
+         E = Class->bases_end(); I != E; ++I) {
 
     // We're in the base destructor, so skip virtual bases.
-    if (I.isVirtual()) continue;
+    if (I->isVirtual()) continue;
 
     // Skip base classes with trivial destructors.
     const CXXRecordDecl *Base
-      = cast<CXXRecordDecl>(I.getType()->getAs<RecordType>()->getDecl());
+      = cast<CXXRecordDecl>(I->getType()->getAs<RecordType>()->getDecl());
     if (Base->hasTrivialDestructor()) continue;
 
     // If we've already found a base class with a non-trivial
@@ -90,13 +92,7 @@ bool CodeGenModule::TryEmitBaseDestructorAsAlias(const CXXDestructorDecl *D) {
   if (!ClassLayout.getBaseClassOffset(UniqueBase).isZero())
     return true;
 
-  // Give up if the calling conventions don't match. We could update the call,
-  // but it is probably not worth it.
   const CXXDestructorDecl *BaseD = UniqueBase->getDestructor();
-  if (BaseD->getType()->getAs<FunctionType>()->getCallConv() !=
-      D->getType()->getAs<FunctionType>()->getCallConv())
-    return true;
-
   return TryEmitDefinitionAsAlias(GlobalDecl(D, Dtor_Base),
                                   GlobalDecl(BaseD, Dtor_Base),
                                   false);
@@ -194,13 +190,11 @@ bool CodeGenModule::TryEmitDefinitionAsAlias(GlobalDecl AliasDecl,
 
 void CodeGenModule::EmitCXXConstructor(const CXXConstructorDecl *ctor,
                                        CXXCtorType ctorType) {
-  if (!getTarget().getCXXABI().hasConstructorVariants()) {
-    // If there are no constructor variants, always emit the complete destructor.
-    ctorType = Ctor_Complete;
-  } else if (!ctor->getParent()->getNumVBases() &&
-             (ctorType == Ctor_Complete || ctorType == Ctor_Base)) {
-    // The complete constructor is equivalent to the base constructor
-    // for classes with no virtual bases.  Try to emit it as an alias.
+  // The complete constructor is equivalent to the base constructor
+  // for classes with no virtual bases.  Try to emit it as an alias.
+  if (getTarget().getCXXABI().hasConstructorVariants() &&
+      !ctor->getParent()->getNumVBases() &&
+      (ctorType == Ctor_Complete || ctorType == Ctor_Base)) {
     bool ProducedAlias =
         !TryEmitDefinitionAsAlias(GlobalDecl(ctor, Ctor_Complete),
                                   GlobalDecl(ctor, Ctor_Base), true);

@@ -166,12 +166,12 @@ public:
                     StringRef Text, unsigned Min, unsigned Max)
     : Directive(DirectiveLoc, DiagnosticLoc, Text, Min, Max) { }
 
-  bool isValid(std::string &Error) override {
+  virtual bool isValid(std::string &Error) {
     // all strings are considered valid; even empty ones
     return true;
   }
 
-  bool match(StringRef S) override {
+  virtual bool match(StringRef S) {
     return S.find(Text) != StringRef::npos;
   }
 };
@@ -184,13 +184,13 @@ public:
                  StringRef Text, unsigned Min, unsigned Max, StringRef RegexStr)
     : Directive(DirectiveLoc, DiagnosticLoc, Text, Min, Max), Regex(RegexStr) { }
 
-  bool isValid(std::string &Error) override {
+  virtual bool isValid(std::string &Error) {
     if (Regex.isValid(Error))
       return true;
     return false;
   }
 
-  bool match(StringRef S) override {
+  virtual bool match(StringRef S) {
     return Regex.match(S);
   }
 
@@ -330,8 +330,6 @@ static bool ParseDirective(StringRef S, ExpectedData *ED, SourceManager &SM,
       DL = ED ? &ED->Errors : NULL;
     else if (PH.Next("warning"))
       DL = ED ? &ED->Warnings : NULL;
-    else if (PH.Next("remark"))
-      DL = ED ? &ED->Remarks : NULL;
     else if (PH.Next("note"))
       DL = ED ? &ED->Notes : NULL;
     else if (PH.Next("no-diagnostics")) {
@@ -493,12 +491,11 @@ static bool ParseDirective(StringRef S, ExpectedData *ED, SourceManager &SM,
     }
 
     // Construct new directive.
-    std::unique_ptr<Directive> D(
-        Directive::create(RegexKind, Pos, ExpectedLoc, Text, Min, Max));
-
+    Directive *D = Directive::create(RegexKind, Pos, ExpectedLoc, Text,
+                                     Min, Max);
     std::string Error;
     if (D->isValid(Error)) {
-      DL->push_back(D.release());
+      DL->push_back(D);
       FoundDirective = true;
     } else {
       Diags.Report(Pos.getLocWithOffset(ContentBegin-PH.Begin),
@@ -739,10 +736,6 @@ static unsigned CheckResults(DiagnosticsEngine &Diags, SourceManager &SourceMgr,
   NumProblems += CheckLists(Diags, SourceMgr, "warning", ED.Warnings,
                             Buffer.warn_begin(), Buffer.warn_end());
 
-  // See if there are remark mismatches.
-  NumProblems += CheckLists(Diags, SourceMgr, "remark", ED.Remarks,
-                            Buffer.remark_begin(), Buffer.remark_end());
-
   // See if there are note mismatches.
   NumProblems += CheckLists(Diags, SourceMgr, "note", ED.Notes,
                             Buffer.note_begin(), Buffer.note_end());
@@ -853,7 +846,9 @@ void VerifyDiagnosticConsumer::CheckDiagnostics() {
 
   // Reset the buffer, we have processed all the diagnostics in it.
   Buffer.reset(new TextDiagnosticBuffer());
-  ED.Reset();
+  ED.Errors.clear();
+  ED.Warnings.clear();
+  ED.Notes.clear();
 }
 
 Directive *Directive::create(bool RegexKind, SourceLocation DirectiveLoc,
@@ -885,6 +880,5 @@ Directive *Directive::create(bool RegexKind, SourceLocation DirectiveLoc,
     }
   }
 
-  return new RegexDirective(DirectiveLoc, DiagnosticLoc, Text, Min, Max,
-                            RegexStr);
+  return new RegexDirective(DirectiveLoc, DiagnosticLoc, Text, Min, Max, RegexStr);
 }

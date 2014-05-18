@@ -43,12 +43,6 @@
 using namespace clang;
 using namespace sema;
 
-SourceLocation Sema::getLocForEndOfToken(SourceLocation Loc, unsigned Offset) {
-  return Lexer::getLocForEndOfToken(Loc, Offset, SourceMgr, LangOpts);
-}
-
-ModuleLoader &Sema::getModuleLoader() const { return PP.getModuleLoader(); }
-
 PrintingPolicy Sema::getPrintingPolicy(const ASTContext &Context,
                                        const Preprocessor &PP) {
   PrintingPolicy Policy = Context.getPrintingPolicy();
@@ -81,12 +75,7 @@ Sema::Sema(Preprocessor &pp, ASTContext &ctxt, ASTConsumer &consumer,
     Diags(PP.getDiagnostics()), SourceMgr(PP.getSourceManager()),
     CollectStats(false), CodeCompleter(CodeCompleter),
     CurContext(0), OriginalLexicalContext(0),
-    PackContext(0), MSStructPragmaOn(false),
-    MSPointerToMemberRepresentationMethod(
-        LangOpts.getMSPointerToMemberRepresentationMethod()),
-    VtorDispModeStack(1, MSVtorDispAttr::Mode(LangOpts.VtorDispMode)),
-    DataSegStack(nullptr), BSSSegStack(nullptr), ConstSegStack(nullptr),
-    CodeSegStack(nullptr), VisContext(0),
+    PackContext(0), MSStructPragmaOn(false), VisContext(0),
     IsBuildingRecoveryCallExpr(false),
     ExprNeedsCleanups(false), LateTemplateParser(0), OpaqueParser(0),
     IdResolver(pp), StdInitializerList(0), CXXTypeInfoDecl(0), MSVCGuidDecl(0),
@@ -96,7 +85,7 @@ Sema::Sema(Preprocessor &pp, ASTContext &ctxt, ASTConsumer &consumer,
     NSDictionaryDecl(0), DictionaryWithObjectsMethod(0),
     GlobalNewDeleteDeclared(false),
     TUKind(TUKind),
-    NumSFINAEErrors(0),
+    NumSFINAEErrors(0), InFunctionDeclarator(0),
     AccessCheckingSFINAE(false), InNonInstantiationSFINAEContext(false),
     NonInstantiationEntries(0), ArgumentPackSubstitutionIndex(-1),
     CurrentInstantiationScope(0), DisableTypoCorrection(false),
@@ -150,7 +139,7 @@ void Sema::Initialize() {
     ExternalSema->InitializeSema(*this);
 
   // Initialize predefined 128-bit integer types, if needed.
-  if (Context.getTargetInfo().hasInt128Type()) {
+  if (PP.getTargetInfo().hasInt128Type()) {
     // If either of the 128-bit integer types are unavailable to name lookup,
     // define them now.
     DeclarationName Int128 = &Context.Idents.get("__int128_t");
@@ -162,6 +151,18 @@ void Sema::Initialize() {
       PushOnScopeChains(Context.getUInt128Decl(), TUScope);
   }
 
+  // If the target supports capabilities, add capability-as-integer builtin
+  // types.
+  if (PP.getTargetInfo().SupportsCapabilities()) {
+    DeclarationName IntCap = &Context.Idents.get("__intcap_t");
+    if (IdResolver.begin(IntCap) == IdResolver.end())
+      PushOnScopeChains(Context.getIntCapDecl(), TUScope);
+
+    DeclarationName UIntCap = &Context.Idents.get("__uintcap_t");
+    if (IdResolver.begin(UIntCap) == IdResolver.end())
+      PushOnScopeChains(Context.getUIntCapDecl(), TUScope);
+  }
+  
 
   // Initialize predefined Objective-C types:
   if (PP.getLangOpts().ObjC1) {
@@ -189,12 +190,10 @@ void Sema::Initialize() {
   }
 
   // Initialize Microsoft "predefined C++ types".
-  if (PP.getLangOpts().MSVCCompat && PP.getLangOpts().CPlusPlus) {
+  if (PP.getLangOpts().MicrosoftMode && PP.getLangOpts().CPlusPlus) {
     if (IdResolver.begin(&Context.Idents.get("type_info")) == IdResolver.end())
       PushOnScopeChains(Context.buildImplicitRecord("type_info", TTK_Class),
                         TUScope);
-
-    addImplicitTypedef("size_t", Context.getSizeType());
   }
 
   // Initialize predefined OpenCL types.
@@ -215,9 +214,13 @@ void Sema::Initialize() {
 }
 
 Sema::~Sema() {
-  llvm::DeleteContainerSeconds(LateParsedTemplateMap);
+  for (LateParsedTemplateMapT::iterator I = LateParsedTemplateMap.begin(),
+                                        E = LateParsedTemplateMap.end();
+       I != E; ++I)
+    delete I->second;
   if (PackContext) FreePackedContext();
   if (VisContext) FreeVisContext();
+  MSStructPragmaOn = false;
   // Kill all the active scopes.
   for (unsigned I = 1, E = FunctionScopes.size(); I != E; ++I)
     delete FunctionScopes[I];
@@ -262,7 +265,7 @@ bool Sema::makeUnavailableInSystemHeader(SourceLocation loc,
   // If the function is already unavailable, it's not an error.
   if (fn->hasAttr<UnavailableAttr>()) return true;
 
-  fn->addAttr(UnavailableAttr::CreateImplicit(Context, msg, loc));
+  fn->addAttr(new (Context) UnavailableAttr(loc, Context, msg));
   return true;
 }
 
@@ -322,8 +325,14 @@ ExprResult Sema::ImpCastExprToType(Expr *E, QualType Ty,
   assert((VK == VK_RValue || !E->isRValue()) && "can't cast rvalue to lvalue");
 #endif
 
+
   QualType ExprTy = Context.getCanonicalType(E->getType());
   QualType TypeTy = Context.getCanonicalType(Ty);
+
+  if (ExprTy.getQualifiers().hasOutput() &&
+      !TypeTy.getQualifiers().hasOutput())
+    return ExprError(Diag(E->getExprLoc(), diag::err_typecheck_read_output)
+      << E->getSourceRange());
 
   if (ExprTy == TypeTy)
     return Owned(E);
@@ -416,6 +425,25 @@ static bool ShouldRemoveFromUnused(Sema *SemaRef, const DeclaratorDecl *D) {
   return false;
 }
 
+namespace {
+  struct SortUndefinedButUsed {
+    const SourceManager &SM;
+    explicit SortUndefinedButUsed(SourceManager &SM) : SM(SM) {}
+
+    bool operator()(const std::pair<NamedDecl *, SourceLocation> &l,
+                    const std::pair<NamedDecl *, SourceLocation> &r) const {
+      if (l.second.isValid() && !r.second.isValid())
+        return true;
+      if (!l.second.isValid() && r.second.isValid())
+        return false;
+      if (l.second != r.second)
+        return SM.isBeforeInTranslationUnit(l.second, r.second);
+      return SM.isBeforeInTranslationUnit(l.first->getLocation(),
+                                          r.first->getLocation());
+    }
+  };
+}
+
 /// Obtains a sorted list of functions that are undefined but ODR-used.
 void Sema::getUndefinedButUsed(
     SmallVectorImpl<std::pair<NamedDecl *, SourceLocation> > &Undefined) {
@@ -448,19 +476,8 @@ void Sema::getUndefinedButUsed(
 
   // Sort (in order of use site) so that we're not dependent on the iteration
   // order through an llvm::DenseMap.
-  SourceManager &SM = Context.getSourceManager();
   std::sort(Undefined.begin(), Undefined.end(),
-            [&SM](const std::pair<NamedDecl *, SourceLocation> &l,
-                  const std::pair<NamedDecl *, SourceLocation> &r) {
-    if (l.second.isValid() && !r.second.isValid())
-      return true;
-    if (!l.second.isValid() && r.second.isValid())
-      return false;
-    if (l.second != r.second)
-      return SM.isBeforeInTranslationUnit(l.second, r.second);
-    return SM.isBeforeInTranslationUnit(l.first->getLocation(),
-                                        r.first->getLocation());
-  });
+            SortUndefinedButUsed(Context.getSourceManager()));
 }
 
 /// checkUndefinedButUsed - Check for undefined objects with internal linkage
@@ -606,8 +623,7 @@ void Sema::ActOnEndOfTranslationUnit() {
          I != E; ++I) {
       assert(!(*I)->isDependentType() &&
              "Should not see dependent types here!");
-      if (const CXXMethodDecl *KeyFunction =
-              Context.getCurrentKeyFunction(*I)) {
+      if (const CXXMethodDecl *KeyFunction = Context.getCurrentKeyFunction(*I)) {
         const FunctionDecl *Definition = 0;
         if (KeyFunction->hasBody(Definition))
           MarkVTableUsed(Definition->getLocation(), *I, true);
@@ -628,15 +644,7 @@ void Sema::ActOnEndOfTranslationUnit() {
     // so it will find some names that are not required to be found. This is
     // valid, but we could do better by diagnosing if an instantiation uses a
     // name that was not visible at its first point of instantiation.
-    if (ExternalSource) {
-      // Load pending instantiations from the external source.
-      SmallVector<PendingImplicitInstantiation, 4> Pending;
-      ExternalSource->ReadPendingInstantiations(Pending);
-      PendingInstantiations.insert(PendingInstantiations.begin(),
-                                   Pending.begin(), Pending.end());
-    }
     PerformPendingInstantiations();
-
     CheckDelayedMemberExceptionSpecs();
   }
 
@@ -1121,30 +1129,14 @@ BlockScopeInfo *Sema::getCurBlock() {
   if (FunctionScopes.empty())
     return 0;
 
-  auto CurBSI = dyn_cast<BlockScopeInfo>(FunctionScopes.back());
-  if (CurBSI && CurBSI->TheDecl &&
-      !CurBSI->TheDecl->Encloses(CurContext)) {
-    // We have switched contexts due to template instantiation.
-    assert(!ActiveTemplateInstantiations.empty());
-    return nullptr;
-  }
-
-  return CurBSI;
+  return dyn_cast<BlockScopeInfo>(FunctionScopes.back());
 }
 
 LambdaScopeInfo *Sema::getCurLambda() {
   if (FunctionScopes.empty())
     return 0;
 
-  auto CurLSI = dyn_cast<LambdaScopeInfo>(FunctionScopes.back());
-  if (CurLSI && CurLSI->Lambda &&
-      !CurLSI->Lambda->Encloses(CurContext)) {
-    // We have switched contexts due to template instantiation.
-    assert(!ActiveTemplateInstantiations.empty());
-    return nullptr;
-  }
-
-  return CurLSI;
+  return dyn_cast<LambdaScopeInfo>(FunctionScopes.back());
 }
 // We have a generic lambda if we parsed auto parameters, or we have 
 // an associated template parameter list.
@@ -1264,7 +1256,7 @@ bool Sema::tryExprAsCall(Expr &E, QualType &ZeroArgCallReturnTy,
             ZeroArgCallReturnTy = QualType();
             Ambiguous = true;
           } else
-            ZeroArgCallReturnTy = OverloadDecl->getReturnType();
+            ZeroArgCallReturnTy = OverloadDecl->getResultType();
         }
       }
     }
@@ -1293,7 +1285,7 @@ bool Sema::tryExprAsCall(Expr &E, QualType &ZeroArgCallReturnTy,
   if (const DeclRefExpr *DeclRef = dyn_cast<DeclRefExpr>(E.IgnoreParens())) {
     if (const FunctionDecl *Fun = dyn_cast<FunctionDecl>(DeclRef->getDecl())) {
       if (Fun->getMinRequiredArguments() == 0)
-        ZeroArgCallReturnTy = Fun->getReturnType();
+        ZeroArgCallReturnTy = Fun->getResultType();
       return true;
     }
   }
@@ -1310,8 +1302,8 @@ bool Sema::tryExprAsCall(Expr &E, QualType &ZeroArgCallReturnTy,
 
   if (const FunctionProtoType *FPT =
       dyn_cast_or_null<FunctionProtoType>(FunTy)) {
-    if (FPT->getNumParams() == 0)
-      ZeroArgCallReturnTy = FunTy->getReturnType();
+    if (FPT->getNumArgs() == 0)
+      ZeroArgCallReturnTy = FunTy->getResultType();
     return true;
   }
   return false;
@@ -1362,7 +1354,7 @@ static void notePlausibleOverloads(Sema &S, SourceLocation Loc,
   for (OverloadExpr::decls_iterator It = Overloads.begin(),
          DeclsEnd = Overloads.end(); It != DeclsEnd; ++It) {
     const FunctionDecl *OverloadDecl = cast<FunctionDecl>(*It);
-    QualType OverloadResultTy = OverloadDecl->getReturnType();
+    QualType OverloadResultTy = OverloadDecl->getResultType();
     if (IsPlausibleResult(OverloadResultTy))
       PlausibleOverloads.addDecl(It.getDecl());
   }

@@ -79,8 +79,9 @@ void StmtProfiler::VisitStmt(const Stmt *S) {
 
 void StmtProfiler::VisitDeclStmt(const DeclStmt *S) {
   VisitStmt(S);
-  for (const auto *D : S->decls())
-    VisitDecl(D);
+  for (DeclStmt::const_decl_iterator D = S->decl_begin(), DEnd = S->decl_end();
+       D != DEnd; ++D)
+    VisitDecl(*D);
 }
 
 void StmtProfiler::VisitNullStmt(const NullStmt *S) {
@@ -264,29 +265,14 @@ public:
 #include "clang/Basic/OpenMPKinds.def"
 };
 
-void OMPClauseProfiler::VisitOMPIfClause(const OMPIfClause *C) {
-  if (C->getCondition())
-    Profiler->VisitStmt(C->getCondition());
-}
-
-void OMPClauseProfiler::VisitOMPNumThreadsClause(const OMPNumThreadsClause *C) {
-  if (C->getNumThreads())
-    Profiler->VisitStmt(C->getNumThreads());
-}
-
-void OMPClauseProfiler::VisitOMPSafelenClause(const OMPSafelenClause *C) {
-  if (C->getSafelen())
-    Profiler->VisitStmt(C->getSafelen());
-}
-
 void OMPClauseProfiler::VisitOMPDefaultClause(const OMPDefaultClause *C) { }
-
-void OMPClauseProfiler::VisitOMPProcBindClause(const OMPProcBindClause *C) { }
 
 template<typename T>
 void OMPClauseProfiler::VisitOMPClauseList(T *Node) {
-  for (auto *I : Node->varlists())
-    Profiler->VisitStmt(I);
+  for (typename T::varlist_const_iterator I = Node->varlist_begin(),
+                                          E = Node->varlist_end();
+         I != E; ++I)
+    Profiler->VisitStmt(*I);
 }
 
 void OMPClauseProfiler::VisitOMPPrivateClause(const OMPPrivateClause *C) {
@@ -299,17 +285,10 @@ void OMPClauseProfiler::VisitOMPFirstprivateClause(
 void OMPClauseProfiler::VisitOMPSharedClause(const OMPSharedClause *C) {
   VisitOMPClauseList(C);
 }
-void OMPClauseProfiler::VisitOMPLinearClause(const OMPLinearClause *C) {
-  VisitOMPClauseList(C);
-  Profiler->VisitStmt(C->getStep());
-}
-void OMPClauseProfiler::VisitOMPCopyinClause(const OMPCopyinClause *C) {
-  VisitOMPClauseList(C);
-}
 }
 
 void
-StmtProfiler::VisitOMPExecutableDirective(const OMPExecutableDirective *S) {
+StmtProfiler::VisitOMPParallelDirective(const OMPParallelDirective *S) {
   VisitStmt(S);
   OMPClauseProfiler P(this);
   ArrayRef<OMPClause *> Clauses = S->clauses();
@@ -317,14 +296,6 @@ StmtProfiler::VisitOMPExecutableDirective(const OMPExecutableDirective *S) {
        I != E; ++I)
     if (*I)
       P.Visit(*I);
-}
-
-void StmtProfiler::VisitOMPParallelDirective(const OMPParallelDirective *S) {
-  VisitOMPExecutableDirective(S);
-}
-
-void StmtProfiler::VisitOMPSimdDirective(const OMPSimdDirective *S) {
-  VisitOMPExecutableDirective(S);
 }
 
 void StmtProfiler::VisitExpr(const Expr *S) {

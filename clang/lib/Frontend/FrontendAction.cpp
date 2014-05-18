@@ -43,29 +43,29 @@ public:
                                            ASTDeserializationListener *Previous)
     : Previous(Previous) { }
 
-  void ReaderInitialized(ASTReader *Reader) override {
+  virtual void ReaderInitialized(ASTReader *Reader) {
     if (Previous)
       Previous->ReaderInitialized(Reader);
   }
-  void IdentifierRead(serialization::IdentID ID,
-                      IdentifierInfo *II) override {
+  virtual void IdentifierRead(serialization::IdentID ID,
+                              IdentifierInfo *II) {
     if (Previous)
       Previous->IdentifierRead(ID, II);
   }
-  void TypeRead(serialization::TypeIdx Idx, QualType T) override {
+  virtual void TypeRead(serialization::TypeIdx Idx, QualType T) {
     if (Previous)
       Previous->TypeRead(Idx, T);
   }
-  void DeclRead(serialization::DeclID ID, const Decl *D) override {
+  virtual void DeclRead(serialization::DeclID ID, const Decl *D) {
     if (Previous)
       Previous->DeclRead(ID, D);
   }
-  void SelectorRead(serialization::SelectorID ID, Selector Sel) override {
+  virtual void SelectorRead(serialization::SelectorID ID, Selector Sel) {
     if (Previous)
       Previous->SelectorRead(ID, Sel);
   }
-  void MacroDefinitionRead(serialization::PreprocessedEntityID PPID,
-                           MacroDefinition *MD) override {
+  virtual void MacroDefinitionRead(serialization::PreprocessedEntityID PPID, 
+                                   MacroDefinition *MD) {
     if (Previous)
       Previous->MacroDefinitionRead(PPID, MD);
   }
@@ -77,7 +77,7 @@ public:
   explicit DeserializedDeclsDumper(ASTDeserializationListener *Previous)
     : DelegatingDeserializationListener(Previous) { }
 
-  void DeclRead(serialization::DeclID ID, const Decl *D) override {
+  virtual void DeclRead(serialization::DeclID ID, const Decl *D) {
     llvm::outs() << "PCH DECL: " << D->getDeclKindName();
     if (const NamedDecl *ND = dyn_cast<NamedDecl>(D))
       llvm::outs() << " - " << *ND;
@@ -100,7 +100,7 @@ public:
     : DelegatingDeserializationListener(Previous),
       Ctx(Ctx), NamesToCheck(NamesToCheck) { }
 
-  void DeclRead(serialization::DeclID ID, const Decl *D) override {
+  virtual void DeclRead(serialization::DeclID ID, const Decl *D) {
     if (const NamedDecl *ND = dyn_cast<NamedDecl>(D))
       if (NamesToCheck.find(ND->getNameAsString()) != NamesToCheck.end()) {
         unsigned DiagID
@@ -148,7 +148,7 @@ ASTConsumer* FrontendAction::CreateWrappedASTConsumer(CompilerInstance &CI,
         ie = FrontendPluginRegistry::end();
         it != ie; ++it) {
       if (it->getName() == CI.getFrontendOpts().AddPluginActions[i]) {
-        std::unique_ptr<PluginASTAction> P(it->instantiate());
+        OwningPtr<PluginASTAction> P(it->instantiate());
         FrontendAction* c = P.get();
         if (P->ParseArgs(CI, CI.getFrontendOpts().AddPluginArgs[i]))
           Consumers.push_back(c->CreateASTConsumer(CI, InFile));
@@ -158,6 +158,7 @@ ASTConsumer* FrontendAction::CreateWrappedASTConsumer(CompilerInstance &CI,
 
   return new MultiplexConsumer(Consumers);
 }
+
 
 bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
                                      const FrontendInputFile &Input) {
@@ -211,15 +212,6 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
     return true;
   }
 
-  if (!CI.hasVirtualFileSystem()) {
-    if (IntrusiveRefCntPtr<vfs::FileSystem> VFS =
-          createVFSFromCompilerInvocation(CI.getInvocation(),
-                                          CI.getDiagnostics()))
-      CI.setVirtualFileSystem(VFS);
-    else
-      goto failure;
-  }
-
   // Set up the file and source managers, if needed.
   if (!CI.hasFileManager())
     CI.createFileManager();
@@ -237,10 +229,6 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
 
     // Initialize the action.
     if (!BeginSourceFileAction(CI, InputFile))
-      goto failure;
-
-    // Initialize the main file entry.
-    if (!CI.InitializeSourceManager(CurrentInput))
       goto failure;
 
     return true;
@@ -278,7 +266,7 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
   }
 
   // Set up the preprocessor.
-  CI.createPreprocessor(getTranslationUnitKind());
+  CI.createPreprocessor();
 
   // Inform the diagnostic client we are processing a source file.
   CI.getDiagnosticClient().BeginSourceFile(CI.getLangOpts(),
@@ -289,18 +277,13 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
   if (!BeginSourceFileAction(CI, InputFile))
     goto failure;
 
-  // Initialize the main file entry. It is important that this occurs after
-  // BeginSourceFileAction, which may change CurrentInput during module builds.
-  if (!CI.InitializeSourceManager(CurrentInput))
-    goto failure;
-
   // Create the AST context and consumer unless this is a preprocessor only
   // action.
   if (!usesPreprocessorOnly()) {
     CI.createASTContext();
 
-    std::unique_ptr<ASTConsumer> Consumer(
-        CreateWrappedASTConsumer(CI, InputFile));
+    OwningPtr<ASTConsumer> Consumer(
+                                   CreateWrappedASTConsumer(CI, InputFile));
     if (!Consumer)
       goto failure;
 
@@ -308,11 +291,12 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
     
     if (!CI.getPreprocessorOpts().ChainedIncludes.empty()) {
       // Convert headers to PCH and chain them.
-      IntrusiveRefCntPtr<ChainedIncludesSource> source;
-      source = ChainedIncludesSource::create(CI);
+      OwningPtr<ExternalASTSource> source;
+      source.reset(ChainedIncludesSource::create(CI));
       if (!source)
         goto failure;
-      CI.setModuleManager(static_cast<ASTReader*>(&source->getFinalReader()));
+      CI.setModuleManager(static_cast<ASTReader*>(
+         &static_cast<ChainedIncludesSource*>(source.get())->getFinalReader()));
       CI.getASTContext().setExternalSource(source);
 
     } else if (!CI.getPreprocessorOpts().ImplicitPCHInclude.empty()) {
@@ -335,7 +319,7 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
         goto failure;
     }
 
-    CI.setASTConsumer(Consumer.release());
+    CI.setASTConsumer(Consumer.take());
     if (!CI.hasASTConsumer())
       goto failure;
   }
@@ -352,7 +336,7 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
   // provides the layouts from that file.
   if (!CI.getFrontendOpts().OverrideRecordLayoutsFile.empty() && 
       CI.hasASTContext() && !CI.getASTContext().getExternalSource()) {
-    IntrusiveRefCntPtr<ExternalASTSource> 
+    OwningPtr<ExternalASTSource> 
       Override(new LayoutOverrideSource(
                      CI.getFrontendOpts().OverrideRecordLayoutsFile));
     CI.getASTContext().setExternalSource(Override);
@@ -381,6 +365,13 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
 bool FrontendAction::Execute() {
   CompilerInstance &CI = getCompilerInstance();
 
+  // Initialize the main file entry. This needs to be delayed until after PCH
+  // has loaded.
+  if (!isCurrentFileAST()) {
+    if (!CI.InitializeSourceManager(getCurrentInput()))
+      return false;
+  }
+
   if (CI.hasFrontendTimer()) {
     llvm::TimeRegion Timer(CI.getFrontendTimer());
     ExecuteAction();
@@ -408,16 +399,16 @@ void FrontendAction::EndSourceFile() {
   // Finalize the action.
   EndSourceFileAction();
 
-  // Sema references the ast consumer, so reset sema first.
+  // Release the consumer and the AST, in that order since the consumer may
+  // perform actions in its destructor which require the context.
   //
   // FIXME: There is more per-file stuff we could just drop here?
-  bool DisableFree = CI.getFrontendOpts().DisableFree;
-  if (DisableFree) {
+  if (CI.getFrontendOpts().DisableFree) {
+    BuryPointer(CI.takeASTConsumer());
     if (!isCurrentFileAST()) {
-      CI.resetAndLeakSema();
+      BuryPointer(CI.takeSema());
       CI.resetAndLeakASTContext();
     }
-    BuryPointer(CI.takeASTConsumer());
   } else {
     if (!isCurrentFileAST()) {
       CI.setSema(0);
@@ -443,9 +434,8 @@ void FrontendAction::EndSourceFile() {
   // FrontendAction.
   CI.clearOutputFiles(/*EraseFiles=*/shouldEraseOutputFiles());
 
-  // FIXME: Only do this if DisableFree is set.
   if (isCurrentFileAST()) {
-    CI.resetAndLeakSema();
+    CI.takeSema();
     CI.resetAndLeakASTContext();
     CI.resetAndLeakPreprocessor();
     CI.resetAndLeakSourceManager();

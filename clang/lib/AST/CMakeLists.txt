@@ -57,8 +57,30 @@ add_clang_library(clangAST
   TypePrinter.cpp
   VTableBuilder.cpp
   VTTBuilder.cpp
+  )
 
-  LINK_LIBS
+add_dependencies(clangAST
+  ClangARMNeon
+  ClangAttrClasses
+  ClangAttrList
+  ClangAttrImpl
+  ClangAttrDump
+  ClangAttrVisitor
+  ClangCommentCommandInfo
+  ClangCommentCommandList
+  ClangCommentNodes
+  ClangCommentHTMLTags
+  ClangCommentHTMLTagsProperties
+  ClangCommentHTMLNamedCharacterReferences
+  ClangDeclNodes
+  ClangDiagnosticAST
+  ClangDiagnosticComment
+  ClangDiagnosticCommon
+  ClangDiagnosticSema
+  ClangStmtNodes
+  )
+
+target_link_libraries(clangAST
   clangBasic
   clangLex
   )

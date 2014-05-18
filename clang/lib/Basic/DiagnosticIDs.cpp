@@ -30,10 +30,9 @@ namespace {
 // Diagnostic classes.
 enum {
   CLASS_NOTE       = 0x01,
-  CLASS_REMARK     = 0x02,
-  CLASS_WARNING    = 0x03,
-  CLASS_EXTENSION  = 0x04,
-  CLASS_ERROR      = 0x05
+  CLASS_WARNING    = 0x02,
+  CLASS_EXTENSION  = 0x03,
+  CLASS_ERROR      = 0x04
 };
 
 struct StaticDiagInfoRec {
@@ -313,12 +312,12 @@ DiagnosticIDs::~DiagnosticIDs() {
 /// and level.  If this is the first request for this diagnostic, it is
 /// registered and created, otherwise the existing ID is returned.
 ///
-/// \param FormatString A fixed diagnostic format string that will be hashed and
+/// \param Message A fixed diagnostic format string that will be hashed and
 /// mapped to a unique DiagID.
-unsigned DiagnosticIDs::getCustomDiagID(Level L, StringRef FormatString) {
+unsigned DiagnosticIDs::getCustomDiagID(Level L, StringRef Message) {
   if (CustomDiagInfo == 0)
     CustomDiagInfo = new diag::CustomDiagInfo();
-  return CustomDiagInfo->getOrCreateDiagID(L, FormatString, *this);
+  return CustomDiagInfo->getOrCreateDiagID(L, Message, *this);
 }
 
 
@@ -359,11 +358,6 @@ bool DiagnosticIDs::isDefaultMappingAsError(unsigned DiagID) {
     return false;
 
   return GetDefaultDiagMappingInfo(DiagID).getMapping() == diag::MAP_ERROR;
-}
-
-bool DiagnosticIDs::isRemark(unsigned DiagID) {
-  return DiagID < diag::DIAG_UPPER_LIMIT &&
-         getBuiltinDiagClass(DiagID) == CLASS_REMARK;
 }
 
 /// getDescription - Given a diagnostic ID, return a description of the
@@ -415,9 +409,6 @@ DiagnosticIDs::getDiagnosticLevel(unsigned DiagID, unsigned DiagClass,
   case diag::MAP_IGNORE:
     Result = DiagnosticIDs::Ignored;
     break;
-  case diag::MAP_REMARK:
-    Result = DiagnosticIDs::Remark;
-    break;
   case diag::MAP_WARNING:
     Result = DiagnosticIDs::Warning;
     break;
@@ -433,11 +424,6 @@ DiagnosticIDs::getDiagnosticLevel(unsigned DiagID, unsigned DiagClass,
   if (Diag.EnableAllWarnings && Result == DiagnosticIDs::Ignored &&
       !MappingInfo.isUser())
     Result = DiagnosticIDs::Warning;
-
-  // Diagnostics of class REMARK are either printed as remarks or in case they
-  // have been added to -Werror they are printed as errors.
-  if (DiagClass == CLASS_REMARK && Result == DiagnosticIDs::Warning)
-    Result = DiagnosticIDs::Remark;
 
   // Ignore -pedantic diagnostics inside __extension__ blocks.
   // (The diagnostics controlled by -pedantic are the extension diagnostics

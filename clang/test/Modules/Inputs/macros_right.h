@@ -17,5 +17,3 @@
 #define TOP_RIGHT_REDEF float
 
 #define FN_ADD(x, y) (x+y)
-
-#undef TOP_OTHER_DEF_RIGHT_UNDEF

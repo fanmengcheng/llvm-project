@@ -7,12 +7,12 @@
 //
 //===----------------------------------------------------------------------===//
 
+#define DEBUG_TYPE "format-test"
+
 #include "FormatTestUtils.h"
 #include "clang/Format/Format.h"
 #include "llvm/Support/Debug.h"
 #include "gtest/gtest.h"
-
-#define DEBUG_TYPE "format-test"
 
 namespace clang {
 namespace format {
@@ -31,19 +31,19 @@ protected:
     return Result;
   }
 
-  static std::string format(llvm::StringRef Code, const FormatStyle &Style) {
+  static std::string format(llvm::StringRef Code,
+                            const FormatStyle &Style = getGoogleJSStyle()) {
     return format(Code, 0, Code.size(), Style);
   }
 
   static FormatStyle getGoogleJSStyleWithColumns(unsigned ColumnLimit) {
-    FormatStyle Style = getGoogleStyle(FormatStyle::LK_JavaScript);
+    FormatStyle Style = getGoogleJSStyle();
     Style.ColumnLimit = ColumnLimit;
     return Style;
   }
 
-  static void verifyFormat(
-      llvm::StringRef Code,
-      const FormatStyle &Style = getGoogleStyle(FormatStyle::LK_JavaScript)) {
+  static void verifyFormat(llvm::StringRef Code,
+                           const FormatStyle &Style = getGoogleJSStyle()) {
     EXPECT_EQ(Code.str(), format(test::messUp(Code), Style));
   }
 };
@@ -77,38 +77,6 @@ TEST_F(FormatTestJS, UnderstandsJavaScriptOperators) {
                "            bbbbbb :\n"
                "            ccc;",
                getGoogleJSStyleWithColumns(20));
-}
-
-TEST_F(FormatTestJS, SpacesInContainerLiterals) {
-  verifyFormat("var arr = [1, 2, 3];");
-  verifyFormat("var obj = {a: 1, b: 2, c: 3};");
-
-  verifyFormat("var obj = {a: 1, b: 2, c: 3};",
-               getChromiumStyle(FormatStyle::LK_JavaScript));
-}
-
-TEST_F(FormatTestJS, SingleQuoteStrings) {
-  verifyFormat("this.function('', true);");
-}
-
-TEST_F(FormatTestJS, GoogScopes) {
-  verifyFormat("goog.scope(function() {\n"
-               "var x = a.b;\n"
-               "var y = c.d;\n"
-               "});  // goog.scope");
-}
-
-TEST_F(FormatTestJS, Closures) {
-  verifyFormat("doFoo(function() { return 1; });");
-  verifyFormat("var func = function() { return 1; };");
-}
-
-TEST_F(FormatTestJS, ReturnStatements) {
-  verifyFormat("function() { return [hello, world]; }");
-}
-
-TEST_F(FormatTestJS, ClosureStyleComments) {
-  verifyFormat("var x = /** @type {foo} */ (bar);");
 }
 
 } // end namespace tooling

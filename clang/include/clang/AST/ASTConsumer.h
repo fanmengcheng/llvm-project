@@ -135,12 +135,12 @@ public:
   /// \brief If the consumer is interested in entities getting modified after
   /// their initial creation, it should return a pointer to
   /// an ASTMutationListener here.
-  virtual ASTMutationListener *GetASTMutationListener() { return nullptr; }
+  virtual ASTMutationListener *GetASTMutationListener() { return 0; }
 
   /// \brief If the consumer is interested in entities being deserialized from
   /// AST files, it should return a pointer to a ASTDeserializationListener here
   virtual ASTDeserializationListener *GetASTDeserializationListener() {
-    return nullptr;
+    return 0;
   }
 
   /// PrintStats - If desired, print any statistics.

@@ -71,19 +71,19 @@ public:
   OverloadedTemplateStorage *getAsOverloadedStorage()  {
     return Bits.Kind == Overloaded
              ? reinterpret_cast<OverloadedTemplateStorage *>(this) 
-             : nullptr;
+             : 0;
   }
   
   SubstTemplateTemplateParmStorage *getAsSubstTemplateTemplateParm() {
     return Bits.Kind == SubstTemplateTemplateParm
              ? reinterpret_cast<SubstTemplateTemplateParmStorage *>(this)
-             : nullptr;
+             : 0;
   }
 
   SubstTemplateTemplateParmPackStorage *getAsSubstTemplateTemplateParmPack() {
     return Bits.Kind == SubstTemplateTemplateParmPack
              ? reinterpret_cast<SubstTemplateTemplateParmPackStorage *>(this)
-             : nullptr;
+             : 0;
   }
 };
   
@@ -243,7 +243,7 @@ public:
                               Storage.dyn_cast<UncommonTemplateNameStorage *>())
       return Uncommon->getAsOverloadedStorage();
     
-    return nullptr;
+    return 0;
   }
 
   /// \brief Retrieve the substituted template template parameter, if 
@@ -256,7 +256,7 @@ public:
           Storage.dyn_cast<UncommonTemplateNameStorage *>())
       return uncommon->getAsSubstTemplateTemplateParm();
     
-    return nullptr;
+    return 0;
   }
 
   /// \brief Retrieve the substituted template template parameter pack, if 
@@ -270,7 +270,7 @@ public:
         Storage.dyn_cast<UncommonTemplateNameStorage *>())
       return Uncommon->getAsSubstTemplateTemplateParmPack();
     
-    return nullptr;
+    return 0;
   }
 
   /// \brief Retrieve the underlying qualified template name

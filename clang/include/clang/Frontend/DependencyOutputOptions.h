@@ -26,7 +26,6 @@ public:
                                      /// problems.
   unsigned AddMissingHeaderDeps : 1; ///< Add missing headers to dependency list
   unsigned PrintShowIncludes : 1; ///< Print cl.exe style /showIncludes info.
-  unsigned IncludeModuleFiles : 1; ///< Include module file dependencies.
   
   /// The file to write dependency output to.
   std::string OutputFile;
@@ -51,7 +50,6 @@ public:
     UsePhonyTargets = 0;
     AddMissingHeaderDeps = 0;
     PrintShowIncludes = 0;
-    IncludeModuleFiles = 0;
   }
 };
 

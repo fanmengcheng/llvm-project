@@ -29,8 +29,7 @@ MacroInfo::MacroInfo(SourceLocation DefLoc)
     IsUsed(false),
     IsAllowRedefinitionsWithoutWarning(false),
     IsWarnIfUnused(false),
-    FromASTFile(false),
-    UsedForHeaderGuard(false) {
+    FromASTFile(false) {
 }
 
 unsigned MacroInfo::getDefinitionLengthSlow(SourceManager &SM) const {
@@ -126,11 +125,14 @@ bool MacroInfo::isIdenticalTo(const MacroInfo &Other, Preprocessor &PP,
   return true;
 }
 
-MacroDirective::DefInfo MacroDirective::getDefinition() {
+MacroDirective::DefInfo MacroDirective::getDefinition(bool AllowHidden) {
   MacroDirective *MD = this;
   SourceLocation UndefLoc;
   Optional<bool> isPublic;
   for (; MD; MD = MD->getPrevious()) {
+    if (!AllowHidden && MD->isHidden())
+      continue;
+
     if (DefMacroDirective *DefMD = dyn_cast<DefMacroDirective>(MD))
       return DefInfo(DefMD, UndefLoc,
                      !isPublic.hasValue() || isPublic.getValue());
@@ -145,7 +147,7 @@ MacroDirective::DefInfo MacroDirective::getDefinition() {
       isPublic = VisMD->isPublic();
   }
 
-  return DefInfo(0, UndefLoc, !isPublic.hasValue() || isPublic.getValue());
+  return DefInfo();
 }
 
 const MacroDirective::DefInfo

@@ -59,15 +59,10 @@ public:
   /// \brief Returns \c true if \c this is a base kind of (or same as) \c Other.
   /// \param Distance If non-null, used to return the distance between \c this
   /// and \c Other in the class hierarchy.
-  bool isBaseOf(ASTNodeKind Other, unsigned *Distance = nullptr) const;
+  bool isBaseOf(ASTNodeKind Other, unsigned *Distance = 0) const;
 
   /// \brief String representation of the kind.
   StringRef asStringRef() const;
-
-  /// \brief Strict weak ordering for ASTNodeKind.
-  bool operator<(const ASTNodeKind &Other) const {
-    return KindId < Other.KindId;
-  }
 
 private:
   /// \brief Kind ids.
@@ -142,11 +137,6 @@ KIND_TO_KIND_ID(Type)
 #include "clang/AST/TypeNodes.def"
 #undef KIND_TO_KIND_ID
 
-inline raw_ostream &operator<<(raw_ostream &OS, ASTNodeKind K) {
-  OS << K.asStringRef();
-  return OS;
-}
-
 /// \brief A dynamically typed AST node container.
 ///
 /// Stores an AST node in a type safe way. This allows writing code that
@@ -212,8 +202,8 @@ public:
     return getMemoizationData() < Other.getMemoizationData();
   }
   bool operator==(const DynTypedNode &Other) const {
-    if (!NodeKind.isBaseOf(Other.NodeKind) &&
-        !Other.NodeKind.isBaseOf(NodeKind))
+    // Nodes with different types cannot be equal.
+    if (!NodeKind.isSame(Other.NodeKind))
       return false;
 
     // FIXME: Implement for other types.
@@ -237,7 +227,7 @@ private:
     static const T *get(ASTNodeKind NodeKind, const char Storage[]) {
       if (ASTNodeKind::getFromNodeKind<BaseT>().isBaseOf(NodeKind))
         return dyn_cast<T>(*reinterpret_cast<BaseT *const *>(Storage));
-      return nullptr;
+      return NULL;
     }
     static DynTypedNode create(const BaseT &Node) {
       DynTypedNode Result;
@@ -252,7 +242,7 @@ private:
     static const T *get(ASTNodeKind NodeKind, const char Storage[]) {
       if (ASTNodeKind::getFromNodeKind<T>().isSame(NodeKind))
         return *reinterpret_cast<T *const *>(Storage);
-      return nullptr;
+      return NULL;
     }
     static DynTypedNode create(const T &Node) {
       DynTypedNode Result;
@@ -267,7 +257,7 @@ private:
     static const T *get(ASTNodeKind NodeKind, const char Storage[]) {
       if (ASTNodeKind::getFromNodeKind<T>().isSame(NodeKind))
         return reinterpret_cast<const T *>(Storage);
-      return nullptr;
+      return NULL;
     }
     static DynTypedNode create(const T &Node) {
       DynTypedNode Result;
@@ -297,18 +287,18 @@ private:
 
 template <typename T>
 struct DynTypedNode::BaseConverter<
-    T, typename std::enable_if<std::is_base_of<Decl, T>::value>::type>
-    : public DynCastPtrConverter<T, Decl> {};
+    T, typename llvm::enable_if<llvm::is_base_of<
+           Decl, T> >::type> : public DynCastPtrConverter<T, Decl> {};
 
 template <typename T>
 struct DynTypedNode::BaseConverter<
-    T, typename std::enable_if<std::is_base_of<Stmt, T>::value>::type>
-    : public DynCastPtrConverter<T, Stmt> {};
+    T, typename llvm::enable_if<llvm::is_base_of<
+           Stmt, T> >::type> : public DynCastPtrConverter<T, Stmt> {};
 
 template <typename T>
 struct DynTypedNode::BaseConverter<
-    T, typename std::enable_if<std::is_base_of<Type, T>::value>::type>
-    : public DynCastPtrConverter<T, Type> {};
+    T, typename llvm::enable_if<llvm::is_base_of<
+           Type, T> >::type> : public DynCastPtrConverter<T, Type> {};
 
 template <>
 struct DynTypedNode::BaseConverter<
@@ -355,7 +345,7 @@ inline const void *DynTypedNode::getMemoizationData() const {
   } else if (ASTNodeKind::getFromNodeKind<NestedNameSpecifier>().isBaseOf(NodeKind)) {
     return BaseConverter<NestedNameSpecifier>::get(NodeKind, Storage.buffer);
   }
-  return nullptr;
+  return NULL;
 }
 
 } // end namespace ast_type_traits

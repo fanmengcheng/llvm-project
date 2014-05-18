@@ -79,10 +79,10 @@ class FixitReceiver : public edit::EditsReceiver {
 public:
   FixitReceiver(SmallVectorImpl<FixItHint> &MergedFixits)
     : MergedFixits(MergedFixits) { }
-  void insert(SourceLocation loc, StringRef text) override {
+  virtual void insert(SourceLocation loc, StringRef text) {
     MergedFixits.push_back(FixItHint::CreateInsertion(loc, text));
   }
-  void replace(CharSourceRange range, StringRef text) override {
+  virtual void replace(CharSourceRange range, StringRef text) {
     MergedFixits.push_back(FixItHint::CreateReplacement(range, text));
   }
 };
@@ -499,11 +499,8 @@ DiagnosticNoteRenderer::emitBuildingModuleLocation(SourceLocation Loc,
   // Generate a note indicating the include location.
   SmallString<200> MessageStorage;
   llvm::raw_svector_ostream Message(MessageStorage);
-  if (PLoc.getFilename())
-    Message << "while building module '" << ModuleName << "' imported from "
-            << PLoc.getFilename() << ':' << PLoc.getLine() << ":";
-  else
-    Message << "while building module '" << ModuleName << ":";
+  Message << "while building module '" << ModuleName << "' imported from "
+          << PLoc.getFilename() << ':' << PLoc.getLine() << ":";
   emitNote(Loc, Message.str(), &SM);
 }
 

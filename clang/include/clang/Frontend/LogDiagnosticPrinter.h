@@ -62,14 +62,14 @@ public:
     DwarfDebugFlags = Value;
   }
 
-  void BeginSourceFile(const LangOptions &LO, const Preprocessor *PP) override {
+  void BeginSourceFile(const LangOptions &LO, const Preprocessor *PP) {
     LangOpts = &LO;
   }
 
-  void EndSourceFile() override;
+  void EndSourceFile();
 
-  void HandleDiagnostic(DiagnosticsEngine::Level DiagLevel,
-                        const Diagnostic &Info) override;
+  virtual void HandleDiagnostic(DiagnosticsEngine::Level DiagLevel,
+                                const Diagnostic &Info);
 };
 
 } // end namespace clang

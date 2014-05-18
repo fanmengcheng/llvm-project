@@ -5,19 +5,15 @@ namespace std {
   typedef __typeof__(sizeof(int)) size_t;
 }
 
-struct X {};
-
-void *operator new(std::size_t, X, ...);
-void *operator new[](std::size_t, X, ...);
+void *operator new(std::size_t, ...);
+void *operator new[](std::size_t, ...);
 
 void testGlobalCustomVariadicNew() {
-  X x;
+  void *p1 = operator new(0); // no warn
 
-  void *p1 = operator new(0, x); // no warn
+  void *p2 = operator new[](0); // no warn
 
-  void *p2 = operator new[](0, x); // no warn
+  int *p3 = new int; // no warn
 
-  int *p3 = new (x) int; // no warn
-
-  int *p4 = new (x) int[0]; // no warn
+  int *p4 = new int[0]; // no warn
 }

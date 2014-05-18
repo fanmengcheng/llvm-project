@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -triple=i686-pc-win32 -fsyntax-only -verify %s -std=c++11
+// RUN: %clang_cc1 -triple=i686-pc-unknown -fsyntax-only -verify %s -std=c++11 -cxx-abi microsoft
 
 namespace PR14339 {
   class A {

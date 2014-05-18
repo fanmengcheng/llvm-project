@@ -15,6 +15,7 @@
 #include "clang/AST/RecordLayout.h"
 #include "clang/AST/TypeLoc.h"
 #include "clang/Basic/TargetInfo.h"
+#include "clang/Lex/Preprocessor.h"
 #include "clang/Sema/Initialization.h"
 #include "clang/Sema/Lookup.h"
 #include "clang/Sema/Scope.h"
@@ -441,10 +442,8 @@ bool Sema::LookupInlineAsmField(StringRef Base, StringRef Member,
   NamedDecl *FoundDecl = BaseResult.getFoundDecl();
   if (VarDecl *VD = dyn_cast<VarDecl>(FoundDecl))
     RT = VD->getType()->getAs<RecordType>();
-  else if (TypedefNameDecl *TD = dyn_cast<TypedefNameDecl>(FoundDecl))
+  else if (TypedefDecl *TD = dyn_cast<TypedefDecl>(FoundDecl))
     RT = TD->getUnderlyingType()->getAs<RecordType>();
-  else if (TypeDecl *TD = dyn_cast<TypeDecl>(FoundDecl))
-    RT = TD->getTypeForDecl()->getAs<RecordType>();
   if (!RT)
     return true;
 

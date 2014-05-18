@@ -18,10 +18,13 @@
 #include "clang/Basic/DiagnosticIDs.h"
 #include "clang/Basic/DiagnosticOptions.h"
 #include "clang/Basic/SourceLocation.h"
+#if !LLVM_HAS_STRONG_ENUMS
+#include "clang/Basic/TokenKinds.h"
+#endif
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
-#include "llvm/ADT/iterator_range.h"
+#include "llvm/Support/type_traits.h"
 #include <list>
 #include <vector>
 
@@ -35,9 +38,11 @@ namespace clang {
   class Preprocessor;
   class DiagnosticErrorTrap;
   class StoredDiagnostic;
+#if LLVM_HAS_STRONG_ENUMS
   namespace tok {
   enum TokenKind : unsigned short;
   }
+#endif
 
 /// \brief Annotates a diagnostic with some code that should be
 /// inserted, removed, or replaced to fix the problem.
@@ -137,7 +142,6 @@ public:
   enum Level {
     Ignored = DiagnosticIDs::Ignored,
     Note = DiagnosticIDs::Note,
-    Remark = DiagnosticIDs::Remark,
     Warning = DiagnosticIDs::Warning,
     Error = DiagnosticIDs::Error,
     Fatal = DiagnosticIDs::Fatal
@@ -342,19 +346,11 @@ private:
   /// \brief Second string argument for the delayed diagnostic.
   std::string DelayedDiagArg2;
 
-  /// \brief Flag name value.
-  ///
-  /// Some flags accept values. For instance, -Wframe-larger-than or -Rpass.
-  /// When reporting a diagnostic with those flags, it is useful to also
-  /// report the value that actually triggered the flag. The content of this
-  /// string is a value to be emitted after the flag name.
-  std::string FlagNameValue;
-
 public:
   explicit DiagnosticsEngine(
                       const IntrusiveRefCntPtr<DiagnosticIDs> &Diags,
                       DiagnosticOptions *DiagOpts,
-                      DiagnosticConsumer *client = nullptr,
+                      DiagnosticConsumer *client = 0,
                       bool ShouldOwnClient = true);
   ~DiagnosticsEngine();
 
@@ -364,14 +360,6 @@ public:
 
   /// \brief Retrieve the diagnostic options.
   DiagnosticOptions &getDiagnosticOptions() const { return *DiagOpts; }
-
-  typedef llvm::iterator_range<DiagState::const_iterator> diag_mapping_range;
-
-  /// \brief Get the current set of diagnostic mappings.
-  diag_mapping_range getDiagnosticMappings() const {
-    const DiagState &DS = *GetCurDiagState();
-    return diag_mapping_range(DS.begin(), DS.end());
-  }
 
   DiagnosticConsumer *getClient() { return Client; }
   const DiagnosticConsumer *getClient() const { return Client; }
@@ -386,7 +374,7 @@ public:
     return Client;
   }
 
-  bool hasSourceManager() const { return SourceMgr != nullptr; }
+  bool hasSourceManager() const { return SourceMgr != 0; }
   SourceManager &getSourceManager() const {
     assert(SourceMgr && "SourceManager not set!");
     return *SourceMgr;
@@ -558,12 +546,22 @@ public:
   bool setDiagnosticGroupMapping(StringRef Group, diag::Mapping Map,
                                  SourceLocation Loc = SourceLocation());
 
+  /// \brief Set the warning-as-error flag for the given diagnostic.
+  ///
+  /// This function always only operates on the current diagnostic state.
+  void setDiagnosticWarningAsError(diag::kind Diag, bool Enabled);
+
   /// \brief Set the warning-as-error flag for the given diagnostic group.
   ///
   /// This function always only operates on the current diagnostic state.
   ///
   /// \returns True if the given group is unknown, false otherwise.
   bool setDiagnosticGroupWarningAsError(StringRef Group, bool Enabled);
+
+  /// \brief Set the error-as-fatal flag for the given diagnostic.
+  ///
+  /// This function always only operates on the current diagnostic state.
+  void setDiagnosticErrorAsFatal(diag::kind Diag, bool Enabled);
 
   /// \brief Set the error-as-fatal flag for the given diagnostic group.
   ///
@@ -599,18 +597,15 @@ public:
     this->NumWarnings = NumWarnings;
   }
 
-  /// \brief Return an ID for a diagnostic with the specified format string and
-  /// level.
+  /// \brief Return an ID for a diagnostic with the specified message and level.
   ///
   /// If this is the first request for this diagnostic, it is registered and
   /// created, otherwise the existing ID is returned.
   ///
-  /// \param FormatString A fixed diagnostic format string that will be hashed
-  /// and mapped to a unique DiagID.
-  template <unsigned N>
-  unsigned getCustomDiagID(Level L, const char (&FormatString)[N]) {
-    return Diags->getCustomDiagID((DiagnosticIDs::Level)L,
-                                  StringRef(FormatString, N - 1));
+  /// \param Message A fixed diagnostic format string that will be hashed and
+  /// mapped to a unique DiagID.
+  unsigned getCustomDiagID(Level L, StringRef Message) {
+    return Diags->getCustomDiagID((DiagnosticIDs::Level)L, Message);
   }
 
   /// \brief Converts a diagnostic argument (as an intptr_t) into the string
@@ -697,12 +692,6 @@ public:
   
   /// \brief Clear out the current diagnostic.
   void Clear() { CurDiagID = ~0U; }
-
-  /// \brief Return the value associated to this diagnostic flag.
-  StringRef getFlagNameValue() const { return StringRef(FlagNameValue); }
-
-  /// \brief Set the value associated to this diagnostic flag.
-  void setFlagNameValue(StringRef V) { FlagNameValue = V; }
 
 private:
   /// \brief Report the delayed diagnostic.
@@ -889,7 +878,7 @@ class DiagnosticBuilder {
   friend class DiagnosticsEngine;
   
   DiagnosticBuilder()
-    : DiagObj(nullptr), NumArgs(0), NumRanges(0), NumFixits(0), IsActive(false),
+    : DiagObj(0), NumArgs(0), NumRanges(0), NumFixits(0), IsActive(false),
       IsForceEmit(false) { }
 
   explicit DiagnosticBuilder(DiagnosticsEngine *diagObj)
@@ -909,7 +898,7 @@ protected:
 
   /// \brief Clear out the current diagnostic.
   void Clear() const {
-    DiagObj = nullptr;
+    DiagObj = 0;
     IsActive = false;
     IsForceEmit = false;
   }
@@ -1017,24 +1006,7 @@ public:
   bool hasMaxFixItHints() const {
     return NumFixits == DiagnosticsEngine::MaxFixItHints;
   }
-
-  void addFlagValue(StringRef V) const { DiagObj->setFlagNameValue(V); }
 };
-
-struct AddFlagValue {
-  explicit AddFlagValue(StringRef V) : Val(V) {}
-  StringRef Val;
-};
-
-/// \brief Register a value for the flag in the current diagnostic. This
-/// value will be shown as the suffix "=value" after the flag name. It is
-/// useful in cases where the diagnostic flag accepts values (e.g.,
-/// -Rpass or -Wframe-larger-than).
-inline const DiagnosticBuilder &operator<<(const DiagnosticBuilder &DB,
-                                           const AddFlagValue V) {
-  DB.addFlagValue(V.Val);
-  return DB;
-}
 
 inline const DiagnosticBuilder &operator<<(const DiagnosticBuilder &DB,
                                            StringRef S) {
@@ -1054,13 +1026,7 @@ inline const DiagnosticBuilder &operator<<(const DiagnosticBuilder &DB, int I) {
   return DB;
 }
 
-// We use enable_if here to prevent that this overload is selected for
-// pointers or other arguments that are implicitly convertible to bool.
-template <typename T>
-inline
-typename std::enable_if<std::is_same<T, bool>::value,
-                        const DiagnosticBuilder &>::type
-operator<<(const DiagnosticBuilder &DB, T I) {
+inline const DiagnosticBuilder &operator<<(const DiagnosticBuilder &DB,bool I) {
   DB.AddTaggedVal(I, DiagnosticsEngine::ak_sint);
   return DB;
 }
@@ -1090,24 +1056,17 @@ inline const DiagnosticBuilder &operator<<(const DiagnosticBuilder &DB,
 // match.
 template<typename T>
 inline
-typename std::enable_if<std::is_same<T, DeclContext>::value,
-                        const DiagnosticBuilder &>::type
+typename llvm::enable_if<llvm::is_same<T, DeclContext>, 
+                         const DiagnosticBuilder &>::type
 operator<<(const DiagnosticBuilder &DB, T *DC) {
   DB.AddTaggedVal(reinterpret_cast<intptr_t>(DC),
                   DiagnosticsEngine::ak_declcontext);
   return DB;
 }
-
+  
 inline const DiagnosticBuilder &operator<<(const DiagnosticBuilder &DB,
                                            const SourceRange &R) {
   DB.AddSourceRange(CharSourceRange::getTokenRange(R));
-  return DB;
-}
-
-inline const DiagnosticBuilder &operator<<(const DiagnosticBuilder &DB,
-                                           ArrayRef<SourceRange> Ranges) {
-  for (const SourceRange &R: Ranges)
-    DB.AddSourceRange(CharSourceRange::getTokenRange(R));
   return DB;
 }
 
@@ -1116,7 +1075,7 @@ inline const DiagnosticBuilder &operator<<(const DiagnosticBuilder &DB,
   DB.AddSourceRange(R);
   return DB;
 }
-
+  
 inline const DiagnosticBuilder &operator<<(const DiagnosticBuilder &DB,
                                            const FixItHint &Hint) {
   if (!Hint.isNull())
@@ -1125,14 +1084,12 @@ inline const DiagnosticBuilder &operator<<(const DiagnosticBuilder &DB,
 }
 
 inline DiagnosticBuilder DiagnosticsEngine::Report(SourceLocation Loc,
-                                                   unsigned DiagID) {
+                                            unsigned DiagID){
   assert(CurDiagID == ~0U && "Multiple diagnostics in flight at once!");
   CurDiagLoc = Loc;
   CurDiagID = DiagID;
-  FlagNameValue.clear();
   return DiagnosticBuilder(this);
 }
-
 inline DiagnosticBuilder DiagnosticsEngine::Report(unsigned DiagID) {
   return Report(SourceLocation(), DiagID);
 }
@@ -1245,7 +1202,7 @@ public:
   }
 
   const FixItHint *getFixItHints() const {
-    return getNumFixItHints()? DiagObj->DiagFixItHints : nullptr;
+    return getNumFixItHints()? DiagObj->DiagFixItHints : 0;
   }
 
   /// \brief Format this diagnostic into a string, substituting the
@@ -1341,7 +1298,7 @@ public:
   /// \param PP The preprocessor object being used for the source; this is 
   /// optional, e.g., it may not be present when processing AST source files.
   virtual void BeginSourceFile(const LangOptions &LangOpts,
-                               const Preprocessor *PP = nullptr) {}
+                               const Preprocessor *PP = 0) {}
 
   /// \brief Callback to inform the diagnostic client that processing
   /// of a source file has ended.
@@ -1374,7 +1331,7 @@ public:
 class IgnoringDiagConsumer : public DiagnosticConsumer {
   virtual void anchor();
   void HandleDiagnostic(DiagnosticsEngine::Level DiagLevel,
-                        const Diagnostic &Info) override {
+                        const Diagnostic &Info) {
     // Just ignore it.
   }
 };
@@ -1390,11 +1347,11 @@ public:
 
   virtual ~ForwardingDiagnosticConsumer();
 
-  void HandleDiagnostic(DiagnosticsEngine::Level DiagLevel,
-                        const Diagnostic &Info) override;
-  void clear() override;
+  virtual void HandleDiagnostic(DiagnosticsEngine::Level DiagLevel,
+                                const Diagnostic &Info);
+  virtual void clear();
 
-  bool IncludeInDiagnosticCounts() const override;
+  virtual bool IncludeInDiagnosticCounts() const;
 };
 
 // Struct used for sending info about how a type should be printed.
@@ -1412,13 +1369,6 @@ struct TemplateDiffTypes {
 /// Special character that the diagnostic printer will use to toggle the bold
 /// attribute.  The character itself will be not be printed.
 const char ToggleHighlight = 127;
-
-
-/// ProcessWarningOptions - Initialize the diagnostic client and process the
-/// warning options specified on the command line.
-void ProcessWarningOptions(DiagnosticsEngine &Diags,
-                           const DiagnosticOptions &Opts,
-                           bool ReportDiags = true);
 
 }  // end namespace clang
 

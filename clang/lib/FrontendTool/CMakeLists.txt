@@ -3,7 +3,17 @@ set(LLVM_LINK_COMPONENTS
   Support
   )
 
-set(link_libs
+add_clang_library(clangFrontendTool
+  ExecuteCompilerInvocation.cpp
+  )
+
+add_dependencies(clangFrontendTool
+  ClangDiagnosticCommon
+  ClangDiagnosticFrontend
+  ClangDriverOptions
+  )
+
+target_link_libraries(clangFrontendTool
   clangBasic
   clangCodeGen
   clangDriver
@@ -12,23 +22,13 @@ set(link_libs
   )
 
 if(CLANG_ENABLE_ARCMT)
-  list(APPEND link_libs
+  target_link_libraries(clangFrontendTool
     clangARCMigrate
     )
 endif()
 
 if(CLANG_ENABLE_STATIC_ANALYZER)
-  list(APPEND link_libs
+  target_link_libraries(clangFrontendTool
     clangStaticAnalyzerFrontend
     )
 endif()
-
-add_clang_library(clangFrontendTool
-  ExecuteCompilerInvocation.cpp
-
-  DEPENDS
-  ClangDriverOptions
-
-  LINK_LIBS
-  ${link_libs}
-  )

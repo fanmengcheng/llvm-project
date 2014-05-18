@@ -9,9 +9,3 @@ namespace std {
     typedef int size_t;
   }
 }
-
-namespace X {
-  inline namespace Y {
-    struct Z;
-  }
-}

@@ -48,5 +48,3 @@ template<typename T> struct MergeSpecializations<T*> {
 template<> struct MergeSpecializations<char> {
   typedef int explicitly_specialized_in_a;
 };
-
-void InstantiateWithFriend(Std::WithFriend<int> wfi) {}

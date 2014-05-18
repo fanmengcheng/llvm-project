@@ -42,8 +42,8 @@ namespace {
       : Out(OS), PP(pp), SyntaxHighlight(_SyntaxHighlight),
         HighlightMacros(_HighlightMacros) {}
 
-    void Initialize(ASTContext &context) override;
-    void HandleTranslationUnit(ASTContext &Ctx) override;
+    void Initialize(ASTContext &context);
+    void HandleTranslationUnit(ASTContext &Ctx);
   };
 }
 

@@ -14,12 +14,12 @@
 #include "clang/Lex/HeaderMap.h"
 #include "clang/Basic/CharInfo.h"
 #include "clang/Basic/FileManager.h"
+#include "llvm/ADT/OwningPtr.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/DataTypes.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include <cstdio>
-#include <memory>
 using namespace clang;
 
 //===----------------------------------------------------------------------===//
@@ -81,7 +81,7 @@ const HeaderMap *HeaderMap::Create(const FileEntry *FE, FileManager &FM) {
   unsigned FileSize = FE->getSize();
   if (FileSize <= sizeof(HMapHeader)) return 0;
 
-  std::unique_ptr<const llvm::MemoryBuffer> FileBuffer(FM.getBufferForFile(FE));
+  OwningPtr<const llvm::MemoryBuffer> FileBuffer(FM.getBufferForFile(FE));
   if (!FileBuffer) return 0;  // Unreadable file?
   const char *FileStart = FileBuffer->getBufferStart();
 
@@ -103,7 +103,7 @@ const HeaderMap *HeaderMap::Create(const FileEntry *FE, FileManager &FM) {
   if (Header->Reserved != 0) return 0;
 
   // Okay, everything looks good, create the header map.
-  return new HeaderMap(FileBuffer.release(), NeedsByteSwap);
+  return new HeaderMap(FileBuffer.take(), NeedsByteSwap);
 }
 
 HeaderMap::~HeaderMap() {
@@ -201,29 +201,18 @@ void HeaderMap::dump() const {
 /// this HeaderMap.  If so, open it and return its FileEntry.
 const FileEntry *HeaderMap::LookupFile(
     StringRef Filename, FileManager &FM) const {
-
-  SmallString<1024> Path;
-  StringRef Dest = lookupFilename(Filename, Path);
-  if (Dest.empty())
-    return 0;
-
-  return FM.getFile(Dest);
-}
-
-StringRef HeaderMap::lookupFilename(StringRef Filename,
-                                    SmallVectorImpl<char> &DestPath) const {
   const HMapHeader &Hdr = getHeader();
   unsigned NumBuckets = getEndianAdjustedWord(Hdr.NumBuckets);
 
   // If the number of buckets is not a power of two, the headermap is corrupt.
   // Don't probe infinitely.
   if (NumBuckets & (NumBuckets-1))
-    return StringRef();
+    return 0;
 
   // Linearly probe the hash table.
   for (unsigned Bucket = HashHMapKey(Filename);; ++Bucket) {
     HMapBucket B = getBucket(Bucket & (NumBuckets-1));
-    if (B.Key == HMAP_EmptyBucketKey) return StringRef(); // Hash miss.
+    if (B.Key == HMAP_EmptyBucketKey) return 0; // Hash miss.
 
     // See if the key matches.  If not, probe on.
     if (!Filename.equals_lower(getString(B.Key)))
@@ -231,11 +220,9 @@ StringRef HeaderMap::lookupFilename(StringRef Filename,
 
     // If so, we have a match in the hash table.  Construct the destination
     // path.
-    StringRef Prefix = getString(B.Prefix);
-    StringRef Suffix = getString(B.Suffix);
-    DestPath.clear();
-    DestPath.append(Prefix.begin(), Prefix.end());
-    DestPath.append(Suffix.begin(), Suffix.end());
-    return StringRef(DestPath.begin(), DestPath.size());
+    SmallString<1024> DestPath;
+    DestPath += getString(B.Prefix);
+    DestPath += getString(B.Suffix);
+    return FM.getFile(DestPath.str());
   }
 }

@@ -33,16 +33,11 @@ namespace {
 /// literals within a particular context.
 class ItaniumNumberingContext : public MangleNumberingContext {
   llvm::DenseMap<IdentifierInfo*, unsigned> VarManglingNumbers;
-  llvm::DenseMap<IdentifierInfo*, unsigned> TagManglingNumbers;
 
 public:
   /// Variable decls are numbered by identifier.
-  unsigned getManglingNumber(const VarDecl *VD, unsigned) override {
+  virtual unsigned getManglingNumber(const VarDecl *VD) {
     return ++VarManglingNumbers[VD->getIdentifier()];
-  }
-
-  unsigned getManglingNumber(const TagDecl *TD, unsigned) override {
-    return ++TagManglingNumbers[TD->getIdentifier()];
   }
 };
 
@@ -53,7 +48,7 @@ public:
   ItaniumCXXABI(ASTContext &Ctx) : Context(Ctx) { }
 
   std::pair<uint64_t, unsigned>
-  getMemberPointerWidthAndAlign(const MemberPointerType *MPT) const override {
+  getMemberPointerWidthAndAlign(const MemberPointerType *MPT) const {
     const TargetInfo &Target = Context.getTargetInfo();
     TargetInfo::IntType PtrDiff = Target.getPtrDiffType(0);
     uint64_t Width = Target.getTypeWidth(PtrDiff);
@@ -63,9 +58,9 @@ public:
     return std::make_pair(Width, Align);
   }
 
-  CallingConv getDefaultMethodCallConv(bool isVariadic) const override {
+  CallingConv getDefaultMethodCallConv(bool isVariadic) const {
     const llvm::Triple &T = Context.getTargetInfo().getTriple();
-    if (!isVariadic && T.isWindowsGNUEnvironment() &&
+    if (!isVariadic && T.getOS() == llvm::Triple::MinGW32 &&
         T.getArch() == llvm::Triple::x86)
       return CC_X86ThisCall;
     return CC_C;
@@ -73,7 +68,7 @@ public:
 
   // We cheat and just check that the class has a vtable pointer, and that it's
   // only big enough to have a vtable pointer and nothing more (or less).
-  bool isNearlyEmpty(const CXXRecordDecl *RD) const override {
+  bool isNearlyEmpty(const CXXRecordDecl *RD) const {
 
     // Check that the class has a vtable pointer.
     if (!RD->isDynamicClass())
@@ -85,7 +80,7 @@ public:
     return Layout.getNonVirtualSize() == PointerSize;
   }
 
-  MangleNumberingContext *createMangleNumberingContext() const override {
+  virtual MangleNumberingContext *createMangleNumberingContext() const {
     return new ItaniumNumberingContext();
   }
 };

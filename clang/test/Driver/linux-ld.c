@@ -35,46 +35,6 @@
 //
 // RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
 // RUN:     --target=x86_64-unknown-linux \
-// RUN:     --sysroot=%S/Inputs/basic_linux_tree \
-// RUN:     --rtlib=compiler-rt \
-// RUN:   | FileCheck --check-prefix=CHECK-LD-RT %s
-// CHECK-LD-RT-NOT: warning:
-// CHECK-LD-RT: "{{.*}}ld{{(.exe)?}}" "--sysroot=[[SYSROOT:[^"]+]]"
-// CHECK-LD-RT: "--eh-frame-hdr"
-// CHECK-LD-RT: "-m" "elf_x86_64"
-// CHECK-LD-RT: "-dynamic-linker"
-// CHECK-LD-RT: "{{.*}}/usr/lib/gcc/x86_64-unknown-linux/4.6.0{{/|\\\\}}crtbegin.o"
-// CHECK-LD-RT: "-L[[SYSROOT]]/usr/lib/gcc/x86_64-unknown-linux/4.6.0"
-// CHECK-LD-RT: "-L[[SYSROOT]]/usr/lib/gcc/x86_64-unknown-linux/4.6.0/../../../../x86_64-unknown-linux/lib"
-// CHECK-LD-RT: "-L[[SYSROOT]]/usr/lib/gcc/x86_64-unknown-linux/4.6.0/../../.."
-// CHECK-LD-RT: "-L[[SYSROOT]]/lib"
-// CHECK-LD-RT: "-L[[SYSROOT]]/usr/lib"
-// CHECK-LD-RT: libclang_rt.x86_64.a" "-lgcc_s"
-// CHECK-LD-RT: "-lc"
-// CHECK-LD-RT: libclang_rt.x86_64.a" "-lgcc_s"
-//
-// RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
-// RUN:     --target=x86_64-unknown-linux \
-// RUN:     --sysroot=%S/Inputs/basic_linux_tree \
-// RUN:     --rtlib=libgcc \
-// RUN:   | FileCheck --check-prefix=CHECK-LD-GCC %s
-// CHECK-LD-GCC-NOT: warning:
-// CHECK-LD-GCC: "{{.*}}ld{{(.exe)?}}" "--sysroot=[[SYSROOT:[^"]+]]"
-// CHECK-LD-GCC: "--eh-frame-hdr"
-// CHECK-LD-GCC: "-m" "elf_x86_64"
-// CHECK-LD-GCC: "-dynamic-linker"
-// CHECK-LD-GCC: "{{.*}}/usr/lib/gcc/x86_64-unknown-linux/4.6.0{{/|\\\\}}crtbegin.o"
-// CHECK-LD-GCC: "-L[[SYSROOT]]/usr/lib/gcc/x86_64-unknown-linux/4.6.0"
-// CHECK-LD-GCC: "-L[[SYSROOT]]/usr/lib/gcc/x86_64-unknown-linux/4.6.0/../../../../x86_64-unknown-linux/lib"
-// CHECK-LD-GCC: "-L[[SYSROOT]]/usr/lib/gcc/x86_64-unknown-linux/4.6.0/../../.."
-// CHECK-LD-GCC: "-L[[SYSROOT]]/lib"
-// CHECK-LD-GCC: "-L[[SYSROOT]]/usr/lib"
-// CHECK-LD-GCC "-lgcc" "--as-needed" "-lgcc_s" "--no-as-needed"
-// CHECK-LD-GCC: "-lc"
-// CHECK-LD-GCC: "-lgcc" "--as-needed" "-lgcc_s" "--no-as-needed"
-//
-// RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
-// RUN:     --target=x86_64-unknown-linux \
 // RUN:     -static-libgcc \
 // RUN:     --sysroot=%S/Inputs/basic_linux_tree \
 // RUN:   | FileCheck --check-prefix=CHECK-LD-64-STATIC-LIBGCC %s
@@ -254,32 +214,6 @@
 // CHECK-GCC-VERSION4: "{{.*}}/Inputs/gcc_version_parsing4/bin/../lib/gcc/i386-unknown-linux/4.7.99{{/|\\\\}}crtbegin.o"
 // CHECK-GCC-VERSION4: "-L{{.*}}/Inputs/gcc_version_parsing4/bin/../lib/gcc/i386-unknown-linux/4.7.99"
 //
-// Test a simulated installation of libc++ on Linux, both through sysroot and
-// the installation path of Clang.
-// RUN: %clangxx -no-canonical-prefixes -x c++ %s -### -o %t.o 2>&1 \
-// RUN:     -target x86_64-unknown-linux-gnu \
-// RUN:     -stdlib=libc++ \
-// RUN:     -ccc-install-dir %S/Inputs/basic_linux_tree/usr/bin \
-// RUN:     --sysroot=%S/Inputs/basic_linux_libcxx_tree \
-// RUN:   | FileCheck --check-prefix=CHECK-BASIC-LIBCXX-SYSROOT %s
-// CHECK-BASIC-LIBCXX-SYSROOT: "{{[^"]*}}clang{{[^"]*}}" "-cc1"
-// CHECK-BASIC-LIBCXX-SYSROOT: "-isysroot" "[[SYSROOT:[^"]+]]"
-// CHECK-BASIC-LIBCXX-SYSROOT: "-internal-isystem" "[[SYSROOT]]/usr/include/c++/v1"
-// CHECK-BASIC-LIBCXX-SYSROOT: "-internal-isystem" "[[SYSROOT]]/usr/local/include"
-// CHECK-BASIC-LIBCXX-SYSROOT: "--sysroot=[[SYSROOT]]"
-// RUN: %clang -no-canonical-prefixes -x c++ %s -### -o %t.o 2>&1 \
-// RUN:     -target x86_64-unknown-linux-gnu \
-// RUN:     -stdlib=libc++ \
-// RUN:     -ccc-install-dir %S/Inputs/basic_linux_libcxx_tree/usr/bin \
-// RUN:     --sysroot=%S/Inputs/basic_linux_libcxx_tree \
-// RUN:   | FileCheck --check-prefix=CHECK-BASIC-LIBCXX-INSTALL %s
-// CHECK-BASIC-LIBCXX-INSTALL: "{{[^"]*}}clang{{[^"]*}}" "-cc1"
-// CHECK-BASIC-LIBCXX-INSTALL: "-isysroot" "[[SYSROOT:[^"]+]]"
-// CHECK-BASIC-LIBCXX-INSTALL: "-internal-isystem" "[[SYSROOT]]/usr/bin/../include/c++/v1"
-// CHECK-BASIC-LIBCXX-INSTALL: "-internal-isystem" "[[SYSROOT]]/usr/local/include"
-// CHECK-BASIC-LIBCXX-INSTALL: "--sysroot=[[SYSROOT]]"
-// CHECK-BASIC-LIBCXX-INSTALL: "-L[[SYSROOT]]/usr/bin/../lib"
-//
 // Test a very broken version of multiarch that shipped in Ubuntu 11.04.
 // RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
 // RUN:     --target=i386-unknown-linux \
@@ -360,24 +294,6 @@
 // CHECK-FEDORA-18-ARM-HF: "-L[[SYSROOT]]/usr/lib/gcc/armv7hl-redhat-linux-gnueabi/4.7.2/../../../../lib"
 // CHECK-FEDORA-18-ARM-HF: "{{.*}}/usr/lib/gcc/armv7hl-redhat-linux-gnueabi/4.7.2{{/|\\\\}}crtend.o"
 // CHECK-FEDORA-18-ARM-HF: "{{.*}}/usr/lib/gcc/armv7hl-redhat-linux-gnueabi/4.7.2/../../../../lib{{/|\\\\}}crtn.o"
-//
-// Check Fedora 21 on AArch64.
-// RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
-// RUN:     --target=arm64-unknown-linux-gnu \
-// RUN:     --sysroot=%S/Inputs/fedora_21_tree \
-// RUN:   | FileCheck --check-prefix=CHECK-FEDORA-21-AARCH64 %s
-// RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
-// RUN:     --target=aarch64-unknown-linux-gnu \
-// RUN:     --sysroot=%S/Inputs/fedora_21_tree \
-// RUN:   | FileCheck --check-prefix=CHECK-FEDORA-21-AARCH64 %s
-// CHECK-FEDORA-21-AARCH64: "{{.*}}ld{{(.exe)?}}" "--sysroot=[[SYSROOT:[^"]+]]"
-// CHECK-FEDORA-21-AARCH64: "{{.*}}/usr/lib/gcc/aarch64-redhat-linux/4.9.0/../../../../lib64{{/|\\\\}}crt1.o"
-// CHECK-FEDORA-21-AARCH64: "{{.*}}/usr/lib/gcc/aarch64-redhat-linux/4.9.0/../../../../lib64{{/|\\\\}}crti.o"
-// CHECK-FEDORA-21-AARCH64: "{{.*}}/usr/lib/gcc/aarch64-redhat-linux/4.9.0{{/|\\\\}}crtbegin.o"
-// CHECK-FEDORA-21-AARCH64: "-L[[SYSROOT]]/usr/lib/gcc/aarch64-redhat-linux/4.9.0"
-// CHECK-FEDORA-21-AARCH64: "-L[[SYSROOT]]/usr/lib/gcc/aarch64-redhat-linux/4.9.0/../../../../lib64"
-// CHECK-FEDORA-21-AARCH64: "{{.*}}/usr/lib/gcc/aarch64-redhat-linux/4.9.0{{/|\\\\}}crtend.o"
-// CHECK-FEDORA-21-AARCH64: "{{.*}}/usr/lib/gcc/aarch64-redhat-linux/4.9.0/../../../../lib64{{/|\\\\}}crtn.o"
 //
 // RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
 // RUN:     --target=arm-unknown-linux-gnueabi \
@@ -610,27 +526,11 @@
 // RUN:     --sysroot=%S/Inputs/basic_android_tree/sysroot \
 // RUN:   | FileCheck --check-prefix=CHECK-ANDROID %s
 // RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
-// RUN:     --target=aarch64-linux-android \
-// RUN:     --sysroot=%S/Inputs/basic_android_tree/sysroot \
-// RUN:   | FileCheck --check-prefix=CHECK-ANDROID %s
-// RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
-// RUN:     --target=arm64-linux-android \
-// RUN:     --sysroot=%S/Inputs/basic_android_tree/sysroot \
-// RUN:   | FileCheck --check-prefix=CHECK-ANDROID %s
-// RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
 // RUN:     --target=mipsel-linux-android \
 // RUN:     --sysroot=%S/Inputs/basic_android_tree/sysroot \
 // RUN:   | FileCheck --check-prefix=CHECK-ANDROID %s
 // RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
-// RUN:     --target=mips64el-linux-android \
-// RUN:     --sysroot=%S/Inputs/basic_android_tree/sysroot \
-// RUN:   | FileCheck --check-prefix=CHECK-ANDROID %s
-// RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
 // RUN:     --target=i686-linux-android \
-// RUN:     --sysroot=%S/Inputs/basic_android_tree/sysroot \
-// RUN:   | FileCheck --check-prefix=CHECK-ANDROID %s
-// RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
-// RUN:     --target=x86_64-linux-android \
 // RUN:     --sysroot=%S/Inputs/basic_android_tree/sysroot \
 // RUN:   | FileCheck --check-prefix=CHECK-ANDROID %s
 // CHECK-ANDROID: "{{.*}}ld{{(.exe)?}}" "--sysroot=[[SYSROOT:[^"]+]]"
@@ -652,32 +552,12 @@
 // RUN:     -shared \
 // RUN:   | FileCheck --check-prefix=CHECK-ANDROID-SO %s
 // RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
-// RUN:     --target=aarch64-linux-android \
-// RUN:     --sysroot=%S/Inputs/basic_android_tree/sysroot \
-// RUN:     -shared \
-// RUN:   | FileCheck --check-prefix=CHECK-ANDROID-SO %s
-// RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
-// RUN:     --target=arm64-linux-android \
-// RUN:     --sysroot=%S/Inputs/basic_android_tree/sysroot \
-// RUN:     -shared \
-// RUN:   | FileCheck --check-prefix=CHECK-ANDROID-SO %s
-// RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
 // RUN:     --target=mipsel-linux-android \
 // RUN:     --sysroot=%S/Inputs/basic_android_tree/sysroot \
 // RUN:     -shared \
 // RUN:   | FileCheck --check-prefix=CHECK-ANDROID-SO %s
 // RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
-// RUN:     --target=mips64el-linux-android \
-// RUN:     --sysroot=%S/Inputs/basic_android_tree/sysroot \
-// RUN:     -shared \
-// RUN:   | FileCheck --check-prefix=CHECK-ANDROID-SO %s
-// RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
 // RUN:     --target=i686-linux-android \
-// RUN:     --sysroot=%S/Inputs/basic_android_tree/sysroot \
-// RUN:     -shared \
-// RUN:   | FileCheck --check-prefix=CHECK-ANDROID-SO %s
-// RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
-// RUN:     --target=x86_64-linux-android \
 // RUN:     --sysroot=%S/Inputs/basic_android_tree/sysroot \
 // RUN:     -shared \
 // RUN:   | FileCheck --check-prefix=CHECK-ANDROID-SO %s
@@ -701,32 +581,12 @@
 // RUN:     -static \
 // RUN:   | FileCheck --check-prefix=CHECK-ANDROID-STATIC %s
 // RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
-// RUN:     --target=aarch64-linux-android \
-// RUN:     --sysroot=%S/Inputs/basic_android_tree/sysroot \
-// RUN:     -static \
-// RUN:   | FileCheck --check-prefix=CHECK-ANDROID-STATIC %s
-// RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
-// RUN:     --target=arm64-linux-android \
-// RUN:     --sysroot=%S/Inputs/basic_android_tree/sysroot \
-// RUN:     -static \
-// RUN:   | FileCheck --check-prefix=CHECK-ANDROID-STATIC %s
-// RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
 // RUN:     --target=mipsel-linux-android \
 // RUN:     --sysroot=%S/Inputs/basic_android_tree/sysroot \
 // RUN:     -static \
 // RUN:   | FileCheck --check-prefix=CHECK-ANDROID-STATIC %s
 // RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
-// RUN:     --target=mips64el-linux-android \
-// RUN:     --sysroot=%S/Inputs/basic_android_tree/sysroot \
-// RUN:     -static \
-// RUN:   | FileCheck --check-prefix=CHECK-ANDROID-STATIC %s
-// RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
 // RUN:     --target=i686-linux-android \
-// RUN:     --sysroot=%S/Inputs/basic_android_tree/sysroot \
-// RUN:     -static \
-// RUN:   | FileCheck --check-prefix=CHECK-ANDROID-STATIC %s
-// RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
-// RUN:     --target=x86-linux-android \
 // RUN:     --sysroot=%S/Inputs/basic_android_tree/sysroot \
 // RUN:     -static \
 // RUN:   | FileCheck --check-prefix=CHECK-ANDROID-STATIC %s
@@ -749,32 +609,12 @@
 // RUN:     -pie \
 // RUN:   | FileCheck --check-prefix=CHECK-ANDROID-PIE %s
 // RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
-// RUN:     --target=aarch64-linux-android \
-// RUN:     --sysroot=%S/Inputs/basic_android_tree/sysroot  \
-// RUN:     -pie \
-// RUN:   | FileCheck --check-prefix=CHECK-ANDROID-PIE %s
-// RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
-// RUN:     --target=arm64-linux-android \
-// RUN:     --sysroot=%S/Inputs/basic_android_tree/sysroot  \
-// RUN:     -pie \
-// RUN:   | FileCheck --check-prefix=CHECK-ANDROID-PIE %s
-// RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
 // RUN:     --target=mipsel-linux-android \
 // RUN:     --sysroot=%S/Inputs/basic_android_tree/sysroot \
 // RUN:     -pie \
 // RUN:   | FileCheck --check-prefix=CHECK-ANDROID-PIE %s
 // RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
-// RUN:     --target=mips64el-linux-android \
-// RUN:     --sysroot=%S/Inputs/basic_android_tree/sysroot \
-// RUN:     -pie \
-// RUN:   | FileCheck --check-prefix=CHECK-ANDROID-PIE %s
-// RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
 // RUN:     --target=i686-linux-android \
-// RUN:     --sysroot=%S/Inputs/basic_android_tree/sysroot \
-// RUN:     -pie \
-// RUN:   | FileCheck --check-prefix=CHECK-ANDROID-PIE %s
-// RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
-// RUN:     --target=x86_64-linux-android \
 // RUN:     --sysroot=%S/Inputs/basic_android_tree/sysroot \
 // RUN:     -pie \
 // RUN:   | FileCheck --check-prefix=CHECK-ANDROID-PIE %s
@@ -785,40 +625,6 @@
 // CHECK-ANDROID-PIE: "-lgcc"
 // CHECK-ANDROID-PIE-NOT: "gcc_s"
 // CHECK-ANDROID-PIE: "{{.*}}{{/|\\\\}}crtend_android.o"
-// RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
-// RUN:     --target=arm-linux-androideabi \
-// RUN:     --sysroot=%S/Inputs/basic_android_tree/sysroot \
-// RUN:   | FileCheck --check-prefix=CHECK-ANDROID-32 %s
-// RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
-// RUN:     --target=arm-linux-android \
-// RUN:     --sysroot=%S/Inputs/basic_android_tree/sysroot \
-// RUN:   | FileCheck --check-prefix=CHECK-ANDROID-32 %s
-// RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
-// RUN:     --target=mipsel-linux-android \
-// RUN:     --sysroot=%S/Inputs/basic_android_tree/sysroot \
-// RUN:   | FileCheck --check-prefix=CHECK-ANDROID-32 %s
-// RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
-// RUN:     --target=aarch64-linux-android \
-// RUN:     --sysroot=%S/Inputs/basic_android_tree/sysroot \
-// RUN:   | FileCheck --check-prefix=CHECK-ANDROID-64 %s
-// RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
-// RUN:     --target=arm64-linux-android \
-// RUN:     --sysroot=%S/Inputs/basic_android_tree/sysroot \
-// RUN:   | FileCheck --check-prefix=CHECK-ANDROID-64 %s
-// RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
-// RUN:     --target=mips64el-linux-android \
-// RUN:     --sysroot=%S/Inputs/basic_android_tree/sysroot \
-// RUN:   | FileCheck --check-prefix=CHECK-ANDROID-64 %s
-// RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
-// RUN:     --target=i686-linux-android \
-// RUN:     --sysroot=%S/Inputs/basic_android_tree/sysroot \
-// RUN:   | FileCheck --check-prefix=CHECK-ANDROID-32 %s
-// RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
-// RUN:     --target=x86_64-linux-android \
-// RUN:     --sysroot=%S/Inputs/basic_android_tree/sysroot \
-// RUN:   | FileCheck --check-prefix=CHECK-ANDROID-64 %s
-// CHECK-ANDROID-32: "-dynamic-linker" "/system/bin/linker"
-// CHECK-ANDROID-64: "-dynamic-linker" "/system/bin/linker64"
 //
 // Check linker invocation on Debian 6 MIPS 32/64-bit.
 // RUN: %clang -no-canonical-prefixes %s -### -o %t.o 2>&1 \
@@ -889,7 +695,7 @@
 // CHECK-FSL-PPC64: "{{.*}}{{/|\\\\}}crtbegin.o"
 // CHECK-FSL-PPC64: "-L[[SYSROOT]]/usr/lib64/powerpc64-fsl-linux/4.6.2/../.."
 //
-// Check that crtfastmath.o is linked with -ffast-math and with -Ofast.
+// Check that crtfastmath.o is linked with -ffast-math.
 // RUN: %clang --target=x86_64-unknown-linux -### %s \
 // RUN:        --sysroot=%S/Inputs/basic_linux_tree 2>&1 \
 // RUN:   | FileCheck --check-prefix=CHECK-NOCRTFASTMATH %s
@@ -899,30 +705,9 @@
 // RUN: %clang --target=x86_64-unknown-linux -### %s -funsafe-math-optimizations\
 // RUN:        --sysroot=%S/Inputs/basic_linux_tree 2>&1 \
 // RUN:   | FileCheck --check-prefix=CHECK-CRTFASTMATH %s
-// RUN: %clang --target=x86_64-unknown-linux -### %s -Ofast\
-// RUN:        --sysroot=%S/Inputs/basic_linux_tree 2>&1 \
-// RUN:   | FileCheck --check-prefix=CHECK-CRTFASTMATH %s
-// RUN: %clang --target=x86_64-unknown-linux -### %s -Ofast -O3\
-// RUN:        --sysroot=%S/Inputs/basic_linux_tree 2>&1 \
-// RUN:   | FileCheck --check-prefix=CHECK-NOCRTFASTMATH %s
-// RUN: %clang --target=x86_64-unknown-linux -### %s -O3 -Ofast\
-// RUN:        --sysroot=%S/Inputs/basic_linux_tree 2>&1 \
-// RUN:   | FileCheck --check-prefix=CHECK-CRTFASTMATH %s
 // RUN: %clang --target=x86_64-unknown-linux -### %s -ffast-math -fno-fast-math \
 // RUN:        --sysroot=%S/Inputs/basic_linux_tree 2>&1 \
 // RUN:   | FileCheck --check-prefix=CHECK-NOCRTFASTMATH %s
-// RUN: %clang --target=x86_64-unknown-linux -### %s -Ofast -fno-fast-math \
-// RUN:        --sysroot=%S/Inputs/basic_linux_tree 2>&1 \
-// RUN:   | FileCheck --check-prefix=CHECK-CRTFASTMATH %s
-// RUN: %clang --target=x86_64-unknown-linux -### %s -Ofast -fno-unsafe-math-optimizations \
-// RUN:        --sysroot=%S/Inputs/basic_linux_tree 2>&1 \
-// RUN:   | FileCheck --check-prefix=CHECK-CRTFASTMATH %s
-// RUN: %clang --target=x86_64-unknown-linux -### %s -fno-fast-math -Ofast  \
-// RUN:        --sysroot=%S/Inputs/basic_linux_tree 2>&1 \
-// RUN:   | FileCheck --check-prefix=CHECK-CRTFASTMATH %s
-// RUN: %clang --target=x86_64-unknown-linux -### %s -fno-unsafe-math-optimizations -Ofast \
-// RUN:        --sysroot=%S/Inputs/basic_linux_tree 2>&1 \
-// RUN:   | FileCheck --check-prefix=CHECK-CRTFASTMATH %s
 // We don't have crtfastmath.o in the i386 tree, use it to check that file
 // detection works.
 // RUN: %clang --target=i386-unknown-linux -### %s -ffast-math \

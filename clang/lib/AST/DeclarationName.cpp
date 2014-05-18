@@ -150,9 +150,7 @@ raw_ostream &operator<<(raw_ostream &OS, DeclarationName N) {
     QualType ClassType = N.getCXXNameType();
     if (const RecordType *ClassRec = ClassType->getAs<RecordType>())
       return OS << *ClassRec->getDecl();
-    LangOptions LO;
-    LO.CPlusPlus = true;
-    return OS << ClassType.getAsString(PrintingPolicy(LO));
+    return OS << ClassType.getAsString();
   }
 
   case DeclarationName::CXXDestructorName: {
@@ -160,9 +158,7 @@ raw_ostream &operator<<(raw_ostream &OS, DeclarationName N) {
     QualType Type = N.getCXXNameType();
     if (const RecordType *Rec = Type->getAs<RecordType>())
       return OS << *Rec->getDecl();
-    LangOptions LO;
-    LO.CPlusPlus = true;
-    return OS << Type.getAsString(PrintingPolicy(LO));
+    return OS << Type.getAsString();
   }
 
   case DeclarationName::CXXOperatorName: {
@@ -189,10 +185,7 @@ raw_ostream &operator<<(raw_ostream &OS, DeclarationName N) {
     QualType Type = N.getCXXNameType();
     if (const RecordType *Rec = Type->getAs<RecordType>())
       return OS << *Rec->getDecl();
-    LangOptions LO;
-    LO.CPlusPlus = true;
-    LO.Bool = true;
-    return OS << Type.getAsString(PrintingPolicy(LO));
+    return OS << Type.getAsString();
   }
   case DeclarationName::CXXUsingDirective:
     return OS << "<using-directive>";
@@ -545,10 +538,7 @@ void DeclarationNameInfo::printName(raw_ostream &OS) const {
         OS << '~';
       else if (Name.getNameKind() == DeclarationName::CXXConversionFunctionName)
         OS << "operator ";
-      LangOptions LO;
-      LO.CPlusPlus = true;
-      LO.Bool = true;
-      OS << TInfo->getType().getAsString(PrintingPolicy(LO));
+      OS << TInfo->getType().getAsString();
     } else
       OS << Name;
     return;

@@ -53,7 +53,7 @@ enum ExternalLoadResult {
 /// sources can resolve types and declarations from abstract IDs into
 /// actual type and declaration nodes, and read parts of declaration
 /// contexts.
-class ExternalASTSource : public RefCountedBase<ExternalASTSource> {
+class ExternalASTSource {
   /// \brief Whether this AST source also provides information for
   /// semantic analysis.
   bool SemaSource;
@@ -138,7 +138,7 @@ public:
   virtual void completeVisibleDeclsMap(const DeclContext *DC);
 
   /// \brief Retrieve the module that corresponds to the given module ID.
-  virtual Module *getModule(unsigned ID) { return nullptr; }
+  virtual Module *getModule(unsigned ID) { return 0; }
 
   /// \brief Finds all declarations lexically contained within the given
   /// DeclContext, after applying an optional filter predicate.
@@ -160,7 +160,7 @@ public:
   /// \return true if an error occurred
   ExternalLoadResult FindExternalLexicalDecls(const DeclContext *DC,
                                 SmallVectorImpl<Decl*> &Result) {
-    return FindExternalLexicalDecls(DC, nullptr, Result);
+    return FindExternalLexicalDecls(DC, 0, Result);
   }
 
   template <typename DeclTy>
@@ -519,7 +519,7 @@ public:
     
     if (From.Position < 0) {
       Loaded.erase(Loaded.end() + From.Position, Loaded.end());
-      From = begin(nullptr, true);
+      From = begin(0, true);
     }
     
     Local.erase(Local.begin() + From.Position, Local.begin() + To.Position);

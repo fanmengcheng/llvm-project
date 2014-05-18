@@ -150,7 +150,7 @@ public:
   void startToken() {
     Kind = tok::unknown;
     Flags = 0;
-    PtrData = nullptr;
+    PtrData = 0;
     UintData = 0;
     Loc = SourceLocation();
   }
@@ -160,7 +160,7 @@ public:
            "getIdentifierInfo() on a tok::raw_identifier token!");
     assert(!isAnnotation() &&
            "getIdentifierInfo() on an annotation token!");
-    if (isLiteral()) return nullptr;
+    if (isLiteral()) return 0;
     return (IdentifierInfo*) PtrData;
   }
   void setIdentifierInfo(IdentifierInfo *II) {

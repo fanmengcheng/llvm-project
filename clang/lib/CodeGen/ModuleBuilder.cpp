@@ -20,23 +20,22 @@
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Frontend/CodeGenOptions.h"
+#include "llvm/ADT/OwningPtr.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
-#include <memory>
 using namespace clang;
 
 namespace {
   class CodeGeneratorImpl : public CodeGenerator {
     DiagnosticsEngine &Diags;
-    std::unique_ptr<const llvm::DataLayout> TD;
+    OwningPtr<const llvm::DataLayout> TD;
     ASTContext *Ctx;
     const CodeGenOptions CodeGenOpts;  // Intentionally copied in.
   protected:
-    std::unique_ptr<llvm::Module> M;
-    std::unique_ptr<CodeGen::CodeGenModule> Builder;
-
+    OwningPtr<llvm::Module> M;
+    OwningPtr<CodeGen::CodeGenModule> Builder;
   public:
     CodeGeneratorImpl(DiagnosticsEngine &diags, const std::string& ModuleName,
                       const CodeGenOptions &CGO, llvm::LLVMContext& C)
@@ -45,13 +44,15 @@ namespace {
 
     virtual ~CodeGeneratorImpl() {}
 
-    llvm::Module* GetModule() override {
+    virtual llvm::Module* GetModule() {
       return M.get();
     }
 
-    llvm::Module *ReleaseModule() override { return M.release(); }
+    virtual llvm::Module* ReleaseModule() {
+      return M.take();
+    }
 
-    void Initialize(ASTContext &Context) override {
+    virtual void Initialize(ASTContext &Context) {
       Ctx = &Context;
 
       M->setTargetTriple(Ctx->getTargetInfo().getTriple().getTriple());
@@ -64,14 +65,14 @@ namespace {
         HandleDependentLibrary(CodeGenOpts.DependentLibraries[i]);
     }
 
-    void HandleCXXStaticMemberVarInstantiation(VarDecl *VD) override {
+    virtual void HandleCXXStaticMemberVarInstantiation(VarDecl *VD) {
       if (Diags.hasErrorOccurred())
         return;
 
       Builder->HandleCXXStaticMemberVarInstantiation(VD);
     }
 
-    bool HandleTopLevelDecl(DeclGroupRef DG) override {
+    virtual bool HandleTopLevelDecl(DeclGroupRef DG) {
       if (Diags.hasErrorOccurred())
         return true;
 
@@ -85,7 +86,7 @@ namespace {
     /// to (e.g. struct, union, enum, class) is completed. This allows the
     /// client hack on the type, which can occur at any point in the file
     /// (because these can be defined in declspecs).
-    void HandleTagDeclDefinition(TagDecl *D) override {
+    virtual void HandleTagDeclDefinition(TagDecl *D) {
       if (Diags.hasErrorOccurred())
         return;
 
@@ -94,8 +95,10 @@ namespace {
       // In C++, we may have member functions that need to be emitted at this 
       // point.
       if (Ctx->getLangOpts().CPlusPlus && !D->isDependentContext()) {
-        for (auto *M : D->decls())
-          if (auto *Method = dyn_cast<CXXMethodDecl>(M))
+        for (DeclContext::decl_iterator M = D->decls_begin(), 
+                                     MEnd = D->decls_end();
+             M != MEnd; ++M)
+          if (CXXMethodDecl *Method = dyn_cast<CXXMethodDecl>(*M))
             if (Method->doesThisDeclarationHaveABody() &&
                 (Method->hasAttr<UsedAttr>() || 
                  Method->hasAttr<ConstructorAttr>()))
@@ -103,7 +106,7 @@ namespace {
       }
     }
 
-    void HandleTagDeclRequiredDefinition(const TagDecl *D) override {
+    virtual void HandleTagDeclRequiredDefinition(const TagDecl *D) LLVM_OVERRIDE {
       if (Diags.hasErrorOccurred())
         return;
 
@@ -112,7 +115,7 @@ namespace {
           DI->completeRequiredType(RD);
     }
 
-    void HandleTranslationUnit(ASTContext &Ctx) override {
+    virtual void HandleTranslationUnit(ASTContext &Ctx) {
       if (Diags.hasErrorOccurred()) {
         if (Builder)
           Builder->clear();
@@ -124,30 +127,30 @@ namespace {
         Builder->Release();
     }
 
-    void CompleteTentativeDefinition(VarDecl *D) override {
+    virtual void CompleteTentativeDefinition(VarDecl *D) {
       if (Diags.hasErrorOccurred())
         return;
 
       Builder->EmitTentativeDefinition(D);
     }
 
-    void HandleVTable(CXXRecordDecl *RD, bool DefinitionRequired) override {
+    virtual void HandleVTable(CXXRecordDecl *RD, bool DefinitionRequired) {
       if (Diags.hasErrorOccurred())
         return;
 
       Builder->EmitVTable(RD, DefinitionRequired);
     }
 
-    void HandleLinkerOptionPragma(llvm::StringRef Opts) override {
+    virtual void HandleLinkerOptionPragma(llvm::StringRef Opts) {
       Builder->AppendLinkerOptions(Opts);
     }
 
-    void HandleDetectMismatch(llvm::StringRef Name,
-                              llvm::StringRef Value) override {
+    virtual void HandleDetectMismatch(llvm::StringRef Name,
+                                      llvm::StringRef Value) {
       Builder->AddDetectMismatch(Name, Value);
     }
 
-    void HandleDependentLibrary(llvm::StringRef Lib) override {
+    virtual void HandleDependentLibrary(llvm::StringRef Lib) {
       Builder->AddDependentLib(Lib);
     }
   };

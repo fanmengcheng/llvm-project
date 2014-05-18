@@ -290,37 +290,35 @@ public:
 
   ProgramStateRef assumeSymNE(ProgramStateRef state, SymbolRef sym,
                              const llvm::APSInt& Int,
-                             const llvm::APSInt& Adjustment) override;
+                             const llvm::APSInt& Adjustment);
 
   ProgramStateRef assumeSymEQ(ProgramStateRef state, SymbolRef sym,
                              const llvm::APSInt& Int,
-                             const llvm::APSInt& Adjustment) override;
+                             const llvm::APSInt& Adjustment);
 
   ProgramStateRef assumeSymLT(ProgramStateRef state, SymbolRef sym,
                              const llvm::APSInt& Int,
-                             const llvm::APSInt& Adjustment) override;
+                             const llvm::APSInt& Adjustment);
 
   ProgramStateRef assumeSymGT(ProgramStateRef state, SymbolRef sym,
                              const llvm::APSInt& Int,
-                             const llvm::APSInt& Adjustment) override;
+                             const llvm::APSInt& Adjustment);
 
   ProgramStateRef assumeSymGE(ProgramStateRef state, SymbolRef sym,
                              const llvm::APSInt& Int,
-                             const llvm::APSInt& Adjustment) override;
+                             const llvm::APSInt& Adjustment);
 
   ProgramStateRef assumeSymLE(ProgramStateRef state, SymbolRef sym,
                              const llvm::APSInt& Int,
-                             const llvm::APSInt& Adjustment) override;
+                             const llvm::APSInt& Adjustment);
 
-  const llvm::APSInt* getSymVal(ProgramStateRef St,
-                                SymbolRef sym) const override;
-  ConditionTruthVal checkNull(ProgramStateRef State, SymbolRef Sym) override;
+  const llvm::APSInt* getSymVal(ProgramStateRef St, SymbolRef sym) const;
+  ConditionTruthVal checkNull(ProgramStateRef State, SymbolRef Sym);
 
-  ProgramStateRef removeDeadBindings(ProgramStateRef St,
-                                     SymbolReaper& SymReaper) override;
+  ProgramStateRef removeDeadBindings(ProgramStateRef St, SymbolReaper& SymReaper);
 
   void print(ProgramStateRef St, raw_ostream &Out,
-             const char* nl, const char *sep) override;
+             const char* nl, const char *sep);
 
 private:
   RangeSet::Factory F;

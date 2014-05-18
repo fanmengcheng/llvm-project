@@ -35,15 +35,21 @@ public:
     return Out;
   }
 
-  llvm::Optional<MatcherCtor> lookupMatcherCtor(StringRef MatcherName) {
-    return Registry::lookupMatcherCtor(MatcherName);
+  llvm::Optional<MatcherCtor> lookupMatcherCtor(StringRef MatcherName,
+                                                Diagnostics *Error = 0) {
+    Diagnostics DummyError;
+    if (!Error) Error = &DummyError;
+    llvm::Optional<MatcherCtor> Ctor =
+        Registry::lookupMatcherCtor(MatcherName, SourceRange(), Error);
+    EXPECT_EQ("", DummyError.toStringFull());
+    return Ctor;
   }
 
   VariantMatcher constructMatcher(StringRef MatcherName,
                                   Diagnostics *Error = NULL) {
     Diagnostics DummyError;
     if (!Error) Error = &DummyError;
-    llvm::Optional<MatcherCtor> Ctor = lookupMatcherCtor(MatcherName);
+    llvm::Optional<MatcherCtor> Ctor = lookupMatcherCtor(MatcherName, Error);
     VariantMatcher Out;
     if (Ctor)
       Out = Registry::constructMatcher(*Ctor, SourceRange(), Args(), Error);
@@ -56,11 +62,11 @@ public:
                                   Diagnostics *Error = NULL) {
     Diagnostics DummyError;
     if (!Error) Error = &DummyError;
-    llvm::Optional<MatcherCtor> Ctor = lookupMatcherCtor(MatcherName);
+    llvm::Optional<MatcherCtor> Ctor = lookupMatcherCtor(MatcherName, Error);
     VariantMatcher Out;
     if (Ctor)
       Out = Registry::constructMatcher(*Ctor, SourceRange(), Args(Arg1), Error);
-    EXPECT_EQ("", DummyError.toStringFull()) << MatcherName;
+    EXPECT_EQ("", DummyError.toStringFull());
     return Out;
   }
 
@@ -70,57 +76,13 @@ public:
                                   Diagnostics *Error = NULL) {
     Diagnostics DummyError;
     if (!Error) Error = &DummyError;
-    llvm::Optional<MatcherCtor> Ctor = lookupMatcherCtor(MatcherName);
+    llvm::Optional<MatcherCtor> Ctor = lookupMatcherCtor(MatcherName, Error);
     VariantMatcher Out;
     if (Ctor)
       Out = Registry::constructMatcher(*Ctor, SourceRange(), Args(Arg1, Arg2),
                                        Error);
     EXPECT_EQ("", DummyError.toStringFull());
     return Out;
-  }
-
-  typedef std::vector<MatcherCompletion> CompVector;
-
-  CompVector getCompletions() {
-    return Registry::getCompletions(
-        llvm::ArrayRef<std::pair<MatcherCtor, unsigned> >());
-  }
-
-  CompVector getCompletions(StringRef MatcherName1, unsigned ArgNo1) {
-    std::vector<std::pair<MatcherCtor, unsigned> > Context;
-    llvm::Optional<MatcherCtor> Ctor = lookupMatcherCtor(MatcherName1);
-    if (!Ctor)
-      return CompVector();
-    Context.push_back(std::make_pair(*Ctor, ArgNo1));
-    return Registry::getCompletions(Context);
-  }
-
-  CompVector getCompletions(StringRef MatcherName1, unsigned ArgNo1,
-                            StringRef MatcherName2, unsigned ArgNo2) {
-    std::vector<std::pair<MatcherCtor, unsigned> > Context;
-    llvm::Optional<MatcherCtor> Ctor = lookupMatcherCtor(MatcherName1);
-    if (!Ctor)
-      return CompVector();
-    Context.push_back(std::make_pair(*Ctor, ArgNo1));
-    Ctor = lookupMatcherCtor(MatcherName2);
-    if (!Ctor)
-      return CompVector();
-    Context.push_back(std::make_pair(*Ctor, ArgNo2));
-    return Registry::getCompletions(Context);
-  }
-
-  bool hasCompletion(const CompVector &Comps, StringRef TypedText,
-                     StringRef MatcherDecl = StringRef(), unsigned *Index = 0) {
-    for (CompVector::const_iterator I = Comps.begin(), E = Comps.end(); I != E;
-         ++I) {
-      if (I->TypedText == TypedText &&
-          (MatcherDecl.empty() || I->MatcherDecl == MatcherDecl)) {
-        if (Index)
-          *Index = I - Comps.begin();
-        return true;
-      }
-    }
-    return false;
   }
 };
 
@@ -205,25 +167,6 @@ TEST_F(RegistryTest, OverloadedMatchers) {
   Code = "class Z { public: void z() { this->z(); } };";
   EXPECT_TRUE(matches(Code, CallExpr0));
   EXPECT_FALSE(matches(Code, CallExpr1));
-
-  Matcher<Decl> DeclDecl = declaratorDecl(hasTypeLoc(
-      constructMatcher(
-          "loc", constructMatcher("asString", std::string("const double *")))
-          .getTypedMatcher<TypeLoc>()));
-
-  Matcher<NestedNameSpecifierLoc> NNSL =
-      constructMatcher(
-          "loc", VariantMatcher::SingleMatcher(nestedNameSpecifier(
-                     specifiesType(hasDeclaration(recordDecl(hasName("A")))))))
-          .getTypedMatcher<NestedNameSpecifierLoc>();
-
-  Code = "const double * x = 0;";
-  EXPECT_TRUE(matches(Code, DeclDecl));
-  EXPECT_FALSE(matches(Code, NNSL));
-
-  Code = "struct A { struct B {}; }; A::B a_b;";
-  EXPECT_FALSE(matches(Code, DeclDecl));
-  EXPECT_TRUE(matches(Code, NNSL));
 }
 
 TEST_F(RegistryTest, PolymorphicMatchers) {
@@ -383,7 +326,7 @@ TEST_F(RegistryTest, VariadicOp) {
 
 TEST_F(RegistryTest, Errors) {
   // Incorrect argument count.
-  std::unique_ptr<Diagnostics> Error(new Diagnostics());
+  OwningPtr<Diagnostics> Error(new Diagnostics());
   EXPECT_TRUE(constructMatcher("hasInitializer", Error.get()).isNull());
   EXPECT_EQ("Incorrect argument count. (Expected = 1) != (Actual = 0)",
             Error->toString());
@@ -433,47 +376,6 @@ TEST_F(RegistryTest, Errors) {
             "(Expected = Matcher<CXXRecordDecl>) != "
             "(Actual = Matcher<CXXRecordDecl>&Matcher<MemberExpr>)",
             Error->toString());
-}
-
-TEST_F(RegistryTest, Completion) {
-  CompVector Comps = getCompletions();
-  EXPECT_TRUE(hasCompletion(
-      Comps, "hasParent(", "Matcher<Decl|Stmt> hasParent(Matcher<Decl|Stmt>)"));
-  EXPECT_TRUE(hasCompletion(Comps, "whileStmt(",
-                            "Matcher<Stmt> whileStmt(Matcher<WhileStmt>...)"));
-
-  CompVector WhileComps = getCompletions("whileStmt", 0);
-
-  unsigned HasBodyIndex, HasParentIndex, AllOfIndex;
-  EXPECT_TRUE(hasCompletion(WhileComps, "hasBody(",
-                            "Matcher<WhileStmt> hasBody(Matcher<Stmt>)",
-                            &HasBodyIndex));
-  EXPECT_TRUE(hasCompletion(WhileComps, "hasParent(",
-                            "Matcher<Stmt> hasParent(Matcher<Decl|Stmt>)",
-                            &HasParentIndex));
-  EXPECT_TRUE(hasCompletion(WhileComps, "allOf(",
-                            "Matcher<T> allOf(Matcher<T>...)", &AllOfIndex));
-  EXPECT_GT(HasParentIndex, HasBodyIndex);
-  EXPECT_GT(AllOfIndex, HasParentIndex);
-
-  EXPECT_FALSE(hasCompletion(WhileComps, "whileStmt("));
-  EXPECT_FALSE(hasCompletion(WhileComps, "ifStmt("));
-
-  CompVector AllOfWhileComps =
-      getCompletions("allOf", 0, "whileStmt", 0);
-  ASSERT_EQ(AllOfWhileComps.size(), WhileComps.size());
-  EXPECT_TRUE(std::equal(WhileComps.begin(), WhileComps.end(),
-                         AllOfWhileComps.begin()));
-
-  CompVector DeclWhileComps =
-      getCompletions("decl", 0, "whileStmt", 0);
-  EXPECT_EQ(0u, DeclWhileComps.size());
-
-  CompVector NamedDeclComps = getCompletions("namedDecl", 0);
-  EXPECT_TRUE(
-      hasCompletion(NamedDeclComps, "isPublic()", "Matcher<Decl> isPublic()"));
-  EXPECT_TRUE(hasCompletion(NamedDeclComps, "hasName(\"",
-                            "Matcher<NamedDecl> hasName(string)"));
 }
 
 } // end anonymous namespace

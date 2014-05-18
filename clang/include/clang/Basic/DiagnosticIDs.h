@@ -56,17 +56,16 @@ namespace clang {
     };
 
     /// Enum values that allow the client to map NOTEs, WARNINGs, and EXTENSIONs
-    /// to either MAP_IGNORE (nothing), MAP_REMARK (emit a remark), MAP_WARNING
-    /// (emit a warning), MAP_ERROR (emit as an error).  It allows clients to
-    /// map errors to MAP_ERROR/MAP_DEFAULT or MAP_FATAL (stop emitting
-    /// diagnostics after this one).
+    /// to either MAP_IGNORE (nothing), MAP_WARNING (emit a warning), MAP_ERROR
+    /// (emit as an error).  It allows clients to map errors to
+    /// MAP_ERROR/MAP_DEFAULT or MAP_FATAL (stop emitting diagnostics after this
+    /// one).
     enum Mapping {
       // NOTE: 0 means "uncomputed".
       MAP_IGNORE  = 1,     ///< Map this diagnostic to nothing, ignore it.
-      MAP_REMARK  = 2,     ///< Map this diagnostic to a remark.
-      MAP_WARNING = 3,     ///< Map this diagnostic to a warning.
-      MAP_ERROR   = 4,     ///< Map this diagnostic to an error.
-      MAP_FATAL   = 5      ///< Map this diagnostic to a fatal error.
+      MAP_WARNING = 2,     ///< Map this diagnostic to a warning.
+      MAP_ERROR   = 3,     ///< Map this diagnostic to an error.
+      MAP_FATAL   = 4      ///< Map this diagnostic to a fatal error.
     };
   }
 
@@ -114,7 +113,7 @@ class DiagnosticIDs : public RefCountedBase<DiagnosticIDs> {
 public:
   /// \brief The level of the diagnostic, after it has been through mapping.
   enum Level {
-    Ignored, Note, Remark, Warning, Error, Fatal
+    Ignored, Note, Warning, Error, Fatal
   };
 
 private:
@@ -125,16 +124,11 @@ public:
   DiagnosticIDs();
   ~DiagnosticIDs();
 
-  /// \brief Return an ID for a diagnostic with the specified format string and
-  /// level.
+  /// \brief Return an ID for a diagnostic with the specified message and level.
   ///
   /// If this is the first request for this diagnostic, it is registered and
   /// created, otherwise the existing ID is returned.
-
-  // FIXME: Replace this function with a create-only facilty like
-  // createCustomDiagIDFromFormatString() to enforce safe usage. At the time of
-  // writing, nearly all callers of this function were invalid.
-  unsigned getCustomDiagID(Level L, StringRef FormatString);
+  unsigned getCustomDiagID(Level L, StringRef Message);
 
   //===--------------------------------------------------------------------===//
   // Diagnostic classification and reporting interfaces.
@@ -153,9 +147,6 @@ public:
   /// \brief Return true if the specified diagnostic is mapped to errors by
   /// default.
   static bool isDefaultMappingAsError(unsigned DiagID);
-
-  /// \brief Return true if the specified diagnostic is a Remark.
-  static bool isRemark(unsigned DiagID);
 
   /// \brief Determine whether the given built-in diagnostic ID is a Note.
   static bool isBuiltinNote(unsigned DiagID);

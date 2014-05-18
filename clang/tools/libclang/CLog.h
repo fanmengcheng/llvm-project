@@ -10,7 +10,6 @@
 #ifndef LLVM_LIBCLANG_CLOG_H
 #define LLVM_LIBCLANG_CLOG_H
 
-#include "clang-c/Index.h"
 #include "clang/Basic/LLVM.h"
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
 #include "llvm/ADT/SmallString.h"
@@ -96,8 +95,7 @@ public:
 ///     *Log << "blah";
 ///   }
 /// \endcode
-#define LOG_SECTION(NAME) \
-    if (clang::cxindex::LogRef Log = clang::cxindex::Logger::make(NAME))
+#define LOG_SECTION(NAME) if (LogRef Log = clang::cxindex::Logger::make(NAME))
 #define LOG_FUNC_SECTION LOG_SECTION(LLVM_FUNCTION_NAME)
 
 #endif

@@ -68,8 +68,8 @@ PreprocessorLexer *Preprocessor::getCurrentFileLexer() const {
 
 /// EnterSourceFile - Add a source file to the top of the include stack and
 /// start lexing tokens from it instead of the current buffer.
-bool Preprocessor::EnterSourceFile(FileID FID, const DirectoryLookup *CurDir,
-                                   SourceLocation Loc) {
+void Preprocessor::EnterSourceFile(FileID FID, const DirectoryLookup *CurDir,
+                                   SourceLocation Loc, bool IsSubmodule) {
   assert(!CurTokenLexer && "Cannot #include a file inside a macro!");
   ++NumEnteredSourceFiles;
 
@@ -78,8 +78,8 @@ bool Preprocessor::EnterSourceFile(FileID FID, const DirectoryLookup *CurDir,
 
   if (PTH) {
     if (PTHLexer *PL = PTH->CreateLexer(FID)) {
-      EnterSourceFileWithPTH(PL, CurDir);
-      return false;
+      EnterSourceFileWithPTH(PL, CurDir, IsSubmodule);
+      return;
     }
   }
   
@@ -91,7 +91,7 @@ bool Preprocessor::EnterSourceFile(FileID FID, const DirectoryLookup *CurDir,
     SourceLocation FileStart = SourceMgr.getLocForStartOfFile(FID);
     Diag(Loc, diag::err_pp_error_opening_file)
       << std::string(SourceMgr.getBufferName(FileStart)) << "";
-    return true;
+    return;
   }
 
   if (isCodeCompletionEnabled() &&
@@ -101,14 +101,16 @@ bool Preprocessor::EnterSourceFile(FileID FID, const DirectoryLookup *CurDir,
         CodeCompletionFileLoc.getLocWithOffset(CodeCompletionOffset);
   }
 
-  EnterSourceFileWithLexer(new Lexer(FID, InputFile, *this), CurDir);
-  return false;
+  EnterSourceFileWithLexer(new Lexer(FID, InputFile, *this), CurDir,
+                           IsSubmodule);
+  return;
 }
 
 /// EnterSourceFileWithLexer - Add a source file to the top of the include stack
 ///  and start lexing tokens from it instead of the current buffer.
 void Preprocessor::EnterSourceFileWithLexer(Lexer *TheLexer,
-                                            const DirectoryLookup *CurDir) {
+                                            const DirectoryLookup *CurDir,
+                                            bool IsSubmodule) {
 
   // Add the current lexer to the include stack.
   if (CurPPLexer || CurTokenLexer)
@@ -117,7 +119,7 @@ void Preprocessor::EnterSourceFileWithLexer(Lexer *TheLexer,
   CurLexer.reset(TheLexer);
   CurPPLexer = TheLexer;
   CurDirLookup = CurDir;
-  CurSubmodule = 0;
+  CurIsSubmodule = IsSubmodule;
   if (CurLexerKind != CLK_LexAfterModuleImport)
     CurLexerKind = CLK_Lexer;
   
@@ -134,7 +136,8 @@ void Preprocessor::EnterSourceFileWithLexer(Lexer *TheLexer,
 /// EnterSourceFileWithPTH - Add a source file to the top of the include stack
 /// and start getting tokens from it using the PTH cache.
 void Preprocessor::EnterSourceFileWithPTH(PTHLexer *PL,
-                                          const DirectoryLookup *CurDir) {
+                                          const DirectoryLookup *CurDir,
+                                          bool IsSubmodule) {
 
   if (CurPPLexer || CurTokenLexer)
     PushIncludeMacroStack();
@@ -142,7 +145,7 @@ void Preprocessor::EnterSourceFileWithPTH(PTHLexer *PL,
   CurDirLookup = CurDir;
   CurPTHLexer.reset(PL);
   CurPPLexer = CurPTHLexer.get();
-  CurSubmodule = 0;
+  CurIsSubmodule = IsSubmodule;
   if (CurLexerKind != CLK_LexAfterModuleImport)
     CurLexerKind = CLK_PTHLexer;
   
@@ -284,10 +287,6 @@ bool Preprocessor::HandleEndOfFile(Token &Result, bool isEndOfMacro) {
       if (const FileEntry *FE =
             SourceMgr.getFileEntryForID(CurPPLexer->getFileID())) {
         HeaderInfo.SetFileControllingMacro(FE, ControllingMacro);
-        if (MacroInfo *MI =
-              getMacroInfo(const_cast<IdentifierInfo*>(ControllingMacro))) {
-          MI->UsedForHeaderGuard = true;
-        }
         if (const IdentifierInfo *DefinedMacro =
               CurPPLexer->MIOpt.GetDefinedMacro()) {
           if (!ControllingMacro->hasMacroDefinition() &&
@@ -372,15 +371,16 @@ bool Preprocessor::HandleEndOfFile(Token &Result, bool isEndOfMacro) {
     if (Callbacks && !isEndOfMacro && CurPPLexer)
       ExitedFID = CurPPLexer->getFileID();
 
-    bool LeavingSubmodule = CurSubmodule && CurLexer;
+    // If this file corresponded to a submodule, notify the parser that we've
+    // left that submodule.
+    bool LeavingSubmodule = CurIsSubmodule && CurLexer;
     if (LeavingSubmodule) {
-      // Notify the parser that we've left the module.
       const char *EndPos = getCurLexerEndPos();
       Result.startToken();
       CurLexer->BufferPtr = EndPos;
       CurLexer->FormTokenWithChars(Result, EndPos, tok::annot_module_end);
       Result.setAnnotationEndLoc(Result.getLocation());
-      Result.setAnnotationValue(CurSubmodule);
+      Result.setAnnotationValue(0);
     }
 
     // We're done with the #included file.
@@ -431,15 +431,11 @@ bool Preprocessor::HandleEndOfFile(Token &Result, bool isEndOfMacro) {
   if (!isIncrementalProcessingEnabled())
     CurPPLexer = 0;
 
-  if (TUKind == TU_Complete) {
-    // This is the end of the top-level file. 'WarnUnusedMacroLocs' has
-    // collected all macro locations that we need to warn because they are not
-    // used.
-    for (WarnUnusedMacroLocsTy::iterator
-           I=WarnUnusedMacroLocs.begin(), E=WarnUnusedMacroLocs.end();
-           I!=E; ++I)
-      Diag(*I, diag::pp_macro_not_used);
-  }
+  // This is the end of the top-level file. 'WarnUnusedMacroLocs' has collected
+  // all macro locations that we need to warn because they are not used.
+  for (WarnUnusedMacroLocsTy::iterator
+         I=WarnUnusedMacroLocs.begin(), E=WarnUnusedMacroLocs.end(); I!=E; ++I)
+    Diag(*I, diag::pp_macro_not_used);
 
   // If we are building a module that has an umbrella header, make sure that
   // each of the headers within the directory covered by the umbrella header
@@ -528,7 +524,7 @@ bool Preprocessor::HandleEndOfTokenLexer(Token &Result) {
   if (NumCachedTokenLexers == TokenLexerCacheSize)
     CurTokenLexer.reset();
   else
-    TokenLexerCache[NumCachedTokenLexers++] = CurTokenLexer.release();
+    TokenLexerCache[NumCachedTokenLexers++] = CurTokenLexer.take();
 
   // Handle this like a #include file being popped off the stack.
   return HandleEndOfFile(Result, true);
@@ -545,7 +541,7 @@ void Preprocessor::RemoveTopOfLexerStack() {
     if (NumCachedTokenLexers == TokenLexerCacheSize)
       CurTokenLexer.reset();
     else
-      TokenLexerCache[NumCachedTokenLexers++] = CurTokenLexer.release();
+      TokenLexerCache[NumCachedTokenLexers++] = CurTokenLexer.take();
   }
 
   PopIncludeMacroStack();

@@ -68,7 +68,8 @@ static bool isCallbackArg(SVal V, QualType T) {
 
   if (const RecordType *RT = T->getAsStructureType()) {
     const RecordDecl *RD = RT->getDecl();
-    for (const auto *I : RD->fields()) {
+    for (RecordDecl::field_iterator I = RD->field_begin(), E = RD->field_end();
+         I != E; ++I) {
       QualType FieldT = I->getType();
       if (FieldT->isBlockPointerType() || FieldT->isFunctionPointerType())
         return true;
@@ -138,11 +139,6 @@ static void findPtrToConstParams(llvm::SmallSet<unsigned, 4> &PreserveArgs,
 ProgramStateRef CallEvent::invalidateRegions(unsigned BlockCount,
                                              ProgramStateRef Orig) const {
   ProgramStateRef Result = (Orig ? Orig : getState());
-
-  // Don't invalidate anything if the callee is marked pure/const.
-  if (const Decl *callee = getDecl())
-    if (callee->hasAttr<PureAttr>() || callee->hasAttr<ConstAttr>())
-      return Result;
 
   SmallVector<SVal, 8> ValuesToInvalidate;
   RegionAndSymbolInvalidationTraits ETraits;
@@ -243,9 +239,9 @@ bool CallEvent::isCallStmt(const Stmt *S) {
 QualType CallEvent::getDeclaredResultType(const Decl *D) {
   assert(D);
   if (const FunctionDecl* FD = dyn_cast<FunctionDecl>(D))
-    return FD->getReturnType();
+    return FD->getResultType();
   if (const ObjCMethodDecl* MD = dyn_cast<ObjCMethodDecl>(D))
-    return MD->getReturnType();
+    return MD->getResultType();
   if (const BlockDecl *BD = dyn_cast<BlockDecl>(D)) {
     // Blocks are difficult because the return type may not be stored in the
     // BlockDecl itself. The AST should probably be enhanced, but for now we
@@ -258,7 +254,7 @@ QualType CallEvent::getDeclaredResultType(const Decl *D) {
     if (const TypeSourceInfo *TSI = BD->getSignatureAsWritten()) {
       QualType Ty = TSI->getType();
       if (const FunctionType *FT = Ty->getAs<FunctionType>())
-        Ty = FT->getReturnType();
+        Ty = FT->getResultType();
       if (!Ty->isDependentType())
         return Ty;
     }
@@ -286,14 +282,14 @@ static void addParameterValuesToBindings(const StackFrameContext *CalleeCtx,
                                          CallEvent::BindingsTy &Bindings,
                                          SValBuilder &SVB,
                                          const CallEvent &Call,
-                                         ArrayRef<ParmVarDecl*> parameters) {
+                                         CallEvent::param_iterator I,
+                                         CallEvent::param_iterator E) {
   MemRegionManager &MRMgr = SVB.getRegionManager();
 
   // If the function has fewer parameters than the call has arguments, we simply
   // do not bind any values to them.
   unsigned NumArgs = Call.getNumArgs();
   unsigned Idx = 0;
-  ArrayRef<ParmVarDecl*>::iterator I = parameters.begin(), E = parameters.end();
   for (; I != E && Idx < NumArgs; ++I, ++Idx) {
     const ParmVarDecl *ParamDecl = *I;
     assert(ParamDecl && "Formal parameter has no decl?");
@@ -308,11 +304,21 @@ static void addParameterValuesToBindings(const StackFrameContext *CalleeCtx,
   // FIXME: Variadic arguments are not handled at all right now.
 }
 
-ArrayRef<ParmVarDecl*> AnyFunctionCall::parameters() const {
+
+CallEvent::param_iterator AnyFunctionCall::param_begin() const {
   const FunctionDecl *D = getDecl();
   if (!D)
-    return llvm::ArrayRef<ParmVarDecl*>();
-  return D->parameters();
+    return 0;
+
+  return D->param_begin();
+}
+
+CallEvent::param_iterator AnyFunctionCall::param_end() const {
+  const FunctionDecl *D = getDecl();
+  if (!D)
+    return 0;
+
+  return D->param_end();
 }
 
 void AnyFunctionCall::getInitialStackFrameContents(
@@ -321,7 +327,7 @@ void AnyFunctionCall::getInitialStackFrameContents(
   const FunctionDecl *D = cast<FunctionDecl>(CalleeCtx->getDecl());
   SValBuilder &SVB = getState()->getStateManager().getSValBuilder();
   addParameterValuesToBindings(CalleeCtx, Bindings, SVB, *this,
-                               D->parameters());
+                               D->param_begin(), D->param_end());
 }
 
 bool AnyFunctionCall::argumentsMayEscape() const {
@@ -381,7 +387,7 @@ bool AnyFunctionCall::argumentsMayEscape() const {
 }
 
 
-const FunctionDecl *SimpleFunctionCall::getDecl() const {
+const FunctionDecl *SimpleCall::getDecl() const {
   const FunctionDecl *D = getOriginExpr()->getDirectCallee();
   if (D)
     return D;
@@ -542,11 +548,18 @@ const BlockDataRegion *BlockCall::getBlockRegion() const {
   return dyn_cast_or_null<BlockDataRegion>(DataReg);
 }
 
-ArrayRef<ParmVarDecl*> BlockCall::parameters() const {
-  const BlockDecl *D = getDecl();
+CallEvent::param_iterator BlockCall::param_begin() const {
+  const BlockDecl *D = getBlockDecl();
   if (!D)
     return 0;
-  return D->parameters();
+  return D->param_begin();
+}
+
+CallEvent::param_iterator BlockCall::param_end() const {
+  const BlockDecl *D = getBlockDecl();
+  if (!D)
+    return 0;
+  return D->param_end();
 }
 
 void BlockCall::getExtraInvalidatedValues(ValueList &Values) const {
@@ -560,7 +573,7 @@ void BlockCall::getInitialStackFrameContents(const StackFrameContext *CalleeCtx,
   const BlockDecl *D = cast<BlockDecl>(CalleeCtx->getDecl());
   SValBuilder &SVB = getState()->getStateManager().getSValBuilder();
   addParameterValuesToBindings(CalleeCtx, Bindings, SVB, *this,
-                               D->parameters());
+                               D->param_begin(), D->param_end());
 }
 
 
@@ -589,6 +602,8 @@ void CXXConstructorCall::getInitialStackFrameContents(
   }
 }
 
+
+
 SVal CXXDestructorCall::getCXXThisVal() const {
   if (Data)
     return loc::MemRegionVal(DtorDataTy::getFromOpaqueValue(Data).getPointer());
@@ -604,11 +619,21 @@ RuntimeDefinition CXXDestructorCall::getRuntimeDefinition() const {
   return CXXInstanceCall::getRuntimeDefinition();
 }
 
-ArrayRef<ParmVarDecl*> ObjCMethodCall::parameters() const {
+
+CallEvent::param_iterator ObjCMethodCall::param_begin() const {
   const ObjCMethodDecl *D = getDecl();
   if (!D)
-    return ArrayRef<ParmVarDecl*>();
-  return D->parameters();
+    return 0;
+
+  return D->param_begin();
+}
+
+CallEvent::param_iterator ObjCMethodCall::param_end() const {
+  const ObjCMethodDecl *D = getDecl();
+  if (!D)
+    return 0;
+
+  return D->param_end();
 }
 
 void
@@ -886,7 +911,7 @@ void ObjCMethodCall::getInitialStackFrameContents(
   const ObjCMethodDecl *D = cast<ObjCMethodDecl>(CalleeCtx->getDecl());
   SValBuilder &SVB = getState()->getStateManager().getSValBuilder();
   addParameterValuesToBindings(CalleeCtx, Bindings, SVB, *this,
-                               D->parameters());
+                               D->param_begin(), D->param_end());
 
   SVal SelfVal = getReceiverSVal();
   if (!SelfVal.isUnknown()) {
@@ -915,7 +940,7 @@ CallEventManager::getSimpleCall(const CallExpr *CE, ProgramStateRef State,
 
   // Otherwise, it's a normal function call, static member function call, or
   // something we can't reason about.
-  return create<SimpleFunctionCall>(CE, State, LCtx);
+  return create<FunctionCall>(CE, State, LCtx);
 }
 
 

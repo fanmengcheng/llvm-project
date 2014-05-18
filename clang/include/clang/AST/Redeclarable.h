@@ -66,7 +66,7 @@ public:
   decl_type *getPreviousDecl() {
     if (RedeclLink.NextIsPrevious())
       return RedeclLink.getNext();
-    return nullptr;
+    return 0;
   }
   const decl_type *getPreviousDecl() const {
     return const_cast<decl_type *>(
@@ -122,7 +122,7 @@ public:
     typedef std::forward_iterator_tag iterator_category;
     typedef std::ptrdiff_t            difference_type;
 
-    redecl_iterator() : Current(nullptr) { }
+    redecl_iterator() : Current(0) { }
     explicit redecl_iterator(decl_type *C)
       : Current(C), Starter(C), PassedFirst(false) { }
 
@@ -135,7 +135,7 @@ public:
       if (Current->isFirstDecl()) {
         if (PassedFirst) {
           assert(0 && "Passed first decl twice, invalid redecl chain!");
-          Current = nullptr;
+          Current = 0;
           return *this;
         }
         PassedFirst = true;
@@ -143,7 +143,7 @@ public:
 
       // Get either previous decl or latest decl.
       decl_type *Next = Current->RedeclLink.getNext();
-      Current = (Next != Starter) ? Next : nullptr;
+      Current = (Next != Starter ? Next : 0);
       return *this;
     }
 
@@ -161,18 +161,13 @@ public:
     }
   };
 
-  typedef llvm::iterator_range<redecl_iterator> redecl_range;
-
-  /// \brief Returns an iterator range for all the redeclarations of the same
-  /// decl. It will iterate at least once (when this decl is the only one).
-  redecl_range redecls() const {
-    return redecl_range(redecl_iterator(const_cast<decl_type *>(
-                            static_cast<const decl_type *>(this))),
-                        redecl_iterator());
+  /// \brief Returns iterator for all the redeclarations of the same decl.
+  /// It will iterate at least once (when this decl is the only one).
+  redecl_iterator redecls_begin() const {
+    return redecl_iterator(const_cast<decl_type*>(
+                                          static_cast<const decl_type*>(this)));
   }
-
-  redecl_iterator redecls_begin() const { return redecls().begin(); }
-  redecl_iterator redecls_end() const { return redecls().end(); }
+  redecl_iterator redecls_end() const { return redecl_iterator(); }
 
   friend class ASTDeclReader;
   friend class ASTDeclWriter;

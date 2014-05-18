@@ -19,7 +19,7 @@
 #include "clang/Basic/OperatorPrecedence.h"
 #include "clang/Format/Format.h"
 #include "clang/Lex/Lexer.h"
-#include <memory>
+#include "llvm/ADT/OwningPtr.h"
 
 namespace clang {
 namespace format {
@@ -27,27 +27,22 @@ namespace format {
 enum TokenType {
   TT_ArrayInitializerLSquare,
   TT_ArraySubscriptLSquare,
-  TT_AttributeParen,
   TT_BinaryOperator,
   TT_BitFieldColon,
   TT_BlockComment,
   TT_CastRParen,
   TT_ConditionalExpr,
-  TT_ConflictAlternative,
-  TT_ConflictEnd,
-  TT_ConflictStart,
   TT_CtorInitializerColon,
   TT_CtorInitializerComma,
   TT_DesignatedInitializerPeriod,
   TT_DictLiteral,
+  TT_ImplicitStringLiteral,
+  TT_InlineASMColon,
+  TT_InheritanceColon,
   TT_FunctionLBrace,
   TT_FunctionTypeLParen,
-  TT_ImplicitStringLiteral,
-  TT_InheritanceColon,
-  TT_InlineASMColon,
   TT_LambdaLSquare,
   TT_LineComment,
-  TT_ObjCBlockLBrace,
   TT_ObjCBlockLParen,
   TT_ObjCDecl,
   TT_ObjCForIn,
@@ -106,8 +101,7 @@ struct FormatToken {
         UnbreakableTailLength(0), BindingStrength(0), NestingLevel(0),
         SplitPenalty(0), LongestObjCSelectorName(0), FakeRParens(0),
         StartsBinaryExpression(false), EndsBinaryExpression(false),
-        OperatorIndex(0), LastOperator(false),
-        PartOfMultiVariableDeclStmt(false), IsForEachMacro(false),
+        LastInChainOfCalls(false), PartOfMultiVariableDeclStmt(false),
         MatchingParen(NULL), Previous(NULL), Next(NULL),
         Decision(FD_Unformatted), Finalized(false) {}
 
@@ -192,7 +186,7 @@ struct FormatToken {
 
   /// \brief A token can have a special role that can carry extra information
   /// about the token's formatting.
-  std::unique_ptr<TokenRole> Role;
+  llvm::OwningPtr<TokenRole> Role;
 
   /// \brief If this is an opening parenthesis, how are the parameters packed?
   ParameterPackingKind PackingKind;
@@ -243,21 +237,13 @@ struct FormatToken {
   /// \brief \c true if this token ends a binary expression.
   bool EndsBinaryExpression;
 
-  /// \brief Is this is an operator (or "."/"->") in a sequence of operators
-  /// with the same precedence, contains the 0-based operator index.
-  unsigned OperatorIndex;
-
-  /// \brief Is this the last operator (or "."/"->") in a sequence of operators
-  /// with the same precedence?
-  bool LastOperator;
+  /// \brief Is this the last "." or "->" in a builder-type call?
+  bool LastInChainOfCalls;
 
   /// \brief Is this token part of a \c DeclStmt defining multiple variables?
   ///
   /// Only set if \c Type == \c TT_StartOfName.
   bool PartOfMultiVariableDeclStmt;
-
-  /// \brief Is this a foreach macro?
-  bool IsForEachMacro;
 
   bool is(tok::TokenKind Kind) const { return Tok.is(Kind); }
 
@@ -293,9 +279,6 @@ struct FormatToken {
     return isOneOf(tok::kw_public, tok::kw_protected, tok::kw_private) &&
            (!ColonRequired || (Next && Next->is(tok::colon)));
   }
-
-  /// \brief Determine whether the token is a simple-type-specifier.
-  bool isSimpleTypeSpecifier() const;
 
   bool isObjCAccessSpecifier() const {
     return is(tok::at) && Next && (Next->isObjCAtKeyword(tok::objc_public) ||
@@ -445,16 +428,17 @@ public:
   CommaSeparatedList(const FormatStyle &Style)
       : TokenRole(Style), HasNestedBracedList(false) {}
 
-  void precomputeFormattingInfos(const FormatToken *Token) override;
+  virtual void precomputeFormattingInfos(const FormatToken *Token);
 
-  unsigned formatAfterToken(LineState &State, ContinuationIndenter *Indenter,
-                            bool DryRun) override;
+  virtual unsigned formatAfterToken(LineState &State,
+                                    ContinuationIndenter *Indenter,
+                                    bool DryRun);
 
-  unsigned formatFromToken(LineState &State, ContinuationIndenter *Indenter,
-                           bool DryRun) override;
+  virtual unsigned formatFromToken(LineState &State,
+                                   ContinuationIndenter *Indenter, bool DryRun);
 
   /// \brief Adds \p Token as the next comma to the \c CommaSeparated list.
-  void CommaFound(const FormatToken *Token) override { Commas.push_back(Token);}
+  virtual void CommaFound(const FormatToken *Token) { Commas.push_back(Token); }
 
 private:
   /// \brief A struct that holds information on how to format a given list with

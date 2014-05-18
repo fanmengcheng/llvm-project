@@ -44,8 +44,7 @@ llvm::Value *CodeGenFunction::EmitCastToVoidPtr(llvm::Value *value) {
   if (addressSpace)
     destType = llvm::Type::getInt8PtrTy(getLLVMContext(), addressSpace);
 
-  if (value->getType() == destType) return value;
-  return Builder.CreateBitCast(value, destType);
+  return EmitPointerCast(value, destType);
 }
 
 /// CreateTempAlloca - This creates a alloca and inserts it into the entry
@@ -85,7 +84,6 @@ llvm::AllocaInst *CodeGenFunction::CreateMemTemp(QualType Ty,
 /// EvaluateExprAsBool - Perform the usual unary conversions on the specified
 /// expression and compare the result against zero, returning an Int1Ty value.
 llvm::Value *CodeGenFunction::EvaluateExprAsBool(const Expr *E) {
-  PGO.setCurrentStmt(E);
   if (const MemberPointerType *MPT = E->getType()->getAs<MemberPointerType>()) {
     llvm::Value *MemPtr = EmitScalarExpr(E);
     return CGM.getCXXABI().EmitMemberPointerIsNotNull(*this, MemPtr, MPT);
@@ -390,7 +388,7 @@ LValue CodeGenFunction::EmitMaterializeTemporaryExpr(
     case SubobjectAdjustment::MemberPointerAdjustment: {
       llvm::Value *Ptr = EmitScalarExpr(Adjustment.Ptr.RHS);
       Object = CGM.getCXXABI().EmitMemberDataPointerAddress(
-          *this, E, Object, Ptr, Adjustment.Ptr.MPT);
+                    *this, Object, Ptr, Adjustment.Ptr.MPT);
       break;
     }
     }
@@ -1686,21 +1684,16 @@ EmitBitCastOfLValueToProperType(CodeGenFunction &CGF,
                                 llvm::Value *V, llvm::Type *IRType,
                                 StringRef Name = StringRef()) {
   unsigned AS = cast<llvm::PointerType>(V->getType())->getAddressSpace();
-  return CGF.Builder.CreateBitCast(V, IRType->getPointerTo(AS), Name);
+  return CGF.EmitPointerCast(V, IRType->getPointerTo(AS));
 }
 
 static LValue EmitGlobalVarDeclLValue(CodeGenFunction &CGF,
                                       const Expr *E, const VarDecl *VD) {
-  QualType T = E->getType();
-
-  // If it's thread_local, emit a call to its wrapper function instead.
-  if (VD->getTLSKind() == VarDecl::TLS_Dynamic)
-    return CGF.CGM.getCXXABI().EmitThreadLocalVarDeclLValue(CGF, VD, T);
-
   llvm::Value *V = CGF.CGM.GetAddrOfGlobalVar(VD);
   llvm::Type *RealVarTy = CGF.getTypes().ConvertTypeForMem(VD->getType());
   V = EmitBitCastOfLValueToProperType(CGF, V, RealVarTy);
   CharUnits Alignment = CGF.getContext().getDeclAlign(VD);
+  QualType T = E->getType();
   LValue LV;
   if (VD->getType()->isReferenceType()) {
     llvm::LoadInst *LI = CGF.Builder.CreateLoad(V);
@@ -1708,7 +1701,7 @@ static LValue EmitGlobalVarDeclLValue(CodeGenFunction &CGF,
     V = LI;
     LV = CGF.MakeNaturalAlignAddrLValue(V, T);
   } else {
-    LV = CGF.MakeAddrLValue(V, T, Alignment);
+    LV = CGF.MakeAddrLValue(V, E->getType(), Alignment);
   }
   setObjCGCLValueClass(CGF.getContext(), E, LV);
   return LV;
@@ -1724,7 +1717,7 @@ static LValue EmitFunctionDeclLValue(CodeGenFunction &CGF,
       // isn't the same as the type of a use.  Correct for this with a
       // bitcast.
       QualType NoProtoType =
-          CGF.getContext().getFunctionNoProtoType(Proto->getReturnType());
+          CGF.getContext().getFunctionNoProtoType(Proto->getResultType());
       NoProtoType = CGF.getContext().getPointerType(NoProtoType);
       V = CGF.Builder.CreateBitCast(V, CGF.ConvertType(NoProtoType));
     }
@@ -1775,8 +1768,12 @@ LValue CodeGenFunction::EmitDeclRefLValue(const DeclRefExpr *E) {
 
   if (const VarDecl *VD = dyn_cast<VarDecl>(ND)) {
     // Check if this is a global variable.
-    if (VD->hasLinkage() || VD->isStaticDataMember())
+    if (VD->hasLinkage() || VD->isStaticDataMember()) {
+      // If it's thread_local, emit a call to its wrapper function instead.
+      if (VD->getTLSKind() == VarDecl::TLS_Dynamic)
+        return CGM.getCXXABI().EmitThreadLocalDeclRefExpr(*this, E);
       return EmitGlobalVarDeclLValue(*this, E, VD);
+    }
 
     bool isBlockVariable = VD->hasAttr<BlocksAttr>();
 
@@ -1953,27 +1950,33 @@ LValue CodeGenFunction::EmitPredefinedLValue(const PredefinedExpr *E) {
   case PredefinedExpr::Function:
   case PredefinedExpr::LFunction:
   case PredefinedExpr::FuncDName:
-  case PredefinedExpr::FuncSig:
   case PredefinedExpr::PrettyFunction: {
     PredefinedExpr::IdentType IdentType = E->getIdentType();
-    std::string GVName;
+    std::string GlobalVarName;
 
-    // FIXME: We should use the string literal mangling for the Microsoft C++
-    // ABI so that strings get merged.
     switch (IdentType) {
     default: llvm_unreachable("Invalid type");
-    case PredefinedExpr::Func:           GVName = "__func__."; break;
-    case PredefinedExpr::Function:       GVName = "__FUNCTION__."; break;
-    case PredefinedExpr::FuncDName:      GVName = "__FUNCDNAME__."; break;
-    case PredefinedExpr::FuncSig:        GVName = "__FUNCSIG__."; break;
-    case PredefinedExpr::LFunction:      GVName = "L__FUNCTION__."; break;
-    case PredefinedExpr::PrettyFunction: GVName = "__PRETTY_FUNCTION__."; break;
+    case PredefinedExpr::Func:
+      GlobalVarName = "__func__.";
+      break;
+    case PredefinedExpr::Function:
+      GlobalVarName = "__FUNCTION__.";
+      break;
+    case PredefinedExpr::FuncDName:
+      GlobalVarName = "__FUNCDNAME__.";
+      break;
+    case PredefinedExpr::LFunction:
+      GlobalVarName = "L__FUNCTION__.";
+      break;
+    case PredefinedExpr::PrettyFunction:
+      GlobalVarName = "__PRETTY_FUNCTION__.";
+      break;
     }
 
     StringRef FnName = CurFn->getName();
     if (FnName.startswith("\01"))
       FnName = FnName.substr(1);
-    GVName += FnName;
+    GlobalVarName += FnName;
 
     // If this is outside of a function use the top level decl.
     const Decl *CurDecl = CurCodeDecl;
@@ -2004,13 +2007,15 @@ LValue CodeGenFunction::EmitPredefinedLValue(const PredefinedExpr *E) {
           getContext().getTypeSizeInChars(ElemType).getQuantity(),
           FunctionName, RawChars);
       C = GetAddrOfConstantWideString(RawChars,
-                                      GVName.c_str(),
+                                      GlobalVarName.c_str(),
                                       getContext(),
                                       E->getType(),
                                       E->getLocation(),
                                       CGM);
     } else {
-      C = CGM.GetAddrOfConstantCString(FunctionName, GVName.c_str(), 1);
+      C = CGM.GetAddrOfConstantCString(FunctionName,
+                                       GlobalVarName.c_str(),
+                                       1);
     }
     return MakeAddrLValue(C, E->getType());
   }
@@ -2674,6 +2679,7 @@ EmitConditionalOperatorLValue(const AbstractConditionalOperator *expr) {
   eval.begin(*this);
   LValue lhs = EmitLValue(expr->getTrueExpr());
   eval.end(*this);
+  Cnt.adjustForControlFlow();
 
   if (!lhs.isSimple())
     return EmitUnsupportedLValue(expr, "conditional operator");
@@ -2683,14 +2689,17 @@ EmitConditionalOperatorLValue(const AbstractConditionalOperator *expr) {
 
   // Any temporaries created here are conditional.
   EmitBlock(rhsBlock);
+  Cnt.beginElseRegion();
   eval.begin(*this);
   LValue rhs = EmitLValue(expr->getFalseExpr());
   eval.end(*this);
+  Cnt.adjustForControlFlow();
   if (!rhs.isSimple())
     return EmitUnsupportedLValue(expr, "conditional operator");
   rhsBlock = Builder.GetInsertBlock();
 
   EmitBlock(contBlock);
+  Cnt.applyAdjustmentsToRegion();
 
   llvm::PHINode *phi = Builder.CreatePHI(lhs.getAddress()->getType(), 2,
                                          "cond-lvalue");
@@ -2819,8 +2828,8 @@ LValue CodeGenFunction::EmitCastLValue(const CastExpr *E) {
     const ExplicitCastExpr *CE = cast<ExplicitCastExpr>(E);
 
     LValue LV = EmitLValue(E->getSubExpr());
-    llvm::Value *V = Builder.CreateBitCast(LV.getAddress(),
-                                           ConvertType(CE->getTypeAsWritten()));
+    llvm::Value *V = EmitPointerCast(LV.getAddress(),
+        cast<llvm::PointerType>(ConvertType(CE->getTypeAsWritten())));
     return MakeAddrLValue(V, E->getType());
   }
   case CK_ObjCObjectLValueCast: {
@@ -3062,7 +3071,7 @@ LValue CodeGenFunction::EmitObjCMessageExprLValue(const ObjCMessageExpr *E) {
   if (!RV.isScalar())
     return MakeAddrLValue(RV.getAggregateAddr(), E->getType());
 
-  assert(E->getMethodDecl()->getReturnType()->isReferenceType() &&
+  assert(E->getMethodDecl()->getResultType()->isReferenceType() &&
          "Can't have a scalar return unless the return type is a "
          "reference type!");
 
@@ -3232,8 +3241,8 @@ EmitPointerToDataMemberBinaryExpr(const BinaryOperator *E) {
   const MemberPointerType *MPT
     = E->getRHS()->getType()->getAs<MemberPointerType>();
 
-  llvm::Value *AddV = CGM.getCXXABI().EmitMemberDataPointerAddress(
-      *this, E, BaseV, OffsetV, MPT);
+  llvm::Value *AddV =
+    CGM.getCXXABI().EmitMemberDataPointerAddress(*this, BaseV, OffsetV, MPT);
 
   return MakeAddrLValue(AddV, MPT->getPointeeType());
 }
@@ -3252,7 +3261,6 @@ RValue CodeGenFunction::convertTempToRValue(llvm::Value *addr,
   case TEK_Scalar:
     return RValue::get(EmitLoadOfScalar(lvalue, loc));
   }
-  llvm_unreachable("bad evaluation kind");
 }
 
 void CodeGenFunction::SetFPAccuracy(llvm::Value *Val, float Accuracy) {

@@ -98,12 +98,11 @@ public:
           Arch == llvm::Triple::x86 ||
           Arch == llvm::Triple::x86_64)
         return false;
+      if (getVersion() >= VersionTuple(1, 7) &&
+          (Arch == llvm::Triple::mips64 ||
+           Arch == llvm::Triple::cheri))
+        return false;
     }
-    else if ((getKind() ==  MacOSX) && isNonFragile() &&
-             (getVersion() >= VersionTuple(10, 0)) &&
-             (getVersion() < VersionTuple(10, 6)))
-        return Arch != llvm::Triple::x86_64;
-    // Except for deployment target of 10.5 or less,
     // Mac runtimes use legacy dispatch everywhere now.
     return true;
   }

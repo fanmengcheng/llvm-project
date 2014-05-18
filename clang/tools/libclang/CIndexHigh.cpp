@@ -480,12 +480,13 @@ CXResult clang_findReferencesInFile(CXCursor cursor, CXFile file,
 
 CXResult clang_findIncludesInFile(CXTranslationUnit TU, CXFile file,
                              CXCursorAndRangeVisitor visitor) {
-  if (cxtu::isNotUsableTU(TU)) {
-    LOG_BAD_TU(TU);
+  LogRef Log = Logger::make(LLVM_FUNCTION_NAME);
+
+  if (!TU) {
+    if (Log)
+      *Log << "Null CXTranslationUnit";
     return CXResult_Invalid;
   }
-
-  LogRef Log = Logger::make(LLVM_FUNCTION_NAME);
   if (!file) {
     if (Log)
       *Log << "Null file";

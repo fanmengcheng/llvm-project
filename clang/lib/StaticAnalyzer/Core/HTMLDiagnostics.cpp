@@ -44,10 +44,10 @@ public:
 
   virtual ~HTMLDiagnostics() { FlushDiagnostics(NULL); }
 
-  void FlushDiagnosticsImpl(std::vector<const PathDiagnostic *> &Diags,
-                            FilesMade *filesMade) override;
+  virtual void FlushDiagnosticsImpl(std::vector<const PathDiagnostic *> &Diags,
+                                    FilesMade *filesMade);
 
-  StringRef getName() const override {
+  virtual StringRef getName() const {
     return "HTMLDiagnostics";
   }
 
@@ -99,7 +99,9 @@ void HTMLDiagnostics::ReportDiag(const PathDiagnostic& D,
   // Create the HTML directory if it is missing.
   if (!createdDir) {
     createdDir = true;
-    if (llvm::error_code ec = llvm::sys::fs::create_directories(Directory)) {
+    bool existed;
+    if (llvm::error_code ec =
+            llvm::sys::fs::create_directories(Directory, existed)) {
       llvm::errs() << "warning: could not create directory '"
                    << Directory << "': " << ec.message() << '\n';
 

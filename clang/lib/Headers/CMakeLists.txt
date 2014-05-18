@@ -5,12 +5,12 @@ set(files
   avx2intrin.h
   bmiintrin.h
   bmi2intrin.h
+  capabilities.h
   emmintrin.h
   f16cintrin.h
   float.h
   fma4intrin.h
   fmaintrin.h
-  ia32intrin.h
   immintrin.h
   iso646.h
   Intrin.h
@@ -45,10 +45,10 @@ set(files
   xopintrin.h
   cpuid.h
   unwind.h
-  module.modulemap
+  module.map
   )
 
-set(output_dir ${LLVM_LIBRARY_OUTPUT_INTDIR}/clang/${CLANG_VERSION}/include)
+set(output_dir ${CLANG_LIBRARY_OUTPUT_INTDIR}/clang/${CLANG_VERSION}/include)
 
 # Generate arm_neon.h
 clang_tablegen(arm_neon.h -gen-arm-neon

@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -analyze -analyzer-checker=core -verify %s
+// RUN: %clang --analyze -Xclang -analyzer-checker=alpha.core -Xclang -verify %s
 
 #include <stdarg.h>
 

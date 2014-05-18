@@ -110,8 +110,7 @@ void castsToBool() {
     clang_analyzer_eval(symbolicPointer); // expected-warning{{TRUE}}
 
   int localInt;
-  int* ptr = &localInt;
-  clang_analyzer_eval(ptr); // expected-warning{{TRUE}}
+  clang_analyzer_eval(&localInt); // expected-warning{{TRUE}}
   clang_analyzer_eval(&castsToBool); // expected-warning{{TRUE}}
   clang_analyzer_eval("abc"); // expected-warning{{TRUE}}
 

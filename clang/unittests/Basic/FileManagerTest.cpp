@@ -11,7 +11,6 @@
 #include "clang/Basic/FileSystemOptions.h"
 #include "clang/Basic/FileSystemStatCache.h"
 #include "gtest/gtest.h"
-#include "llvm/Config/config.h"
 
 using namespace llvm;
 using namespace clang;
@@ -29,13 +28,10 @@ private:
 
   void InjectFileOrDirectory(const char *Path, ino_t INode, bool IsFile) {
     FileData Data;
-    Data.Name = Path;
-    Data.Size = 0;
-    Data.ModTime = 0;
-    Data.UniqueID = llvm::sys::fs::UniqueID(1, INode);
+    memset(&Data, 0, sizeof(FileData));
+    llvm::sys::fs::UniqueID ID(1, INode);
+    Data.UniqueID = ID;
     Data.IsDirectory = !IsFile;
-    Data.IsNamedPipe = false;
-    Data.InPCH = false;
     StatCalls[Path] = Data;
   }
 
@@ -52,7 +48,7 @@ public:
 
   // Implement FileSystemStatCache::getStat().
   virtual LookupResult getStat(const char *Path, FileData &Data, bool isFile,
-                               vfs::File **F, vfs::FileSystem &FS) {
+                               int *FileDescriptor) {
     if (StatCalls.count(Path) != 0) {
       Data = StatCalls[Path];
       return CacheExists;
@@ -127,7 +123,7 @@ TEST_F(FileManagerTest, getFileReturnsValidFileEntryForExistingRealFile) {
   statCache->InjectDirectory("/tmp", 42);
   statCache->InjectFile("/tmp/test", 43);
 
-#ifdef LLVM_ON_WIN32
+#ifdef _WIN32
   const char *DirName = "C:.";
   const char *FileName = "C:test";
   statCache->InjectDirectory(DirName, 44);
@@ -144,7 +140,7 @@ TEST_F(FileManagerTest, getFileReturnsValidFileEntryForExistingRealFile) {
   ASSERT_TRUE(dir != NULL);
   EXPECT_STREQ("/tmp", dir->getName());
 
-#ifdef LLVM_ON_WIN32
+#ifdef _WIN32
   file = manager.getFile(FileName);
   ASSERT_TRUE(file != NULL);
 
@@ -205,7 +201,7 @@ TEST_F(FileManagerTest, getFileReturnsNULLForNonexistentFile) {
 
 // The following tests apply to Unix-like system only.
 
-#ifndef LLVM_ON_WIN32
+#ifndef _WIN32
 
 // getFile() returns the same FileEntry for real files that are aliases.
 TEST_F(FileManagerTest, getFileReturnsSameFileEntryForAliasedRealFiles) {
@@ -235,6 +231,6 @@ TEST_F(FileManagerTest, getFileReturnsSameFileEntryForAliasedVirtualFiles) {
   EXPECT_EQ(manager.getFile("abc/foo.cpp"), manager.getFile("abc/bar.cpp"));
 }
 
-#endif  // !LLVM_ON_WIN32
+#endif  // !_WIN32
 
 } // anonymous namespace

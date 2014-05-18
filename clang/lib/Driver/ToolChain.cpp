@@ -38,8 +38,8 @@ const Driver &ToolChain::getDriver() const {
 }
 
 bool ToolChain::useIntegratedAs() const {
-  return Args.hasFlag(options::OPT_fintegrated_as,
-                      options::OPT_fno_integrated_as,
+  return Args.hasFlag(options::OPT_integrated_as,
+                      options::OPT_no_integrated_as,
                       IsIntegratedAssemblerDefault());
 }
 
@@ -114,7 +114,7 @@ Tool *ToolChain::getTool(Action::ActionClass AC) const {
   case Action::BindArchClass:
   case Action::LipoJobClass:
   case Action::DsymutilJobClass:
-  case Action::VerifyDebugInfoJobClass:
+  case Action::VerifyJobClass:
     llvm_unreachable("Invalid tool kind.");
 
   case Action::CompileJobClass:
@@ -122,7 +122,6 @@ Tool *ToolChain::getTool(Action::ActionClass AC) const {
   case Action::PreprocessJobClass:
   case Action::AnalyzeJobClass:
   case Action::MigrateJobClass:
-  case Action::VerifyPCHJobClass:
     return getClang();
   }
 
@@ -161,11 +160,8 @@ bool ToolChain::isCrossCompiling() const {
   // The A32/T32/T16 instruction sets are not separate architectures in this
   // context.
   case llvm::Triple::arm:
-  case llvm::Triple::armeb:
   case llvm::Triple::thumb:
-  case llvm::Triple::thumbeb:
-    return getArch() != llvm::Triple::arm && getArch() != llvm::Triple::thumb &&
-           getArch() != llvm::Triple::armeb && getArch() != llvm::Triple::thumbeb;
+    return getArch() != llvm::Triple::arm && getArch() != llvm::Triple::thumb;
   default:
     return HostTriple.getArch() != getArch();
   }
@@ -184,7 +180,7 @@ std::string ToolChain::ComputeLLVMTriple(const ArgList &Args,
 
   case llvm::Triple::x86_64: {
     llvm::Triple Triple = getTriple();
-    if (!Triple.isOSBinFormatMachO())
+    if (!Triple.isOSDarwin())
       return getTripleString();
 
     if (Arg *A = Args.getLastArg(options::OPT_march_EQ)) {
@@ -197,51 +193,25 @@ std::string ToolChain::ComputeLLVMTriple(const ArgList &Args,
     return Triple.getTriple();
   }
   case llvm::Triple::arm:
-  case llvm::Triple::armeb:
-  case llvm::Triple::thumb:
-  case llvm::Triple::thumbeb: {
+  case llvm::Triple::thumb: {
     // FIXME: Factor into subclasses.
     llvm::Triple Triple = getTriple();
-    bool IsBigEndian = getTriple().getArch() == llvm::Triple::armeb ||
-                       getTriple().getArch() == llvm::Triple::thumbeb;
-
-    // Handle pseudo-target flags '-mlittle-endian'/'-EL' and
-    // '-mbig-endian'/'-EB'.
-    if (Arg *A = Args.getLastArg(options::OPT_mlittle_endian,
-                                 options::OPT_mbig_endian)) {
-      if (A->getOption().matches(options::OPT_mlittle_endian))
-        IsBigEndian = false;
-      else
-        IsBigEndian = true;
-    }
 
     // Thumb2 is the default for V7 on Darwin.
     //
     // FIXME: Thumb should just be another -target-feaure, not in the triple.
-    StringRef Suffix = Triple.isOSBinFormatMachO()
+    StringRef Suffix = Triple.isOSDarwin()
       ? tools::arm::getLLVMArchSuffixForARM(tools::arm::getARMCPUForMArch(Args, Triple))
       : tools::arm::getLLVMArchSuffixForARM(tools::arm::getARMTargetCPU(Args, Triple));
     bool ThumbDefault = Suffix.startswith("v6m") || Suffix.startswith("v7m") ||
       Suffix.startswith("v7em") ||
-      (Suffix.startswith("v7") && getTriple().isOSBinFormatMachO());
-    // FIXME: this is invalid for WindowsCE
-    if (getTriple().isOSWindows())
-      ThumbDefault = true;
-    std::string ArchName;
-    if (IsBigEndian)
-      ArchName = "armeb";
-    else
-      ArchName = "arm";
+      (Suffix.startswith("v7") && getTriple().isOSDarwin());
+    std::string ArchName = "arm";
 
     // Assembly files should start in ARM mode.
     if (InputType != types::TY_PP_Asm &&
         Args.hasFlag(options::OPT_mthumb, options::OPT_mno_thumb, ThumbDefault))
-    {
-      if (IsBigEndian)
-        ArchName = "thumbeb";
-      else
-        ArchName = "thumb";
-    }
+      ArchName = "thumb";
     Triple.setArchName(ArchName + Suffix.str());
 
     return Triple.getTriple();
@@ -251,6 +221,13 @@ std::string ToolChain::ComputeLLVMTriple(const ArgList &Args,
 
 std::string ToolChain::ComputeEffectiveClangTriple(const ArgList &Args, 
                                                    types::ID InputType) const {
+  // Diagnose use of Darwin OS deployment target arguments on non-Darwin.
+  if (Arg *A = Args.getLastArg(options::OPT_mmacosx_version_min_EQ,
+                               options::OPT_miphoneos_version_min_EQ,
+                               options::OPT_mios_simulator_version_min_EQ))
+    getDriver().Diag(diag::err_drv_clang_unsupported)
+      << A->getAsString(Args);
+
   return ComputeLLVMTriple(Args, InputType);
 }
 
@@ -262,8 +239,6 @@ void ToolChain::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
 void ToolChain::addClangTargetOptions(const ArgList &DriverArgs,
                                       ArgStringList &CC1Args) const {
 }
-
-void ToolChain::addClangWarningOptions(ArgStringList &CC1Args) const {}
 
 ToolChain::RuntimeLibType ToolChain::GetRuntimeLibType(
   const ArgList &Args) const
@@ -372,19 +347,16 @@ void ToolChain::AddCCKextLibArgs(const ArgList &Args,
 
 bool ToolChain::AddFastMathRuntimeIfAvailable(const ArgList &Args,
                                               ArgStringList &CmdArgs) const {
-  // Do not check for -fno-fast-math or -fno-unsafe-math when -Ofast passed
-  // (to keep the linker options consistent with gcc and clang itself).
-  if (!isOptimizationLevelFast(Args)) {
-    // Check if -ffast-math or -funsafe-math.
-    Arg *A =
-        Args.getLastArg(options::OPT_ffast_math, options::OPT_fno_fast_math,
-                        options::OPT_funsafe_math_optimizations,
-                        options::OPT_fno_unsafe_math_optimizations);
+  // Check if -ffast-math or -funsafe-math is enabled.
+  Arg *A = Args.getLastArg(options::OPT_ffast_math,
+                           options::OPT_fno_fast_math,
+                           options::OPT_funsafe_math_optimizations,
+                           options::OPT_fno_unsafe_math_optimizations);
 
-    if (!A || A->getOption().getID() == options::OPT_fno_fast_math ||
-        A->getOption().getID() == options::OPT_fno_unsafe_math_optimizations)
-      return false;
-  }
+  if (!A || A->getOption().getID() == options::OPT_fno_fast_math ||
+      A->getOption().getID() == options::OPT_fno_unsafe_math_optimizations)
+    return false;
+
   // If crtfastmath.o exists add it to the arguments.
   std::string Path = GetFilePath("crtfastmath.o");
   if (Path == "crtfastmath.o") // Not found.

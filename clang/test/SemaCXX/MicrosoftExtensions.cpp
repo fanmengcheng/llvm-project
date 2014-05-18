@@ -119,11 +119,10 @@ enum : long long {  // expected-warning{{enumeration types with a fixed underlyi
 
 class AAA {
 __declspec(dllimport) void f(void) { }
-void f2(void); // expected-note{{previous declaration is here}}
+void f2(void);
 };
 
-__declspec(dllimport) void AAA::f2(void) { // expected-error{{'dllimport' attribute can be applied only to symbol}}
-                                           // expected-error@-1{{redeclaration of 'AAA::f2' cannot add 'dllimport' attribute}}
+__declspec(dllimport) void AAA::f2(void) { // expected-error {{'dllimport' attribute can be applied only to symbol}}
 
 }
 
@@ -304,7 +303,7 @@ struct SP9 {
   __declspec(property(get=GetV, put=SetV)) T V;
   T GetV() { return 0; }
   void SetV(T v) {}
-  bool f() { V = this->V; return V < this->V; }
+  void f() { V = this->V; V < this->V; }
   void g() { V++; }
   void h() { V*=2; }
 };

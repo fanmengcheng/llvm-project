@@ -121,8 +121,6 @@ bool Expr::isKnownToHaveBooleanValue() const {
     switch (UO->getOpcode()) {
     case UO_Plus:
       return UO->getSubExpr()->isKnownToHaveBooleanValue();
-    case UO_LNot:
-      return true;
     default:
       return false;
     }
@@ -455,7 +453,7 @@ std::string PredefinedExpr::ComputeName(IdentType IT, const Decl *CurrentDecl) {
 
   if (IT == PredefinedExpr::FuncDName) {
     if (const NamedDecl *ND = dyn_cast<NamedDecl>(CurrentDecl)) {
-      std::unique_ptr<MangleContext> MC;
+      OwningPtr<MangleContext> MC;
       MC.reset(Context.createMangleContext());
 
       if (MC->shouldMangleDeclName(ND)) {
@@ -478,7 +476,7 @@ std::string PredefinedExpr::ComputeName(IdentType IT, const Decl *CurrentDecl) {
     return "";
   }
   if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(CurrentDecl)) {
-    if (IT != PrettyFunction && IT != PrettyFunctionNoVirtual && IT != FuncSig)
+    if (IT != PrettyFunction && IT != PrettyFunctionNoVirtual)
       return FD->getNameAsString();
 
     SmallString<256> Name;
@@ -494,6 +492,7 @@ std::string PredefinedExpr::ComputeName(IdentType IT, const Decl *CurrentDecl) {
     PrintingPolicy Policy(Context.getLangOpts());
     std::string Proto;
     llvm::raw_string_ostream POut(Proto);
+    FD->printQualifiedName(POut, Policy);
 
     const FunctionDecl *Decl = FD;
     if (const FunctionDecl* Pattern = FD->getTemplateInstantiationPattern())
@@ -502,19 +501,6 @@ std::string PredefinedExpr::ComputeName(IdentType IT, const Decl *CurrentDecl) {
     const FunctionProtoType *FT = 0;
     if (FD->hasWrittenPrototype())
       FT = dyn_cast<FunctionProtoType>(AFT);
-
-    if (IT == FuncSig) {
-      switch (FT->getCallConv()) {
-      case CC_C: POut << "__cdecl "; break;
-      case CC_X86StdCall: POut << "__stdcall "; break;
-      case CC_X86FastCall: POut << "__fastcall "; break;
-      case CC_X86ThisCall: POut << "__thiscall "; break;
-      // Only bother printing the conventions that MSVC knows about.
-      default: break;
-      }
-    }
-
-    FD->printQualifiedName(POut, Policy);
 
     POut << "(";
     if (FT) {
@@ -602,15 +588,13 @@ std::string PredefinedExpr::ComputeName(IdentType IT, const Decl *CurrentDecl) {
     // not a constructor or destructor.
     if ((isa<CXXMethodDecl>(FD) &&
          cast<CXXMethodDecl>(FD)->getParent()->isLambda()) ||
-        (FT && FT->getReturnType()->getAs<AutoType>()))
+        (FT && FT->getResultType()->getAs<AutoType>()))
       Proto = "auto " + Proto;
-    else if (FT && FT->getReturnType()->getAs<DecltypeType>())
-      FT->getReturnType()
-          ->getAs<DecltypeType>()
-          ->getUnderlyingType()
+    else if (FT && FT->getResultType()->getAs<DecltypeType>())
+      FT->getResultType()->getAs<DecltypeType>()->getUnderlyingType()
           .getAsStringInternal(Proto, Policy);
     else if (!isa<CXXConstructorDecl>(FD) && !isa<CXXDestructorDecl>(FD))
-      AFT->getReturnType().getAsStringInternal(Proto, Policy);
+      AFT->getResultType().getAsStringInternal(Proto, Policy);
 
     Out << Proto;
 
@@ -795,9 +779,6 @@ StringLiteral *StringLiteral::Create(const ASTContext &C, StringRef Str,
                                      StringKind Kind, bool Pascal, QualType Ty,
                                      const SourceLocation *Loc,
                                      unsigned NumStrs) {
-  assert(C.getAsConstantArrayType(Ty) &&
-         "StringLiteral must be of constant array type!");
-
   // Allocate enough space for the StringLiteral plus an array of locations for
   // any concatenated string tokens.
   void *Mem = C.Allocate(sizeof(StringLiteral)+
@@ -1244,7 +1225,7 @@ QualType CallExpr::getCallReturnType() const {
     CalleeType = Expr::findBoundMemberType(getCallee());
     
   const FunctionType *FnType = CalleeType->castAs<FunctionType>();
-  return FnType->getReturnType();
+  return FnType->getResultType();
 }
 
 SourceLocation CallExpr::getLocStart() const {
@@ -1619,7 +1600,7 @@ const char *CastExpr::getCastKindName() const {
   case CK_ARCReclaimReturnedObject:
     return "ARCReclaimReturnedObject";
   case CK_ARCExtendBlockObject:
-    return "ARCExtendBlockObject";
+    return "ARCCExtendBlockObject";
   case CK_AtomicToNonAtomic:
     return "AtomicToNonAtomic";
   case CK_NonAtomicToAtomic:
@@ -1888,11 +1869,7 @@ bool InitListExpr::isStringLiteralInit() const {
   const ArrayType *AT = getType()->getAsArrayTypeUnsafe();
   if (!AT || !AT->getElementType()->isIntegerType())
     return false;
-  // It is possible for getInit() to return null.
-  const Expr *Init = getInit(0);
-  if (!Init)
-    return false;
-  Init = Init->IgnoreParens();
+  const Expr *Init = getInit(0)->IgnoreParens();
   return isa<StringLiteral>(Init) || isa<ObjCEncodeExpr>(Init);
 }
 
@@ -2078,22 +2055,15 @@ bool Expr::isUnusedResultAWarning(const Expr *&WarnE, SourceLocation &Loc,
     return true;
 
   case CXXOperatorCallExprClass: {
-    // Warn about operator ==,!=,<,>,<=, and >= even when user-defined operator
+    // We warn about operator== and operator!= even when user-defined operator
     // overloads as there is no reasonable way to define these such that they
     // have non-trivial, desirable side-effects. See the -Wunused-comparison
-    // warning: operators == and != are commonly typo'ed, and so warning on them
+    // warning: these operators are commonly typo'ed, and so warning on them
     // provides additional value as well. If this list is updated,
     // DiagnoseUnusedComparison should be as well.
     const CXXOperatorCallExpr *Op = cast<CXXOperatorCallExpr>(this);
-    switch (Op->getOperator()) {
-    default:
-      break;
-    case OO_EqualEqual:
-    case OO_ExclaimEqual:
-    case OO_Less:
-    case OO_Greater:
-    case OO_GreaterEqual:
-    case OO_LessEqual:
+    if (Op->getOperator() == OO_EqualEqual ||
+        Op->getOperator() == OO_ExclaimEqual) {
       WarnE = this;
       Loc = Op->getOperatorLoc();
       R1 = Op->getSourceRange();
@@ -2396,27 +2366,6 @@ Expr *Expr::IgnoreParenCasts() {
       E = NTTP->getReplacement();
       continue;
     }      
-    return E;
-  }
-}
-
-Expr *Expr::IgnoreCasts() {
-  Expr *E = this;
-  while (true) {
-    if (CastExpr *P = dyn_cast<CastExpr>(E)) {
-      E = P->getSubExpr();
-      continue;
-    }
-    if (MaterializeTemporaryExpr *Materialize
-        = dyn_cast<MaterializeTemporaryExpr>(E)) {
-      E = Materialize->GetTemporaryExpr();
-      continue;
-    }
-    if (SubstNonTypeTemplateParmExpr *NTTP
-        = dyn_cast<SubstNonTypeTemplateParmExpr>(E)) {
-      E = NTTP->getReplacement();
-      continue;
-    }
     return E;
   }
 }
@@ -3081,7 +3030,7 @@ Expr::NullPointerConstantKind
 Expr::isNullPointerConstant(ASTContext &Ctx,
                             NullPointerConstantValueDependence NPC) const {
   if (isValueDependent() &&
-      (!Ctx.getLangOpts().CPlusPlus11 || Ctx.getLangOpts().MSVCCompat)) {
+      (!Ctx.getLangOpts().CPlusPlus11 || Ctx.getLangOpts().MicrosoftMode)) {
     switch (NPC) {
     case NPC_NeverValueDependent:
       llvm_unreachable("Unexpected value dependent expression!");
@@ -3167,7 +3116,8 @@ Expr::isNullPointerConstant(ASTContext &Ctx,
     const IntegerLiteral *Lit = dyn_cast<IntegerLiteral>(this);
     if (Lit && !Lit->getValue())
       return NPCK_ZeroLiteral;
-    else if (!Ctx.getLangOpts().MSVCCompat || !isCXX98IntegralConstantExpr(Ctx))
+    else if (!Ctx.getLangOpts().MicrosoftMode ||
+             !isCXX98IntegralConstantExpr(Ctx))
       return NPCK_NotNull;
   } else {
     // If we have an integer constant expression, we need to *evaluate* it and
@@ -3831,21 +3781,30 @@ SourceLocation DesignatedInitExpr::getLocEnd() const {
 
 Expr *DesignatedInitExpr::getArrayIndex(const Designator& D) const {
   assert(D.Kind == Designator::ArrayDesignator && "Requires array designator");
-  Stmt *const *SubExprs = reinterpret_cast<Stmt *const *>(this + 1);
+  char *Ptr = static_cast<char *>(
+                  const_cast<void *>(static_cast<const void *>(this)));
+  Ptr += sizeof(DesignatedInitExpr);
+  Stmt **SubExprs = reinterpret_cast<Stmt**>(reinterpret_cast<void**>(Ptr));
   return cast<Expr>(*(SubExprs + D.ArrayOrRange.Index + 1));
 }
 
 Expr *DesignatedInitExpr::getArrayRangeStart(const Designator &D) const {
   assert(D.Kind == Designator::ArrayRangeDesignator &&
          "Requires array range designator");
-  Stmt *const *SubExprs = reinterpret_cast<Stmt *const *>(this + 1);
+  char *Ptr = static_cast<char *>(
+                  const_cast<void *>(static_cast<const void *>(this)));
+  Ptr += sizeof(DesignatedInitExpr);
+  Stmt **SubExprs = reinterpret_cast<Stmt**>(reinterpret_cast<void**>(Ptr));
   return cast<Expr>(*(SubExprs + D.ArrayOrRange.Index + 1));
 }
 
 Expr *DesignatedInitExpr::getArrayRangeEnd(const Designator &D) const {
   assert(D.Kind == Designator::ArrayRangeDesignator &&
          "Requires array range designator");
-  Stmt *const *SubExprs = reinterpret_cast<Stmt *const *>(this + 1);
+  char *Ptr = static_cast<char *>(
+                  const_cast<void *>(static_cast<const void *>(this)));
+  Ptr += sizeof(DesignatedInitExpr);
+  Stmt **SubExprs = reinterpret_cast<Stmt**>(reinterpret_cast<void**>(Ptr));
   return cast<Expr>(*(SubExprs + D.ArrayOrRange.Index + 2));
 }
 

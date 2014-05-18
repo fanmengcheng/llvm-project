@@ -335,7 +335,7 @@ public:
                   unsigned indexOptions, CXTranslationUnit cxTU)
     : Ctx(0), ClientData(clientData), CB(indexCallbacks),
       IndexOptions(indexOptions), CXTU(cxTU),
-      StrScratch(), StrAdapterCount(0) { }
+      StrScratch(/*size=*/1024), StrAdapterCount(0) { }
 
   ASTContext &getASTContext() const { return *Ctx; }
 

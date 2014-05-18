@@ -106,13 +106,12 @@ void PathPieces::flattenTo(PathPieces &Primary, PathPieces &Current,
 
 PathDiagnostic::~PathDiagnostic() {}
 
-PathDiagnostic::PathDiagnostic(StringRef CheckName, const Decl *declWithIssue,
+PathDiagnostic::PathDiagnostic(const Decl *declWithIssue,
                                StringRef bugtype, StringRef verboseDesc,
                                StringRef shortDesc, StringRef category,
                                PathDiagnosticLocation LocationToUnique,
                                const Decl *DeclToUnique)
-  : CheckName(CheckName),
-    DeclWithIssue(declWithIssue),
+  : DeclWithIssue(declWithIssue),
     BugType(StripTrailingDots(bugtype)),
     VerboseDesc(StripTrailingDots(verboseDesc)),
     ShortDesc(StripTrailingDots(shortDesc)),
@@ -197,8 +196,8 @@ PathDiagnosticConsumer::~PathDiagnosticConsumer() {
 }
 
 void PathDiagnosticConsumer::HandlePathDiagnostic(PathDiagnostic *D) {
-  std::unique_ptr<PathDiagnostic> OwningD(D);
-
+  OwningPtr<PathDiagnostic> OwningD(D);
+  
   if (!D || D->path.empty())
     return;
   
@@ -275,8 +274,8 @@ void PathDiagnosticConsumer::HandlePathDiagnostic(PathDiagnostic *D) {
     Diags.RemoveNode(orig);
     delete orig;
   }
-
-  Diags.InsertNode(OwningD.release());
+  
+  Diags.InsertNode(OwningD.take());
 }
 
 static Optional<bool> comparePath(const PathPieces &X, const PathPieces &Y);
@@ -416,6 +415,17 @@ static bool compare(const PathDiagnostic &X, const PathDiagnostic &Y) {
   return b.getValue();
 }
 
+namespace {
+struct CompareDiagnostics {
+  // Compare if 'X' is "<" than 'Y'.
+  bool operator()(const PathDiagnostic *X, const PathDiagnostic *Y) const {
+    if (X == Y)
+      return false;
+    return compare(*X, *Y);
+  }
+};
+}
+
 void PathDiagnosticConsumer::FlushDiagnostics(
                                      PathDiagnosticConsumer::FilesMade *Files) {
   if (flushed)
@@ -433,11 +443,8 @@ void PathDiagnosticConsumer::FlushDiagnostics(
   // Sort the diagnostics so that they are always emitted in a deterministic
   // order.
   if (!BatchDiags.empty())
-    std::sort(BatchDiags.begin(), BatchDiags.end(),
-              [](const PathDiagnostic *X, const PathDiagnostic *Y) {
-      return X != Y && compare(*X, *Y);
-    });
-
+    std::sort(BatchDiags.begin(), BatchDiags.end(), CompareDiagnostics());
+  
   FlushDiagnosticsImpl(BatchDiags, Files);
 
   // Delete the flushed diagnostics.
@@ -449,11 +456,6 @@ void PathDiagnosticConsumer::FlushDiagnostics(
   
   // Clear out the FoldingSet.
   Diags.clear();
-}
-
-PathDiagnosticConsumer::FilesMade::~FilesMade() {
-  for (PDFileEntry &Entry : *this)
-    Entry.~PDFileEntry();
 }
 
 void PathDiagnosticConsumer::FilesMade::addDiagnostic(const PathDiagnostic &PD,

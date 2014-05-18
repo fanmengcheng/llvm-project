@@ -235,10 +235,7 @@ namespace {
     }
 
     /// Return true if assignments have a non-void result.
-    bool CanCaptureValue(Expr *exp) {
-      if (exp->isGLValue())
-        return true;
-      QualType ty = exp->getType();
+    bool CanCaptureValueOfType(QualType ty) {
       assert(!ty->isIncompleteType());
       assert(!ty->isDependentType());
 
@@ -283,10 +280,10 @@ namespace {
     bool findSetter(bool warn=true);
     bool findGetter();
 
-    Expr *rebuildAndCaptureObject(Expr *syntacticBase) override;
-    ExprResult buildGet() override;
-    ExprResult buildSet(Expr *op, SourceLocation, bool) override;
-    ExprResult complete(Expr *SyntacticForm) override;
+    Expr *rebuildAndCaptureObject(Expr *syntacticBase);
+    ExprResult buildGet();
+    ExprResult buildSet(Expr *op, SourceLocation, bool);
+    ExprResult complete(Expr *SyntacticForm);
 
     bool isWeakProperty() const;
   };
@@ -314,13 +311,13 @@ namespace {
                                        SourceLocation opLoc,
                                        BinaryOperatorKind opcode,
                                        Expr *LHS, Expr *RHS);
-   Expr *rebuildAndCaptureObject(Expr *syntacticBase) override;
-
+   Expr *rebuildAndCaptureObject(Expr *syntacticBase);
+   
    bool findAtIndexGetter();
    bool findAtIndexSetter();
-
-   ExprResult buildGet() override;
-   ExprResult buildSet(Expr *op, SourceLocation, bool) override;
+  
+   ExprResult buildGet();
+   ExprResult buildSet(Expr *op, SourceLocation, bool);
  };
 
  class MSPropertyOpBuilder : public PseudoOpBuilder {
@@ -331,9 +328,9 @@ namespace {
      PseudoOpBuilder(S, refExpr->getSourceRange().getBegin()),
      RefExpr(refExpr) {}
 
-   Expr *rebuildAndCaptureObject(Expr *) override;
-   ExprResult buildGet() override;
-   ExprResult buildSet(Expr *op, SourceLocation, bool) override;
+   Expr *rebuildAndCaptureObject(Expr *);
+   ExprResult buildGet();
+   ExprResult buildSet(Expr *op, SourceLocation, bool);
  };
 }
 
@@ -464,7 +461,7 @@ PseudoOpBuilder::buildIncDecOperation(Scope *Sc, SourceLocation opcLoc,
 
   // That's the postfix result.
   if (UnaryOperator::isPostfix(opcode) &&
-      (result.get()->isTypeDependent() || CanCaptureValue(result.get()))) {
+      (result.get()->isTypeDependent() || CanCaptureValueOfType(resultType))) {
     result = capture(result.take());
     setResultToLastSemantic();
   }
@@ -543,7 +540,7 @@ bool ObjCPropertyOpBuilder::isWeakProperty() const {
 
     T = Prop->getType();
   } else if (Getter) {
-    T = Getter->getReturnType();
+    T = Getter->getResultType();
   } else {
     return false;
   }
@@ -681,8 +678,7 @@ ExprResult ObjCPropertyOpBuilder::buildGet() {
 
   // Build a message-send.
   ExprResult msg;
-  if ((Getter->isInstanceMethod() && !RefExpr->isClassReceiver()) ||
-      RefExpr->isObjectReceiver()) {
+  if (Getter->isInstanceMethod() || RefExpr->isObjectReceiver()) {
     assert(InstanceReceiver || RefExpr->isSuperReceiver());
     msg = S.BuildInstanceMessageImplicit(InstanceReceiver, receiverType,
                                          GenericLoc, Getter->getSelector(),
@@ -751,8 +747,7 @@ ExprResult ObjCPropertyOpBuilder::buildSet(Expr *op, SourceLocation opcLoc,
 
   // Build a message-send.
   ExprResult msg;
-  if ((Setter->isInstanceMethod() && !RefExpr->isClassReceiver()) ||
-      RefExpr->isObjectReceiver()) {
+  if (Setter->isInstanceMethod() || RefExpr->isObjectReceiver()) {
     msg = S.BuildInstanceMessageImplicit(InstanceReceiver, receiverType,
                                          GenericLoc, SetterSelector, Setter,
                                          MultiExprArg(args, 1));
@@ -767,7 +762,7 @@ ExprResult ObjCPropertyOpBuilder::buildSet(Expr *op, SourceLocation opcLoc,
     ObjCMessageExpr *msgExpr =
       cast<ObjCMessageExpr>(msg.get()->IgnoreImplicit());
     Expr *arg = msgExpr->getArg(0);
-    if (CanCaptureValue(arg))
+    if (CanCaptureValueOfType(arg->getType()))
       msgExpr->setArg(0, captureValueAsResult(arg));
   }
 
@@ -818,7 +813,7 @@ bool ObjCPropertyOpBuilder::tryBuildGetOfReference(Expr *op,
   assert(Getter && "property has no setter and no getter!");
 
   // Only do this if the getter returns an l-value reference type.
-  QualType resultType = Getter->getReturnType();
+  QualType resultType = Getter->getResultType();
   if (!resultType->isLValueReferenceType()) return false;
 
   result = buildRValueOperation(op);
@@ -1175,7 +1170,7 @@ bool ObjCSubscriptOpBuilder::findAtIndexGetter() {
              diag::note_parameter_type) << T;
       return false;
     }
-    QualType R = AtIndexGetter->getReturnType();
+    QualType R = AtIndexGetter->getResultType();
     if (!R->isObjCObjectPointerType()) {
       S.Diag(RefExpr->getKeyExpr()->getExprLoc(),
              diag::err_objc_indexing_method_result_type) << R << arrayRef;
@@ -1242,15 +1237,18 @@ bool ObjCSubscriptOpBuilder::findAtIndexSetter() {
                          BaseT->isObjCQualifiedIdType());
 
   if (!AtIndexSetter && S.getLangOpts().DebuggerObjCLiteral) {
-    TypeSourceInfo *ReturnTInfo = 0;
+    TypeSourceInfo *ResultTInfo = 0;
     QualType ReturnType = S.Context.VoidTy;
-    AtIndexSetter = ObjCMethodDecl::Create(
-        S.Context, SourceLocation(), SourceLocation(), AtIndexSetterSelector,
-        ReturnType, ReturnTInfo, S.Context.getTranslationUnitDecl(),
-        true /*Instance*/, false /*isVariadic*/,
-        /*isPropertyAccessor=*/false,
-        /*isImplicitlyDeclared=*/true, /*isDefined=*/false,
-        ObjCMethodDecl::Required, false);
+    AtIndexSetter = ObjCMethodDecl::Create(S.Context, SourceLocation(),
+                           SourceLocation(), AtIndexSetterSelector,
+                           ReturnType,
+                           ResultTInfo,
+                           S.Context.getTranslationUnitDecl(),
+                           true /*Instance*/, false/*isVariadic*/,
+                           /*isPropertyAccessor=*/false,
+                           /*isImplicitlyDeclared=*/true, /*isDefined=*/false,
+                           ObjCMethodDecl::Required,
+                           false); 
     SmallVector<ParmVarDecl *, 2> Params;
     ParmVarDecl *object = ParmVarDecl::Create(S.Context, AtIndexSetter,
                                                 SourceLocation(), SourceLocation(),
@@ -1373,7 +1371,7 @@ ExprResult ObjCSubscriptOpBuilder::buildSet(Expr *op, SourceLocation opcLoc,
     ObjCMessageExpr *msgExpr =
       cast<ObjCMessageExpr>(msg.get()->IgnoreImplicit());
     Expr *arg = msgExpr->getArg(0);
-    if (CanCaptureValue(arg))
+    if (CanCaptureValueOfType(arg->getType()))
       msgExpr->setArg(0, captureValueAsResult(arg));
   }
   

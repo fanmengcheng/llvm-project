@@ -11,6 +11,10 @@ add_clang_executable(diagtool
   TreeView.cpp
 )
 
+add_dependencies(diagtool
+  ClangDiagnosticIndexName
+  )
+
 target_link_libraries(diagtool
   clangBasic
   clangFrontend

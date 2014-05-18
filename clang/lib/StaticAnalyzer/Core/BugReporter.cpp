@@ -12,6 +12,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#define DEBUG_TYPE "BugReporter"
+
 #include "clang/StaticAnalyzer/Core/BugReporter/BugReporter.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclObjC.h"
@@ -28,17 +30,15 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/ExprEngine.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
+#include "llvm/ADT/OwningPtr.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Support/raw_ostream.h"
-#include <memory>
 #include <queue>
 
 using namespace clang;
 using namespace ento;
-
-#define DEBUG_TYPE "BugReporter"
 
 STATISTIC(MaxBugClassSize,
           "The maximum number of bug reports in the same equivalence class");
@@ -265,7 +265,7 @@ static void removeEdgesToDefaultInitializers(PathPieces &Pieces) {
         I = Pieces.erase(I);
         continue;
       } else if (End && isa<CXXDefaultInitExpr>(End)) {
-        PathPieces::iterator Next = std::next(I);
+        PathPieces::iterator Next = llvm::next(I);
         if (Next != E) {
           if (PathDiagnosticControlFlowPiece *NextCF =
                 dyn_cast<PathDiagnosticControlFlowPiece>(*Next)) {
@@ -311,7 +311,7 @@ class NodeMapClosure : public BugReport::NodeResolver {
 public:
   NodeMapClosure(InterExplodedGraphMap &m) : M(m) {}
 
-  const ExplodedNode *getOriginalNode(const ExplodedNode *N) override {
+  const ExplodedNode *getOriginalNode(const ExplodedNode *N) {
     return M.lookup(N);
   }
 };
@@ -345,7 +345,7 @@ public:
     return getParentMap().getParent(S);
   }
 
-  NodeMapClosure& getNodeResolver() override { return NMC; }
+  virtual NodeMapClosure& getNodeResolver() { return NMC; }
 
   PathDiagnosticLocation getEnclosingStmtLocation(const Stmt *S);
 
@@ -1263,8 +1263,8 @@ static void reversePropagateIntererstingSymbols(BugReport &R,
           SVal ChildV = State->getSVal(child, LCtx);
           R.markInteresting(ChildV);
         }
+        break;
       }
-      break;
     }
   }
   
@@ -2742,10 +2742,12 @@ PathDiagnosticLocation BugReport::getLocation(const SourceManager &SM) const {
     assert(!Location.isValid() &&
      "Either Location or ErrorNode should be specified but not both.");
     return PathDiagnosticLocation::createEndOfPath(ErrorNode, SM);
+  } else {
+    assert(Location.isValid());
+    return Location;
   }
 
-  assert(Location.isValid());
-  return Location;
+  return PathDiagnosticLocation();
 }
 
 //===----------------------------------------------------------------------===//
@@ -2800,7 +2802,9 @@ void BugReporter::FlushReports() {
   // EmitBasicReport.
   // FIXME: There are leaks from checkers that assume that the BugTypes they
   // create will be destroyed by the BugReporter.
-  llvm::DeleteContainerSeconds(StrBugTypes);
+  for (llvm::StringMap<BugType*>::iterator
+         I = StrBugTypes.begin(), E = StrBugTypes.end(); I != E; ++I)
+    delete I->second;
 
   // Remove all references to the BugType objects.
   BugTypes = F.getEmptySet();
@@ -2816,7 +2820,7 @@ namespace {
 class ReportGraph {
 public:
   InterExplodedGraphMap BackMap;
-  std::unique_ptr<ExplodedGraph> Graph;
+  OwningPtr<ExplodedGraph> Graph;
   const ExplodedNode *ErrorNode;
   size_t Index;
 };
@@ -2831,7 +2835,7 @@ class TrimmedGraph {
   typedef std::pair<const ExplodedNode *, size_t> NodeIndexPair;
   SmallVector<NodeIndexPair, 32> ReportNodes;
 
-  std::unique_ptr<ExplodedGraph> G;
+  OwningPtr<ExplodedGraph> G;
 
   /// A helper class for sorting ExplodedNodes by priority.
   template <bool Descending>
@@ -2902,7 +2906,7 @@ TrimmedGraph::TrimmedGraph(const ExplodedGraph *OriginalGraph,
 
     PriorityMapTy::iterator PriorityEntry;
     bool IsNew;
-    std::tie(PriorityEntry, IsNew) =
+    llvm::tie(PriorityEntry, IsNew) =
       PriorityMap.insert(std::make_pair(Node, Priority));
     ++Priority;
 
@@ -2931,7 +2935,7 @@ bool TrimmedGraph::popNextReportGraph(ReportGraph &GraphWrapper) {
     return false;
 
   const ExplodedNode *OrigN;
-  std::tie(OrigN, GraphWrapper.Index) = ReportNodes.pop_back_val();
+  llvm::tie(OrigN, GraphWrapper.Index) = ReportNodes.pop_back_val();
   assert(PriorityMap.find(OrigN) != PriorityMap.end() &&
          "error node not accessible from root");
 
@@ -3149,21 +3153,21 @@ bool GRBugReporter::generatePathDiagnostic(PathDiagnostic& PD,
 
       // Generate the very last diagnostic piece - the piece is visible before 
       // the trace is expanded.
-      std::unique_ptr<PathDiagnosticPiece> LastPiece;
+      PathDiagnosticPiece *LastPiece = 0;
       for (BugReport::visitor_iterator I = visitors.begin(), E = visitors.end();
           I != E; ++I) {
         if (PathDiagnosticPiece *Piece = (*I)->getEndPath(PDB, N, *R)) {
           assert (!LastPiece &&
               "There can only be one final piece in a diagnostic.");
-          LastPiece.reset(Piece);
+          LastPiece = Piece;
         }
       }
 
       if (ActiveScheme != PathDiagnosticConsumer::None) {
         if (!LastPiece)
-          LastPiece.reset(BugReporterVisitor::getDefaultEndPath(PDB, N, *R));
+          LastPiece = BugReporterVisitor::getDefaultEndPath(PDB, N, *R);
         assert(LastPiece);
-        PD.setEndOfPath(LastPiece.release());
+        PD.setEndOfPath(LastPiece);
       }
 
       // Make sure we get a clean location context map so we don't
@@ -3243,9 +3247,6 @@ void BugReporter::Register(BugType *BT) {
 }
 
 void BugReporter::emitReport(BugReport* R) {
-  // To guarantee memory release.
-  std::unique_ptr<BugReport> UniqueR(R);
-
   // Defensive checking: throw the bug away if it comes from a BodyFarm-
   // generated body. We do this very early because report processing relies
   // on the report's location being valid.
@@ -3276,12 +3277,12 @@ void BugReporter::emitReport(BugReport* R) {
   BugReportEquivClass* EQ = EQClasses.FindNodeOrInsertPos(ID, InsertPos);
 
   if (!EQ) {
-    EQ = new BugReportEquivClass(UniqueR.release());
+    EQ = new BugReportEquivClass(R);
     EQClasses.InsertNode(EQ, InsertPos);
     EQClassesVector.push_back(EQ);
   }
   else
-    EQ->AddReport(UniqueR.release());
+    EQ->AddReport(R);
 }
 
 
@@ -3402,8 +3403,10 @@ void BugReporter::FlushReport(BugReportEquivClass& EQ) {
   SmallVector<BugReport*, 10> bugReports;
   BugReport *exampleReport = FindReportInEquivalenceClass(EQ, bugReports);
   if (exampleReport) {
-    for (PathDiagnosticConsumer *PDC : getPathDiagnosticConsumers()) {
-      FlushReport(exampleReport, *PDC, bugReports);
+    const PathDiagnosticConsumers &C = getPathDiagnosticConsumers();
+    for (PathDiagnosticConsumers::const_iterator I=C.begin(),
+                                                 E=C.end(); I != E; ++I) {
+      FlushReport(exampleReport, **I, bugReports);
     }
   }
 }
@@ -3416,13 +3419,14 @@ void BugReporter::FlushReport(BugReport *exampleReport,
   // Probably doesn't make a difference in practice.
   BugType& BT = exampleReport->getBugType();
 
-  std::unique_ptr<PathDiagnostic> D(new PathDiagnostic(
-      exampleReport->getBugType().getCheckName(),
-      exampleReport->getDeclWithIssue(), exampleReport->getBugType().getName(),
-      exampleReport->getDescription(),
-      exampleReport->getShortDescription(/*Fallback=*/false), BT.getCategory(),
-      exampleReport->getUniqueingLocation(),
-      exampleReport->getUniqueingDecl()));
+  OwningPtr<PathDiagnostic>
+    D(new PathDiagnostic(exampleReport->getDeclWithIssue(),
+                         exampleReport->getBugType().getName(),
+                         exampleReport->getDescription(),
+                         exampleReport->getShortDescription(/*Fallback=*/false),
+                         BT.getCategory(),
+                         exampleReport->getUniqueingLocation(),
+                         exampleReport->getUniqueingDecl()));
 
   MaxBugClassSize = std::max(bugReports.size(),
                              static_cast<size_t>(MaxBugClassSize));
@@ -3451,7 +3455,7 @@ void BugReporter::FlushReport(BugReport *exampleReport,
     PathDiagnosticPiece *piece =
       new PathDiagnosticEventPiece(L, exampleReport->getDescription());
     BugReport::ranges_iterator Beg, End;
-    std::tie(Beg, End) = exampleReport->getRanges();
+    llvm::tie(Beg, End) = exampleReport->getRanges();
     for ( ; Beg != End; ++Beg)
       piece->addRange(*Beg);
     D->setEndOfPath(piece);
@@ -3464,25 +3468,17 @@ void BugReporter::FlushReport(BugReport *exampleReport,
     D->addMeta(*i);
   }
 
-  PD.HandlePathDiagnostic(D.release());
+  PD.HandlePathDiagnostic(D.take());
 }
 
 void BugReporter::EmitBasicReport(const Decl *DeclWithIssue,
-                                  const CheckerBase *Checker,
-                                  StringRef Name, StringRef Category,
-                                  StringRef Str, PathDiagnosticLocation Loc,
-                                  ArrayRef<SourceRange> Ranges) {
-  EmitBasicReport(DeclWithIssue, Checker->getCheckName(), Name, Category, Str,
-                  Loc, Ranges);
-}
-void BugReporter::EmitBasicReport(const Decl *DeclWithIssue,
-                                  CheckName CheckName,
-                                  StringRef name, StringRef category,
+                                  StringRef name,
+                                  StringRef category,
                                   StringRef str, PathDiagnosticLocation Loc,
                                   ArrayRef<SourceRange> Ranges) {
 
   // 'BT' is owned by BugReporter.
-  BugType *BT = getBugTypeForName(CheckName, name, category);
+  BugType *BT = getBugTypeForName(name, category);
   BugReport *R = new BugReport(*BT, str, Loc);
   R->setDeclWithIssue(DeclWithIssue);
   for (ArrayRef<SourceRange>::iterator I = Ranges.begin(), E = Ranges.end();
@@ -3491,16 +3487,15 @@ void BugReporter::EmitBasicReport(const Decl *DeclWithIssue,
   emitReport(R);
 }
 
-BugType *BugReporter::getBugTypeForName(CheckName CheckName, StringRef name,
+BugType *BugReporter::getBugTypeForName(StringRef name,
                                         StringRef category) {
   SmallString<136> fullDesc;
-  llvm::raw_svector_ostream(fullDesc) << CheckName.getName() << ":" << name
-                                      << ":" << category;
+  llvm::raw_svector_ostream(fullDesc) << name << ":" << category;
   llvm::StringMapEntry<BugType *> &
       entry = StrBugTypes.GetOrCreateValue(fullDesc);
   BugType *BT = entry.getValue();
   if (!BT) {
-    BT = new BugType(CheckName, name, category);
+    BT = new BugType(name, category);
     entry.setValue(BT);
   }
   return BT;

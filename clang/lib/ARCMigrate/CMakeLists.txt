@@ -23,8 +23,21 @@ add_clang_library(clangARCMigrate
   TransZeroOutPropsInDealloc.cpp
   TransformActions.cpp
   Transforms.cpp
+  )
 
-  LINK_LIBS
+add_dependencies(clangARCMigrate
+  ClangAttrClasses
+  ClangAttrList
+  ClangAttrParsedAttrList
+  ClangCommentNodes
+  ClangDeclNodes
+  ClangDiagnosticCommon
+  ClangDiagnosticGroups
+  ClangDiagnosticSema
+  ClangStmtNodes
+  )
+
+target_link_libraries(clangARCMigrate
   clangAST
   clangAnalysis
   clangBasic

@@ -1,5 +1,6 @@
 // RUN: %clang_cc1 %s -triple=x86_64-pc-linux-gnu -munwind-tables -emit-llvm -o - | FileCheck %s
 // RUN: %clang_cc1 %s -triple=x86_64-pc-linux-gnu -munwind-tables -emit-llvm -o - -O1 -disable-llvm-optzns | FileCheck %s
+// RUN: %clang_cc1 %s -triple=x86_64-pc-linux-gnu -munwind-tables -fhidden-weak-vtables -emit-llvm -o - | FileCheck -check-prefix=CHECK-HIDDEN %s
 
 namespace Test1 {
 
@@ -250,7 +251,9 @@ namespace Test10 {
   struct B { virtual void foo(); };
   struct C : A, B { void foo() {} };
 
-  // Test later.
+  // CHECK-HIDDEN-LABEL: define linkonce_odr void @_ZN6Test101C3fooEv
+  // CHECK-HIDDEN-LABEL: define linkonce_odr hidden void @_ZThn8_N6Test101C3fooEv
+
   void test() {
     C c;
   }
@@ -362,10 +365,6 @@ namespace Test15 {
 }
 
 /**** The following has to go at the end of the file ****/
-
-// This is from Test10:
-// CHECK-LABEL: define linkonce_odr void @_ZN6Test101C3fooEv
-// CHECK-LABEL: define linkonce_odr void @_ZThn8_N6Test101C3fooEv
 
 // This is from Test5:
 // CHECK-LABEL: define linkonce_odr void @_ZTv0_n24_N5Test51B1fEv

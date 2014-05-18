@@ -122,11 +122,7 @@ CXSourceLocation clang_getLocation(CXTranslationUnit TU,
                                    CXFile file,
                                    unsigned line,
                                    unsigned column) {
-  if (cxtu::isNotUsableTU(TU)) {
-    LOG_BAD_TU(TU);
-    return clang_getNullLocation();
-  }
-  if (!file)
+  if (!TU || !file)
     return clang_getNullLocation();
   if (line == 0 || column == 0)
     return clang_getNullLocation();
@@ -155,13 +151,9 @@ CXSourceLocation clang_getLocation(CXTranslationUnit TU,
 CXSourceLocation clang_getLocationForOffset(CXTranslationUnit TU,
                                             CXFile file,
                                             unsigned offset) {
-  if (cxtu::isNotUsableTU(TU)) {
-    LOG_BAD_TU(TU);
+  if (!TU || !file)
     return clang_getNullLocation();
-  }
-  if (!file)
-    return clang_getNullLocation();
-
+  
   ASTUnit *CXXUnit = cxtu::getASTUnit(TU);
 
   SourceLocation SLoc 

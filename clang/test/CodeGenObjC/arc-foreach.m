@@ -172,4 +172,4 @@ void test3(NSArray *array) {
   // CHECK-LP64-NEXT: br label [[L]]
 }
 
-// CHECK-LP64: attributes [[NUW]] = { nounwind }
+// CHECK: attributes [[NUW]] = { nounwind }

@@ -9,8 +9,18 @@ add_clang_library(clangTooling
   Refactoring.cpp
   RefactoringCallbacks.cpp
   Tooling.cpp
+  )
 
-  LINK_LIBS
+add_dependencies(clangTooling
+  ClangAttrClasses
+  ClangAttrList
+  ClangDeclNodes
+  ClangDiagnosticCommon
+  ClangDiagnosticFrontend
+  ClangStmtNodes
+  )
+
+target_link_libraries(clangTooling
   clangAST
   clangASTMatchers
   clangBasic
