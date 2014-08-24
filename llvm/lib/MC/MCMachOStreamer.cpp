@@ -60,7 +60,6 @@ public:
 
   void ChangeSection(const MCSection *Sect, const MCExpr *Subsect) override;
   void EmitLabel(MCSymbol *Symbol) override;
-  void EmitDebugLabel(MCSymbol *Symbol) override;
   void EmitEHSymAttributes(const MCSymbol *Symbol, MCSymbol *EHSymbol) override;
   void EmitAssemblerFlag(MCAssemblerFlag Flag) override;
   void EmitLinkerOptions(ArrayRef<std::string> Options) override;
@@ -162,9 +161,6 @@ void MCMachOStreamer::EmitLabel(MCSymbol *Symbol) {
   SD.setFlags(SD.getFlags() & ~SF_ReferenceTypeMask);
 }
 
-void MCMachOStreamer::EmitDebugLabel(MCSymbol *Symbol) {
-  EmitLabel(Symbol);
-}
 void MCMachOStreamer::EmitDataRegion(DataRegionData::KindTy Kind) {
   if (!getAssembler().getBackend().hasDataInCodeSupport())
     return;
@@ -418,7 +414,7 @@ void MCMachOStreamer::EmitInstToData(const MCInst &Inst,
 }
 
 void MCMachOStreamer::FinishImpl() {
-  EmitFrames(&getAssembler().getBackend(), true);
+  EmitFrames(&getAssembler().getBackend());
 
   // We have to set the fragment atom associations so we can relax properly for
   // Mach-O.

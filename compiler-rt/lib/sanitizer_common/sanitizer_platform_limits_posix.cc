@@ -35,7 +35,6 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
-#include <sys/timeb.h>
 #include <sys/times.h>
 #include <sys/types.h>
 #include <sys/utsname.h>
@@ -45,6 +44,7 @@
 
 #if !SANITIZER_ANDROID
 #include <sys/mount.h>
+#include <sys/timeb.h>
 #endif
 
 #if SANITIZER_LINUX
@@ -191,13 +191,14 @@ namespace __sanitizer {
   unsigned struct_tms_sz = sizeof(struct tms);
   unsigned struct_sigevent_sz = sizeof(struct sigevent);
   unsigned struct_sched_param_sz = sizeof(struct sched_param);
-  unsigned struct_statfs_sz = sizeof(struct statfs);
+
 
 #if SANITIZER_MAC && !SANITIZER_IOS
   unsigned struct_statfs64_sz = sizeof(struct statfs64);
 #endif // SANITIZER_MAC && !SANITIZER_IOS
 
 #if !SANITIZER_ANDROID
+  unsigned struct_statfs_sz = sizeof(struct statfs);
   unsigned struct_sockaddr_sz = sizeof(struct sockaddr);
   unsigned ucontext_t_sz = sizeof(ucontext_t);
 #endif // !SANITIZER_ANDROID
@@ -289,7 +290,9 @@ namespace __sanitizer {
   int ptrace_setfpregs = PTRACE_SETFPREGS;
   int ptrace_getfpxregs = PTRACE_GETFPXREGS;
   int ptrace_setfpxregs = PTRACE_SETFPXREGS;
-#if defined(PTRACE_GETSIGINFO) && defined(PTRACE_SETSIGINFO)
+  int ptrace_geteventmsg = PTRACE_GETEVENTMSG;
+#if (defined(PTRACE_GETSIGINFO) && defined(PTRACE_SETSIGINFO)) ||              \
+    (defined(PT_GETSIGINFO) && defined(PT_SETSIGINFO))
   int ptrace_getsiginfo = PTRACE_GETSIGINFO;
   int ptrace_setsiginfo = PTRACE_SETSIGINFO;
 #else
@@ -1057,6 +1060,10 @@ CHECK_SIZE_AND_OFFSET(shmid_ds, shm_nattch);
 
 CHECK_TYPE_SIZE(clock_t);
 
+#if SANITIZER_LINUX
+CHECK_TYPE_SIZE(clockid_t);
+#endif
+
 #if !SANITIZER_ANDROID
 CHECK_TYPE_SIZE(ifaddrs);
 CHECK_SIZE_AND_OFFSET(ifaddrs, ifa_next);
@@ -1087,11 +1094,13 @@ CHECK_SIZE_AND_OFFSET(ifaddrs, ifa_data);
 COMPILER_CHECK(sizeof(__sanitizer_mallinfo) == sizeof(struct mallinfo));
 #endif
 
+#if !SANITIZER_ANDROID
 CHECK_TYPE_SIZE(timeb);
 CHECK_SIZE_AND_OFFSET(timeb, time);
 CHECK_SIZE_AND_OFFSET(timeb, millitm);
 CHECK_SIZE_AND_OFFSET(timeb, timezone);
 CHECK_SIZE_AND_OFFSET(timeb, dstflag);
+#endif
 
 CHECK_TYPE_SIZE(passwd);
 CHECK_SIZE_AND_OFFSET(passwd, pw_name);
@@ -1126,7 +1135,6 @@ CHECK_SIZE_AND_OFFSET(XDR, x_public);
 CHECK_SIZE_AND_OFFSET(XDR, x_private);
 CHECK_SIZE_AND_OFFSET(XDR, x_base);
 CHECK_SIZE_AND_OFFSET(XDR, x_handy);
-CHECK_TYPE_SIZE(XDR::xdr_ops);
 COMPILER_CHECK(__sanitizer_XDR_ENCODE == XDR_ENCODE);
 COMPILER_CHECK(__sanitizer_XDR_DECODE == XDR_DECODE);
 COMPILER_CHECK(__sanitizer_XDR_FREE == XDR_FREE);

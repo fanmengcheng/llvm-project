@@ -11,8 +11,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef CODEGEN_ASMPRINTER_DWARFDEBUG_H__
-#define CODEGEN_ASMPRINTER_DWARFDEBUG_H__
+#ifndef LLVM_LIB_CODEGEN_ASMPRINTER_DWARFDEBUG_H
+#define LLVM_LIB_CODEGEN_ASMPRINTER_DWARFDEBUG_H
 
 #include "DwarfFile.h"
 #include "AsmPrinterHandler.h"
@@ -27,6 +27,7 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/FoldingSet.h"
 #include "llvm/CodeGen/LexicalScopes.h"
+#include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/MC/MachineLocation.h"
@@ -71,16 +72,21 @@ class DbgVariable {
   DIVariable Var;             // Variable Descriptor.
   DIE *TheDIE;                // Variable DIE.
   unsigned DotDebugLocOffset; // Offset in DotDebugLocEntries.
-  DbgVariable *AbsVar;        // Corresponding Abstract variable, if any.
   const MachineInstr *MInsn;  // DBG_VALUE instruction of the variable.
   int FrameIndex;
   DwarfDebug *DD;
 
 public:
-  // AbsVar may be NULL.
-  DbgVariable(DIVariable V, DbgVariable *AV, DwarfDebug *DD)
-      : Var(V), TheDIE(nullptr), DotDebugLocOffset(~0U), AbsVar(AV),
-        MInsn(nullptr), FrameIndex(~0), DD(DD) {}
+  /// Construct a DbgVariable from a DIVariable.
+  DbgVariable(DIVariable V, DwarfDebug *DD)
+      : Var(V), TheDIE(nullptr), DotDebugLocOffset(~0U), MInsn(nullptr),
+        FrameIndex(~0), DD(DD) {}
+
+  /// Construct a DbgVariable from a DEBUG_VALUE.
+  /// AbstractVar may be NULL.
+  DbgVariable(const MachineInstr *DbgValue, DwarfDebug *DD)
+      : Var(DbgValue->getDebugVariable()), TheDIE(nullptr),
+        DotDebugLocOffset(~0U), MInsn(DbgValue), FrameIndex(~0), DD(DD) {}
 
   // Accessors.
   DIVariable getVariable() const { return Var; }
@@ -89,9 +95,7 @@ public:
   void setDotDebugLocOffset(unsigned O) { DotDebugLocOffset = O; }
   unsigned getDotDebugLocOffset() const { return DotDebugLocOffset; }
   StringRef getName() const { return Var.getName(); }
-  DbgVariable *getAbstractVariable() const { return AbsVar; }
   const MachineInstr *getMInsn() const { return MInsn; }
-  void setMInsn(const MachineInstr *M) { MInsn = M; }
   int getFrameIndex() const { return FrameIndex; }
   void setFrameIndex(int FI) { FrameIndex = FI; }
   // Translate tag to proper Dwarf tag.
@@ -199,7 +203,8 @@ class DwarfDebug : public AsmPrinterHandler {
   ScopeVariablesMap ScopeVariables;
 
   // Collection of abstract variables.
-  DenseMap<const MDNode *, DbgVariable *> AbstractVariables;
+  DenseMap<const MDNode *, std::unique_ptr<DbgVariable>> AbstractVariables;
+  SmallVector<std::unique_ptr<DbgVariable>, 64> ConcreteVariables;
 
   // Collection of DebugLocEntry. Stored in a linked list so that DIELocLists
   // can refer to them in spite of insertions into this list.
@@ -253,6 +258,7 @@ class DwarfDebug : public AsmPrinterHandler {
   MCSymbol *DwarfDebugLocSectionSym, *DwarfLineSectionSym, *DwarfAddrSectionSym;
   MCSymbol *FunctionBeginSym, *FunctionEndSym;
   MCSymbol *DwarfInfoDWOSectionSym, *DwarfAbbrevDWOSectionSym;
+  MCSymbol *DwarfTypesDWOSectionSym;
   MCSymbol *DwarfStrDWOSectionSym;
   MCSymbol *DwarfGnuPubNamesSectionSym, *DwarfGnuPubTypesSectionSym;
 
@@ -325,6 +331,8 @@ class DwarfDebug : public AsmPrinterHandler {
   DwarfAccelTable AccelNamespace;
   DwarfAccelTable AccelTypes;
 
+  DenseMap<const Function *, DISubprogram> FunctionDIs;
+
   MCDwarfDwoLineTable *getDwoLineTable(const DwarfCompileUnit &);
 
   void addScopeVariable(LexicalScope *LS, DbgVariable *Var);
@@ -334,7 +342,14 @@ class DwarfDebug : public AsmPrinterHandler {
   }
 
   /// \brief Find abstract variable associated with Var.
-  DbgVariable *findAbstractVariable(DIVariable &Var, DebugLoc Loc);
+  DbgVariable *getExistingAbstractVariable(const DIVariable &DV,
+                                           DIVariable &Cleansed);
+  DbgVariable *getExistingAbstractVariable(const DIVariable &DV);
+  void createAbstractVariable(const DIVariable &DV, LexicalScope *Scope);
+  void ensureAbstractVariableIsCreated(const DIVariable &Var,
+                                       const MDNode *Scope);
+  void ensureAbstractVariableIsCreatedIfScoped(const DIVariable &Var,
+                                               const MDNode *Scope);
 
   /// \brief Find DIE for the given subprogram and attach appropriate
   /// DW_AT_low_pc and DW_AT_high_pc attributes. If there are global
@@ -385,11 +400,12 @@ class DwarfDebug : public AsmPrinterHandler {
   /// \brief Compute the size and offset of all the DIEs.
   void computeSizeAndOffsets();
 
-  /// \brief Attach DW_AT_inline attribute with inlined subprogram DIEs.
-  void computeInlinedDIEs();
-
   /// \brief Collect info for variables that were optimized out.
   void collectDeadVariables();
+
+  void finishVariableDefinitions();
+
+  void finishSubprogramDefinitions();
 
   /// \brief Finish off debug information after all functions have been
   /// processed.
@@ -491,9 +507,6 @@ class DwarfDebug : public AsmPrinterHandler {
   /// DW_TAG_compile_unit.
   DwarfCompileUnit &constructDwarfCompileUnit(DICompileUnit DIUnit);
 
-  /// \brief Construct subprogram DIE.
-  void constructSubprogramDIE(DwarfCompileUnit &TheCU, const MDNode *N);
-
   /// \brief Construct imported_module or imported_declaration DIE.
   void constructImportedEntityDIE(DwarfCompileUnit &TheCU, const MDNode *N);
 
@@ -520,11 +533,16 @@ class DwarfDebug : public AsmPrinterHandler {
   bool addCurrentFnArgument(DbgVariable *Var, LexicalScope *Scope);
 
   /// \brief Populate LexicalScope entries with variables' info.
-  void collectVariableInfo(SmallPtrSet<const MDNode *, 16> &ProcessedVars);
+  void collectVariableInfo(SmallPtrSetImpl<const MDNode *> &ProcessedVars);
+
+  /// \brief Build the location list for all DBG_VALUEs in the
+  /// function that describe the same variable.
+  void buildLocationList(SmallVectorImpl<DebugLocEntry> &DebugLoc,
+                         const DbgValueHistoryMap::InstrRanges &Ranges);
 
   /// \brief Collect variable information from the side table maintained
   /// by MMI.
-  void collectVariableInfoFromMMITable(SmallPtrSet<const MDNode *, 16> &P);
+  void collectVariableInfoFromMMITable(SmallPtrSetImpl<const MDNode *> &P);
 
   /// \brief Ensure that a label will be emitted before MI.
   void requestLabelBeforeInsn(const MachineInstr *MI) {
@@ -542,6 +560,8 @@ class DwarfDebug : public AsmPrinterHandler {
   /// \brief Return Label immediately following the instruction.
   MCSymbol *getLabelAfterInsn(const MachineInstr *MI);
 
+  void attachRangesOrLowHighPC(DwarfCompileUnit &Unit, DIE &D,
+                               const SmallVectorImpl<InsnRange> &Ranges);
   void attachLowHighPC(DwarfCompileUnit &Unit, DIE &D, MCSymbol *Begin,
                        MCSymbol *End);
 
@@ -627,6 +647,13 @@ public:
   /// \brief Emit an entry for the debug loc section. This can be used to
   /// handle an entry that's going to be emitted into the debug loc section.
   void emitDebugLocEntry(ByteStreamer &Streamer, const DebugLocEntry &Entry);
+  /// \brief emit a single value for the debug loc section.
+  void emitDebugLocValue(ByteStreamer &Streamer,
+                         const DebugLocEntry::Value &Value);
+  /// Emits an optimal (=sorted) sequence of DW_OP_pieces.
+  void emitLocPieces(ByteStreamer &Streamer,
+                     const DITypeIdentifierMap &Map,
+                     ArrayRef<DebugLocEntry::Value> Values);
 
   /// Emit the location for a debug loc entry, including the size header.
   void emitDebugLocEntryLocation(const DebugLocEntry &Entry);

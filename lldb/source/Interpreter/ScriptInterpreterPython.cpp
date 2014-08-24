@@ -32,6 +32,7 @@
 #include "lldb/Core/Debugger.h"
 #include "lldb/Core/Timer.h"
 #include "lldb/Host/Host.h"
+#include "lldb/Host/Pipe.h"
 #include "lldb/Interpreter/CommandInterpreter.h"
 #include "lldb/Interpreter/CommandReturnObject.h"
 #include "lldb/Interpreter/PythonDataObjects.h"
@@ -140,7 +141,7 @@ ScriptInterpreterPython::Locker::~Locker()
 
 ScriptInterpreterPython::ScriptInterpreterPython (CommandInterpreter &interpreter) :
     ScriptInterpreter (interpreter, eScriptLanguagePython),
-    IOHandlerDelegateMultiline("DONE", true),
+    IOHandlerDelegateMultiline("DONE"),
     m_saved_stdin (),
     m_saved_stdout (),
     m_saved_stderr (),
@@ -580,8 +581,7 @@ ScriptInterpreterPython::ExecuteOneLine (const char *command, CommandReturnObjec
         StreamFileSP output_file_sp;
         StreamFileSP error_file_sp;
         Communication output_comm ("lldb.ScriptInterpreterPython.ExecuteOneLine.comm");
-        int pipe_fds[2] = { -1, -1 };
-        
+        bool join_read_thread = false;
         if (options.GetEnableIO())
         {
             if (result)
@@ -589,16 +589,17 @@ ScriptInterpreterPython::ExecuteOneLine (const char *command, CommandReturnObjec
                 input_file_sp = debugger.GetInputFile();
                 // Set output to a temporary file so we can forward the results on to the result object
                 
-                int err = pipe(pipe_fds);
-                if (err == 0)
+                Pipe pipe;
+                if (pipe.Open())
                 {
-                    std::unique_ptr<ConnectionFileDescriptor> conn_ap(new ConnectionFileDescriptor(pipe_fds[0], true));
+                    std::unique_ptr<ConnectionFileDescriptor> conn_ap(new ConnectionFileDescriptor(pipe.ReleaseReadFileDescriptor(), true));
                     if (conn_ap->IsConnected())
                     {
                         output_comm.SetConnection(conn_ap.release());
                         output_comm.SetReadThreadBytesReceivedCallback(ReadThreadBytesReceived, &result->GetOutputStream());
                         output_comm.StartReadThread();
-                        FILE *outfile_handle = fdopen (pipe_fds[1], "w");
+                        join_read_thread = true;
+                        FILE *outfile_handle = fdopen (pipe.ReleaseWriteFileDescriptor(), "w");
                         output_file_sp.reset(new StreamFile(outfile_handle, true));
                         error_file_sp = output_file_sp;
                         if (outfile_handle)
@@ -667,7 +668,7 @@ ScriptInterpreterPython::ExecuteOneLine (const char *command, CommandReturnObjec
         if (out_file != err_file)
             ::fflush (err_file);
         
-        if (pipe_fds[0] != -1)
+        if (join_read_thread)
         {
             // Close the write end of the pipe since we are done with our
             // one line script. This should cause the read thread that
@@ -803,7 +804,7 @@ public:
             int num_threads = PyThreadState_SetAsyncExc(tid, PyExc_KeyboardInterrupt);
             if (log)
                 log->Printf("ScriptInterpreterPython::NonInteractiveInputReaderCallback, eInputReaderInterrupt, tid = %ld, num_threads = %d, state = %p",
-                            tid,num_threads,state);
+                            tid, num_threads, static_cast<void *>(state));
         }
         else if (log)
             log->Printf("ScriptInterpreterPython::NonInteractiveInputReaderCallback, eInputReaderInterrupt, state = NULL");
@@ -851,7 +852,7 @@ ScriptInterpreterPython::ExecuteOneLineWithReturn (const char *in_string,
 {
 
     Locker locker(this,
-                  ScriptInterpreterPython::Locker::AcquireLock | ScriptInterpreterPython::Locker::InitSession | (options.GetSetLLDBGlobals() ? ScriptInterpreterPython::Locker::InitGlobals : 0),
+                  ScriptInterpreterPython::Locker::AcquireLock | ScriptInterpreterPython::Locker::InitSession | (options.GetSetLLDBGlobals() ? ScriptInterpreterPython::Locker::InitGlobals : 0) | Locker::NoSTDIN,
                   ScriptInterpreterPython::Locker::FreeAcquiredLock | ScriptInterpreterPython::Locker::TearDownSession);
 
     PyObject *py_return = nullptr;
@@ -1015,10 +1016,9 @@ ScriptInterpreterPython::ExecuteMultipleLines (const char *in_string, const Exec
     Error error;
     
     Locker locker(this,
-                  ScriptInterpreterPython::Locker::AcquireLock      | ScriptInterpreterPython::Locker::InitSession | (options.GetSetLLDBGlobals() ? ScriptInterpreterPython::Locker::InitGlobals : 0),
+                  ScriptInterpreterPython::Locker::AcquireLock      | ScriptInterpreterPython::Locker::InitSession | (options.GetSetLLDBGlobals() ? ScriptInterpreterPython::Locker::InitGlobals : 0) | Locker::NoSTDIN,
                   ScriptInterpreterPython::Locker::FreeAcquiredLock | ScriptInterpreterPython::Locker::TearDownSession);
 
-    bool success = false;
     PythonObject return_value;
     PythonObject &main_module = GetMainModule ();
     PythonDictionary globals (PyModule_GetDict(main_module.get()));
@@ -1048,12 +1048,7 @@ ScriptInterpreterPython::ExecuteMultipleLines (const char *in_string, const Exec
             PyCodeObject *compiled_code = PyNode_Compile (compiled_node, "temp.py");
             if (compiled_code)
             {
-                { // scope for PythonInputReaderManager
-                    //PythonInputReaderManager py_input(options.GetEnableIO() ? this : NULL);
-                    return_value.Reset(PyEval_EvalCode (compiled_code, globals.get(), locals.get()));
-                }
-                if (return_value)
-                    success = true;
+              return_value.Reset(PyEval_EvalCode (compiled_code, globals.get(), locals.get()));
             }
         }
     }
@@ -1811,7 +1806,11 @@ ScriptInterpreterPython::Clear ()
     Locker locker(this,
                   ScriptInterpreterPython::Locker::AcquireLock,
                   ScriptInterpreterPython::Locker::FreeAcquiredLock);
-    PyRun_SimpleString("lldb.debugger = None; lldb.target = None; lldb.process = None; lldb.thread = None; lldb.frame = None");
+
+    // This may be called as part of Py_Finalize.  In that case the modules are destroyed in random
+    // order and we can't guarantee that we can access these.
+    if (Py_IsInitialized())
+        PyRun_SimpleString("lldb.debugger = None; lldb.target = None; lldb.process = None; lldb.thread = None; lldb.frame = None");
 }
 
 bool
@@ -2443,15 +2442,15 @@ ScriptInterpreterPython::RunScriptBasedCommand(const char* impl_function,
     {
         error.SetErrorString("invalid Debugger pointer");
         return false;
-    }
+   }
     
     bool ret_val = false;
     
     std::string err_msg;
-    
+
     {
         Locker py_lock(this,
-                       Locker::AcquireLock | Locker::InitSession,
+                       Locker::AcquireLock | Locker::InitSession | (cmd_retobj.GetInteractive() ? 0 : Locker::NoSTDIN),
                        Locker::FreeLock    | Locker::TearDownSession);
         
         SynchronicityHandler synch_handler(debugger_sp,
@@ -2626,7 +2625,7 @@ ScriptInterpreterPython::InitializePrivate ()
         }
     }
 
-    PyRun_SimpleString ("sys.dont_write_bytecode = 1; import lldb.embedded_interpreter; from lldb.embedded_interpreter import run_python_interpreter; from lldb.embedded_interpreter import run_one_line; from termios import *");
+    PyRun_SimpleString ("sys.dont_write_bytecode = 1; import lldb.embedded_interpreter; from lldb.embedded_interpreter import run_python_interpreter; from lldb.embedded_interpreter import run_one_line");
 
     if (threads_already_initialized) {
         if (log)

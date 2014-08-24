@@ -19,6 +19,7 @@
 #include "lld/Passes/RoundTripYAMLPass.h"
 
 #include "llvm/ADT/Triple.h"
+#include "llvm/Support/Errc.h"
 #include "llvm/Support/ELF.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
@@ -39,70 +40,6 @@ private:
   const File &_file;
   StringRef _name;
   uint64_t _value;
-};
-
-// An AliasAtom is a zero-size atom representing an alias for other atom. It has
-// a LayoutAfter reference to the target atom, so that this atom and the target
-// atom will be layed out at the same location in the final result. Initially
-// the target atom is an undefined atom. Resolver will replace it with a defined
-// one.
-//
-// It does not have attributes itself. Most member function calls are forwarded
-// to the target atom.
-class AliasAtom : public SimpleDefinedAtom {
-public:
-  AliasAtom(const File &file, StringRef name)
-      : SimpleDefinedAtom(file), _target(nullptr), _name(name) {}
-
-  StringRef name() const override { return _name; }
-  uint64_t size() const override { return 0; }
-  ArrayRef<uint8_t> rawContent() const override { return ArrayRef<uint8_t>(); }
-
-  Scope scope() const override {
-    getTarget();
-    return _target ? _target->scope() : scopeLinkageUnit;
-  }
-
-  Merge merge() const override {
-    getTarget();
-    return _target ? _target->merge() : mergeNo;
-  }
-
-  ContentType contentType() const override {
-    getTarget();
-    return _target ? _target->contentType() : typeUnknown;
-  }
-
-  Interposable interposable() const override {
-    getTarget();
-    return _target ? _target->interposable() : interposeNo;
-  }
-
-  SectionChoice sectionChoice() const override {
-    getTarget();
-    return _target ? _target->sectionChoice() : sectionBasedOnContent;
-  }
-
-  StringRef customSectionName() const override {
-    getTarget();
-    return _target ? _target->customSectionName() : StringRef("");
-  }
-
-private:
-  void getTarget() const {
-    if (_target)
-      return;
-    for (const Reference *r : *this) {
-      if (r->kindNamespace() == lld::Reference::KindNamespace::all &&
-          r->kindValue() == lld::Reference::kindLayoutAfter) {
-        _target = dyn_cast<DefinedAtom>(r->target());
-        return;
-      }
-    }
-  }
-
-  mutable const DefinedAtom *_target;
-  StringRef _name;
 };
 
 class CommandLineUndefinedAtom : public SimpleUndefinedAtom {
@@ -150,6 +87,8 @@ uint16_t ELFLinkingContext::getOutputMachine() const {
     return llvm::ELF::EM_MIPS;
   case llvm::Triple::ppc:
     return llvm::ELF::EM_PPC;
+  case llvm::Triple::aarch64:
+    return llvm::ELF::EM_AARCH64;
   default:
     llvm_unreachable("Unhandled arch");
   }
@@ -210,6 +149,9 @@ ELFLinkingContext::create(llvm::Triple triple) {
   case llvm::Triple::ppc:
     return std::unique_ptr<ELFLinkingContext>(
         new lld::elf::PPCLinkingContext(triple));
+  case llvm::Triple::aarch64:
+    return std::unique_ptr<ELFLinkingContext>(
+        new lld::elf::AArch64LinkingContext(triple));
   default:
     return nullptr;
   }
@@ -226,23 +168,28 @@ static void buildSearchPath(SmallString<128> &path, StringRef dir,
 }
 
 ErrorOr<StringRef> ELFLinkingContext::searchLibrary(StringRef libName) const {
+  bool hasColonPrefix = libName[0] == ':';
+  Twine soName =
+      hasColonPrefix ? libName.drop_front() : Twine("lib", libName) + ".so";
+  Twine archiveName =
+      hasColonPrefix ? libName.drop_front() : Twine("lib", libName) + ".a";
   SmallString<128> path;
   for (StringRef dir : _inputSearchPaths) {
     // Search for dynamic library
     if (!_isStaticExecutable) {
       buildSearchPath(path, dir, _sysrootPath);
-      llvm::sys::path::append(path, Twine("lib") + libName + ".so");
+      llvm::sys::path::append(path, soName);
       if (llvm::sys::fs::exists(path.str()))
         return StringRef(*new (_allocator) std::string(path.str()));
     }
     // Search for static libraries too
     buildSearchPath(path, dir, _sysrootPath);
-    llvm::sys::path::append(path, Twine("lib") + libName + ".a");
+    llvm::sys::path::append(path, archiveName);
     if (llvm::sys::fs::exists(path.str()))
       return StringRef(*new (_allocator) std::string(path.str()));
   }
   if (!llvm::sys::fs::exists(libName))
-    return llvm::make_error_code(llvm::errc::no_such_file_or_directory);
+    return make_error_code(llvm::errc::no_such_file_or_directory);
 
   return libName;
 }
@@ -259,7 +206,7 @@ ErrorOr<StringRef> ELFLinkingContext::searchFile(StringRef fileName,
     return fileName;
 
   if (llvm::sys::path::is_absolute(fileName))
-    return llvm::make_error_code(llvm::errc::no_such_file_or_directory);
+    return make_error_code(llvm::errc::no_such_file_or_directory);
 
   for (StringRef dir : _inputSearchPaths) {
     buildSearchPath(path, dir, _sysrootPath);
@@ -267,7 +214,7 @@ ErrorOr<StringRef> ELFLinkingContext::searchFile(StringRef fileName,
     if (llvm::sys::fs::exists(path.str()))
       return StringRef(*new (_allocator) std::string(path.str()));
   }
-  return llvm::make_error_code(llvm::errc::no_such_file_or_directory);
+  return make_error_code(llvm::errc::no_such_file_or_directory);
 }
 
 void ELFLinkingContext::createInternalFiles(
@@ -278,17 +225,6 @@ void ELFLinkingContext::createInternalFiles(
     StringRef sym = i.first;
     uint64_t val = i.second;
     file->addAtom(*(new (_allocator) CommandLineAbsoluteAtom(*file, sym, val)));
-  }
-  for (auto &i : getAliases()) {
-    StringRef from = i.first;
-    StringRef to = i.second;
-    SimpleDefinedAtom *fromAtom = new (_allocator) AliasAtom(*file, from);
-    UndefinedAtom *toAtom = new (_allocator) SimpleUndefinedAtom(*file, to);
-    fromAtom->addReference(Reference::KindNamespace::all,
-                           Reference::KindArch::all, Reference::kindLayoutAfter,
-                           0, toAtom, 0);
-    file->addAtom(*fromAtom);
-    file->addAtom(*toAtom);
   }
   files.push_back(std::move(file));
   LinkingContext::createInternalFiles(files);

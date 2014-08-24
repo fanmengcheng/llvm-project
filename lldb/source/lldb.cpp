@@ -43,6 +43,7 @@
 #include "Plugins/Platform/Linux/PlatformLinux.h"
 #include "Plugins/Platform/POSIX/PlatformPOSIX.h"
 #include "Plugins/Platform/Windows/PlatformWindows.h"
+#include "Plugins/Platform/Kalimba/PlatformKalimba.h"
 #include "Plugins/Process/elf-core/ProcessElfCore.h"
 #include "Plugins/SymbolVendor/MacOSX/SymbolVendorMacOSX.h"
 #include "Plugins/SymbolVendor/ELF/SymbolVendorELF.h"
@@ -75,6 +76,10 @@
 
 #if defined (__linux__)
 #include "Plugins/Process/Linux/ProcessLinux.h"
+#endif
+
+#if defined (_WIN32)
+#include "Plugins/Process/Windows/ProcessWindows.h"
 #endif
 
 #if defined (__FreeBSD__)
@@ -123,6 +128,7 @@ lldb_private::Initialize ()
         PlatformFreeBSD::Initialize();
         PlatformLinux::Initialize();
         PlatformWindows::Initialize();
+        PlatformKalimba::Initialize();
         SymbolFileDWARFDebugMap::Initialize();
         ItaniumABILanguageRuntime::Initialize();
 #ifndef LLDB_DISABLE_PYTHON
@@ -156,6 +162,9 @@ lldb_private::Initialize ()
         // Linux hosted plugins
         //----------------------------------------------------------------------
         ProcessLinux::Initialize();
+#endif
+#if defined(_WIN32)
+        ProcessWindows::Initialize();
 #endif
 #if defined (__FreeBSD__)
         ProcessFreeBSD::Initialize();
@@ -210,6 +219,7 @@ lldb_private::Terminate ()
     PlatformFreeBSD::Terminate();
     PlatformLinux::Terminate();
     PlatformWindows::Terminate();
+    PlatformKalimba::Terminate();
     SymbolFileDWARFDebugMap::Terminate();
     ItaniumABILanguageRuntime::Terminate();
 #ifndef LLDB_DISABLE_PYTHON

@@ -38,6 +38,7 @@ set(TSAN_SOURCES
   rtl/tsan_rtl_mutex.cc
   rtl/tsan_rtl_report.cc
   rtl/tsan_rtl_thread.cc
+  rtl/tsan_stack_trace.cc
   rtl/tsan_stat.cc
   rtl/tsan_suppressions.cc
   rtl/tsan_symbolize.cc
@@ -54,6 +55,7 @@ endif()
 set(TSAN_HEADERS
   rtl/tsan_clock.h
   rtl/tsan_defs.h
+  rtl/tsan_dense_alloc.h
   rtl/tsan_fd.h
   rtl/tsan_flags.h
   rtl/tsan_ignoreset.h
@@ -67,6 +69,7 @@ set(TSAN_HEADERS
   rtl/tsan_platform.h
   rtl/tsan_report.h
   rtl/tsan_rtl.h
+  rtl/tsan_stack_trace.h
   rtl/tsan_stat.h
   rtl/tsan_suppressions.h
   rtl/tsan_symbolize.h
@@ -75,6 +78,7 @@ set(TSAN_HEADERS
   rtl/tsan_update_shadow_word_inl.h
   rtl/tsan_vector.h)
 
+set(TSAN_RUNTIME_LIBRARIES)
 add_custom_target(tsan)
 # TSan is currently supported on 64-bit Linux only.
 if(CAN_TARGET_x86_64 AND UNIX AND NOT APPLE)
@@ -90,12 +94,23 @@ if(CAN_TARGET_x86_64 AND UNIX AND NOT APPLE)
             $<TARGET_OBJECTS:RTSanitizerCommonLibc.${arch}>
     CFLAGS ${TSAN_RTL_CFLAGS}
     DEFS ${TSAN_COMMON_DEFINITIONS})
+  list(APPEND TSAN_RUNTIME_LIBRARIES clang_rt.tsan-${arch})
   add_sanitizer_rt_symbols(clang_rt.tsan-${arch} rtl/tsan.syms.extra)
   add_dependencies(tsan clang_rt.tsan-${arch}
     clang_rt.tsan-${arch}-symbols)
 endif()
 
 add_dependencies(compiler-rt tsan)
+
+# Build libcxx instrumented with TSan.
+if(TSAN_SUPPORTED_ARCH AND
+   COMPILER_RT_HAS_LIBCXX_SOURCES AND
+   COMPILER_RT_TEST_COMPILER_ID STREQUAL "Clang")
+  set(LIBCXX_PREFIX ${CMAKE_CURRENT_BINARY_DIR}/libcxx_tsan)
+  add_custom_libcxx(libcxx_tsan ${LIBCXX_PREFIX}
+    DEPS ${TSAN_RUNTIME_LIBRARIES}
+    CFLAGS -fsanitize=thread)
+endif()
 
 if(COMPILER_RT_INCLUDE_TESTS)
   add_subdirectory(tests)

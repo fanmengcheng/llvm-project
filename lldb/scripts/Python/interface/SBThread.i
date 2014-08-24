@@ -166,6 +166,17 @@ public:
     GetQueueID() const;
 
     %feature("autodoc", "
+    Takes a path string and a SBStream reference as parameters, returns a bool.  
+    Collects the thread's 'info' dictionary from the remote system, uses the path
+    argument to descend into the dictionary to an item of interest, and prints
+    it into the SBStream in a natural format.  Return bool is to indicate if
+    anything was printed into the stream (true) or not (false).
+    ") GetInfoItemByPathAsString;
+
+    bool
+    GetInfoItemByPathAsString (const char *path, lldb::SBStream &strm);
+
+    %feature("autodoc", "
     Return the SBQueue for this thread.  If this thread is not currently associated
     with a libdispatch queue, the SBQueue object's IsValid() method will return false.
     If this SBThread is actually a HistoryThread, we may be able to provide QueueID
@@ -219,7 +230,7 @@ public:
     /// SBProcess::Continue() is called, any threads that aren't suspended will
     /// be allowed to run. If any of the SBThread functions for stepping are 
     /// called (StepOver, StepInto, StepOut, StepInstruction, RunToAddres), the
-    /// thread will now be allowed to run and these funtions will simply return.
+    /// thread will now be allowed to run and these functions will simply return.
     ///
     /// Eventually we plan to add support for thread centric debugging where
     /// each thread is controlled individually and each thread would broadcast
@@ -296,6 +307,16 @@ public:
     ") GetExtendedBacktraceOriginatingIndexID;
     uint32_t
     GetExtendedBacktraceOriginatingIndexID();
+
+    %feature("autodoc","
+    Takes no arguments, returns a bool.
+    lldb may be able to detect that function calls should not be executed
+    on a given thread at a particular point in time.  It is recommended that
+    this is checked before performing an inferior function call on a given
+    thread.
+    ") SafeToCallFunctions;
+    bool
+    SafeToCallFunctions ();
 
     %pythoncode %{
         class frames_access(object):

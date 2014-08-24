@@ -38,6 +38,17 @@ SBHostOS::GetLLDBPythonPath ()
     return sb_lldb_python_filespec;
 }
 
+
+SBFileSpec
+SBHostOS::GetLLDBPath (lldb::PathType path_type)
+{
+    SBFileSpec sb_fspec;
+    FileSpec fspec;
+    if (Host::GetLLDBPath (path_type, fspec))
+        sb_fspec.SetFileSpec (fspec);
+    return sb_fspec;
+}
+
 lldb::thread_t
 SBHostOS::ThreadCreate
 (
@@ -51,7 +62,7 @@ SBHostOS::ThreadCreate
 
     if (log)
         log->Printf ("SBHostOS::ThreadCreate (name=\"%s\", thread_function=%p, thread_arg=%p, error_ptr=%p)",
-                     name, reinterpret_cast<void*>(thread_function),
+                     name, reinterpret_cast<void*>(reinterpret_cast<intptr_t>(thread_function)),
                      static_cast<void*>(thread_arg),
                      static_cast<void*>(error_ptr));
 

@@ -23,7 +23,7 @@
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CallingConv.h"
-#include "llvm/IR/GlobalValue.h"
+#include "llvm/IR/GlobalObject.h"
 #include "llvm/Support/Compiler.h"
 
 namespace llvm {
@@ -68,8 +68,7 @@ private:
   mutable ilist_half_node<Argument> Sentinel;
 };
 
-class Function : public GlobalValue,
-                 public ilist_node<Function> {
+class Function : public GlobalObject, public ilist_node<Function> {
 public:
   typedef iplist<Argument> ArgumentListType;
   typedef iplist<BasicBlock> BasicBlockListType;
@@ -234,6 +233,12 @@ public:
     return AttributeSets.getParamAlignment(i);
   }
 
+  /// @brief Extract the number of dereferenceable bytes for a call or
+  /// parameter (0=unknown).
+  uint64_t getDereferenceableBytes(unsigned i) const {
+    return AttributeSets.getDereferenceableBytes(i);
+  }
+
   /// @brief Determine if the function does not access memory.
   bool doesNotAccessMemory() const {
     return AttributeSets.hasAttribute(AttributeSet::FunctionIndex,
@@ -298,7 +303,8 @@ public:
   /// @brief Determine if the function returns a structure through first
   /// pointer argument.
   bool hasStructRetAttr() const {
-    return AttributeSets.hasAttribute(1, Attribute::StructRet);
+    return AttributeSets.hasAttribute(1, Attribute::StructRet) ||
+           AttributeSets.hasAttribute(2, Attribute::StructRet);
   }
 
   /// @brief Determine if the parameter does not alias other parameters.

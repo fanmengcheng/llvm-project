@@ -21,6 +21,8 @@
 #include "clang/Tooling/Tooling.h"
 #include "llvm/ADT/STLExtras.h"
 
+template class llvm::Registry<TransformFactory>;
+
 using namespace clang;
 
 llvm::cl::OptionCategory TransformsOptionsCategory("Transforms' options");
@@ -47,7 +49,8 @@ private:
     FactoryAdaptor(MatchFinder &Finder, Transform &Owner)
         : Finder(Finder), Owner(Owner) {}
 
-    ASTConsumer *CreateASTConsumer(CompilerInstance &, StringRef) {
+    std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &,
+                                                   StringRef) {
       return Finder.newASTConsumer();
     }
 
@@ -126,8 +129,9 @@ Transform::addReplacementForCurrentTU(const clang::tooling::Replacement &R) {
   return true;
 }
 
-FrontendActionFactory *Transform::createActionFactory(MatchFinder &Finder) {
-  return new ActionFactory(Finder, /*Owner=*/ *this);
+std::unique_ptr<FrontendActionFactory>
+Transform::createActionFactory(MatchFinder &Finder) {
+  return llvm::make_unique<ActionFactory>(Finder, /*Owner=*/*this);
 }
 
 Version Version::getFromString(llvm::StringRef VersionStr) {

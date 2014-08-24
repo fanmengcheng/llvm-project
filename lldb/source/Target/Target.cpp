@@ -486,9 +486,12 @@ Target::CreateFuncRegexBreakpoint (const FileSpecList *containingModules,
                                    bool hardware)
 {
     SearchFilterSP filter_sp(GetSearchFilterForModuleAndCUList (containingModules, containingSourceFiles));
+    bool skip =
+      (skip_prologue == eLazyBoolCalculate) ? GetSkipPrologue()
+                                            : static_cast<bool>(skip_prologue);
     BreakpointResolverSP resolver_sp(new BreakpointResolverName (NULL, 
                                                                  func_regex, 
-                                                                 skip_prologue == eLazyBoolCalculate ? GetSkipPrologue() : skip_prologue));
+                                                                 skip));
 
     return CreateBreakpoint (filter_sp, resolver_sp, internal, hardware, true);
 }
@@ -1010,10 +1013,10 @@ LoadScriptingResourceForModule (const ModuleSP &module_sp, Target *target)
             target->GetDebugger().GetErrorFile()->Printf("unable to load scripting data for module %s - error reported was %s\n",
                                                            module_sp->GetFileSpec().GetFileNameStrippingExtension().GetCString(),
                                                            error.AsCString());
-        if (feedback_stream.GetSize())
-            target->GetDebugger().GetErrorFile()->Printf("%s\n",
-                                                           feedback_stream.GetData());
     }
+    if (feedback_stream.GetSize())
+        target->GetDebugger().GetErrorFile()->Printf("%s\n",
+                                                     feedback_stream.GetData());
 }
 
 void
@@ -1047,7 +1050,7 @@ Target::SetExecutableModule (ModuleSP& executable_sp, bool get_dependent_files)
                             "Target::SetExecutableModule (executable = '%s')",
                             executable_sp->GetFileSpec().GetPath().c_str());
 
-        m_images.Append(executable_sp); // The first image is our exectuable file
+        m_images.Append(executable_sp); // The first image is our executable file
 
         // If we haven't set an architecture yet, reset our architecture based on what we found in the executable module.
         if (!m_arch.IsValid())
@@ -1258,7 +1261,7 @@ Target::ReadMemoryFromFileCache (const Address& addr, void *dst, size_t dst_len,
     SectionSP section_sp (addr.GetSection());
     if (section_sp)
     {
-        // If the contents of this section are encrypted, the on-disk file is unusuable.  Read only from live memory.
+        // If the contents of this section are encrypted, the on-disk file is unusable.  Read only from live memory.
         if (section_sp->IsEncrypted())
         {
             error.SetErrorString("section is encrypted");
@@ -1323,7 +1326,7 @@ Target::ReadMemory (const Address& addr,
         }
         else
         {
-            // We have at least one section loaded. This can be becuase
+            // We have at least one section loaded. This can be because
             // we have manually loaded some sections with "target modules load ..."
             // or because we have have a live process that has sections loaded
             // through the dynamic loader
@@ -1379,7 +1382,7 @@ Target::ReadMemory (const Address& addr,
             }
             // If the address is not section offset we have an address that
             // doesn't resolve to any address in any currently loaded shared
-            // libaries and we failed to read memory so there isn't anything
+            // libraries and we failed to read memory so there isn't anything
             // more we can do. If it is section offset, we might be able to
             // read cached memory from the object file.
             if (!resolved_addr.IsSectionOffset())
@@ -1550,7 +1553,7 @@ Target::ReadPointerFromMemory (const Address& addr,
             }
             else
             {
-                // We have at least one section loaded. This can be becuase
+                // We have at least one section loaded. This can be because
                 // we have manually loaded some sections with "target modules load ..."
                 // or because we have have a live process that has sections loaded
                 // through the dynamic loader
@@ -2368,7 +2371,8 @@ Target::Launch (Listener &listener, ProcessLaunchInfo &launch_info)
     
     if (!launch_info.GetArchitecture().IsValid())
         launch_info.GetArchitecture() = GetArchitecture();
-    
+
+    // If we're not already connected to the process, and if we have a platform that can launch a process for debugging, go ahead and do that here.
     if (state != eStateConnected && platform_sp && platform_sp->CanDebugProcess ())
     {
         m_process_sp = GetPlatform()->DebugProcess (launch_info,
@@ -2385,10 +2389,12 @@ Target::Launch (Listener &listener, ProcessLaunchInfo &launch_info)
         }
         else
         {
+            // Use a Process plugin to construct the process.
             const char *plugin_name = launch_info.GetProcessPluginName();
             CreateProcess (listener, plugin_name, NULL);
         }
-        
+
+        // Since we didn't have a platform launch the process, launch it here.
         if (m_process_sp)
             error = m_process_sp->Launch (launch_info);
     }
@@ -2414,9 +2420,14 @@ Target::Launch (Listener &listener, ProcessLaunchInfo &launch_info)
                     m_process_sp->RestoreProcessEvents ();
 
                 error = m_process_sp->PrivateResume();
-    
+
                 if (error.Success())
                 {
+                    // there is a race condition where this thread will return up the call stack to the main command
+                    // handler and show an (lldb) prompt before HandlePrivateEvent (from PrivateStateThread) has
+                    // a chance to call PushProcessIOHandler()
+                    m_process_sp->SyncIOHandler(2000);
+
                     if (synchronous_execution)
                     {
                         state = m_process_sp->WaitForProcessToStop (NULL, NULL, true, hijack_listener_sp.get());
@@ -2642,6 +2653,7 @@ g_properties[] =
     { "input-path"                         , OptionValue::eTypeFileSpec  , false, 0                         , NULL, NULL, "The file/path to be used by the executable program for reading its standard input." },
     { "output-path"                        , OptionValue::eTypeFileSpec  , false, 0                         , NULL, NULL, "The file/path to be used by the executable program for writing its standard output." },
     { "error-path"                         , OptionValue::eTypeFileSpec  , false, 0                         , NULL, NULL, "The file/path to be used by the executable program for writing its standard error." },
+    { "detach-on-error"                    , OptionValue::eTypeBoolean   , false, true                      , NULL, NULL, "debugserver will detach (rather than killing) a process if it loses connection with lldb." },
     { "disable-aslr"                       , OptionValue::eTypeBoolean   , false, true                      , NULL, NULL, "Disable Address Space Layout Randomization (ASLR)" },
     { "disable-stdio"                      , OptionValue::eTypeBoolean   , false, false                     , NULL, NULL, "Disable stdin/stdout for process (e.g. for a GUI application)" },
     { "inline-breakpoint-strategy"         , OptionValue::eTypeEnum      , false, eInlineBreakpointsHeaders , NULL, g_inline_breakpoint_enums, "The strategy to use when settings breakpoints by file and line. "
@@ -2688,6 +2700,7 @@ enum
     ePropertyInputPath,
     ePropertyOutputPath,
     ePropertyErrorPath,
+    ePropertyDetachOnError,
     ePropertyDisableASLR,
     ePropertyDisableSTDIO,
     ePropertyInlineStrategy,
@@ -2725,7 +2738,7 @@ public:
     virtual const Property *
     GetPropertyAtIndex (const ExecutionContext *exe_ctx, bool will_modify, uint32_t idx) const
     {
-        // When gettings the value for a key from the target options, we will always
+        // When getting the value for a key from the target options, we will always
         // try and grab the setting from the current target if there is one. Else we just
         // use the one from this instance.
         if (idx == ePropertyEnvVars)
@@ -2867,6 +2880,20 @@ void
 TargetProperties::SetDisableASLR (bool b)
 {
     const uint32_t idx = ePropertyDisableASLR;
+    m_collection_sp->SetPropertyAtIndexAsBoolean (NULL, idx, b);
+}
+
+bool
+TargetProperties::GetDetachOnError () const
+{
+    const uint32_t idx = ePropertyDetachOnError;
+    return m_collection_sp->GetPropertyAtIndexAsBoolean (NULL, idx, g_properties[idx].default_uint_value != 0);
+}
+
+void
+TargetProperties::SetDetachOnError (bool b)
+{
+    const uint32_t idx = ePropertyDetachOnError;
     m_collection_sp->SetPropertyAtIndexAsBoolean (NULL, idx, b);
 }
 

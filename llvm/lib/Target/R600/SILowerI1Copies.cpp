@@ -15,6 +15,7 @@
 
 #define DEBUG_TYPE "si-i1-copies"
 #include "AMDGPU.h"
+#include "AMDGPUSubtarget.h"
 #include "SIInstrInfo.h"
 #include "llvm/CodeGen/LiveIntervalAnalysis.h"
 #include "llvm/CodeGen/MachineDominators.h"
@@ -70,9 +71,10 @@ FunctionPass *llvm::createSILowerI1CopiesPass() {
 
 bool SILowerI1Copies::runOnMachineFunction(MachineFunction &MF) {
   MachineRegisterInfo &MRI = MF.getRegInfo();
-  const SIInstrInfo *TII = static_cast<const SIInstrInfo *>(
-      MF.getTarget().getInstrInfo());
-  const TargetRegisterInfo *TRI = MF.getTarget().getRegisterInfo();
+  const SIInstrInfo *TII =
+      static_cast<const SIInstrInfo *>(MF.getSubtarget().getInstrInfo());
+  const TargetRegisterInfo *TRI = MF.getSubtarget().getRegisterInfo();
+  std::vector<unsigned> I1Defs;
 
   for (MachineFunction::iterator BI = MF.begin(), BE = MF.end();
                                                   BI != BE; ++BI) {
@@ -84,7 +86,26 @@ bool SILowerI1Copies::runOnMachineFunction(MachineFunction &MF) {
       MachineInstr &MI = *I;
 
       if (MI.getOpcode() == AMDGPU::V_MOV_I1) {
+        I1Defs.push_back(MI.getOperand(0).getReg());
         MI.setDesc(TII->get(AMDGPU::V_MOV_B32_e32));
+        continue;
+      }
+
+      if (MI.getOpcode() == AMDGPU::V_AND_I1) {
+        I1Defs.push_back(MI.getOperand(0).getReg());
+        MI.setDesc(TII->get(AMDGPU::V_AND_B32_e32));
+        continue;
+      }
+
+      if (MI.getOpcode() == AMDGPU::V_OR_I1) {
+        I1Defs.push_back(MI.getOperand(0).getReg());
+        MI.setDesc(TII->get(AMDGPU::V_OR_B32_e32));
+        continue;
+      }
+
+      if (MI.getOpcode() == AMDGPU::V_XOR_I1) {
+        I1Defs.push_back(MI.getOperand(0).getReg());
+        MI.setDesc(TII->get(AMDGPU::V_XOR_B32_e32));
         continue;
       }
 
@@ -101,6 +122,7 @@ bool SILowerI1Copies::runOnMachineFunction(MachineFunction &MF) {
 
       if (DstRC == &AMDGPU::VReg_1RegClass &&
           TRI->getCommonSubClass(SrcRC, &AMDGPU::SGPR_64RegClass)) {
+        I1Defs.push_back(MI.getOperand(0).getReg());
         BuildMI(MBB, &MI, MI.getDebugLoc(), TII->get(AMDGPU::V_CNDMASK_B32_e64))
                 .addOperand(MI.getOperand(0))
                 .addImm(0)
@@ -115,16 +137,15 @@ bool SILowerI1Copies::runOnMachineFunction(MachineFunction &MF) {
                  SrcRC == &AMDGPU::VReg_1RegClass) {
         BuildMI(MBB, &MI, MI.getDebugLoc(), TII->get(AMDGPU::V_CMP_NE_I32_e64))
                 .addOperand(MI.getOperand(0))
-                .addImm(0)
                 .addOperand(MI.getOperand(1))
-                .addImm(0)
-                .addImm(0)
-                .addImm(0)
                 .addImm(0);
         MI.eraseFromParent();
       }
-
     }
   }
+
+  for (unsigned Reg : I1Defs)
+    MRI.setRegClass(Reg, &AMDGPU::VReg_32RegClass);
+
   return false;
 }

@@ -15,6 +15,7 @@
 
 #include "llvm/Analysis/LoopPass.h"
 #include "llvm/IR/IRPrintingPasses.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Timer.h"
 using namespace llvm;
@@ -44,7 +45,10 @@ public:
     for (Loop::block_iterator b = L->block_begin(), be = L->block_end();
          b != be;
          ++b) {
-      (*b)->print(Out);
+      if (*b)
+        (*b)->print(Out);
+      else
+        Out << "Printing <null> block";
     }
     return false;
   }
@@ -253,6 +257,8 @@ bool LPPassManager::runOnFunction(Function &F) {
 
         // Then call the regular verifyAnalysis functions.
         verifyPreservedAnalysis(P);
+
+        F.getContext().yield();
       }
 
       removeNotPreservedAnalysis(P);

@@ -24,6 +24,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/IR/ValueHandle.h"
+#include "llvm/Object/Archive.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/DynamicLibrary.h"
@@ -48,21 +49,20 @@ void ObjectBuffer::anchor() {}
 void ObjectBufferStream::anchor() {}
 
 ExecutionEngine *(*ExecutionEngine::JITCtor)(
-  Module *M,
+  std::unique_ptr<Module> M,
   std::string *ErrorStr,
   JITMemoryManager *JMM,
   bool GVsWithCode,
   TargetMachine *TM) = nullptr;
 ExecutionEngine *(*ExecutionEngine::MCJITCtor)(
-  Module *M,
+  std::unique_ptr<Module >M,
   std::string *ErrorStr,
   RTDyldMemoryManager *MCJMM,
-  bool GVsWithCode,
   TargetMachine *TM) = nullptr;
-ExecutionEngine *(*ExecutionEngine::InterpCtor)(Module *M,
+ExecutionEngine *(*ExecutionEngine::InterpCtor)(std::unique_ptr<Module> M,
                                                 std::string *ErrorStr) =nullptr;
 
-ExecutionEngine::ExecutionEngine(Module *M)
+ExecutionEngine::ExecutionEngine(std::unique_ptr<Module> M)
   : EEState(*this),
     LazyFunctionCreator(nullptr) {
   CompilingLazily         = false;
@@ -77,14 +77,12 @@ ExecutionEngine::ExecutionEngine(Module *M)
   VerifyModules = false;
 #endif
 
-  Modules.push_back(M);
   assert(M && "Module is null?");
+  Modules.push_back(std::move(M));
 }
 
 ExecutionEngine::~ExecutionEngine() {
   clearAllGlobalMappings();
-  for (unsigned i = 0, e = Modules.size(); i != e; ++i)
-    delete Modules[i];
 }
 
 namespace {
@@ -126,11 +124,15 @@ void ExecutionEngine::addObjectFile(std::unique_ptr<object::ObjectFile> O) {
   llvm_unreachable("ExecutionEngine subclass doesn't implement addObjectFile.");
 }
 
+void ExecutionEngine::addArchive(object::OwningBinary<object::Archive> A) {
+  llvm_unreachable("ExecutionEngine subclass doesn't implement addArchive.");
+}
+
 bool ExecutionEngine::removeModule(Module *M) {
-  for(SmallVectorImpl<Module *>::iterator I = Modules.begin(),
-        E = Modules.end(); I != E; ++I) {
-    Module *Found = *I;
+  for (auto I = Modules.begin(), E = Modules.end(); I != E; ++I) {
+    Module *Found = I->get();
     if (Found == M) {
+      I->release();
       Modules.erase(I);
       clearGlobalMappingsFromModule(M);
       return true;
@@ -148,8 +150,7 @@ Function *ExecutionEngine::FindFunctionNamed(const char *FnName) {
 }
 
 
-void *ExecutionEngineState::RemoveMapping(const MutexGuard &,
-                                          const GlobalValue *ToUnmap) {
+void *ExecutionEngineState::RemoveMapping(const GlobalValue *ToUnmap) {
   GlobalAddressMapTy::iterator I = GlobalAddressMap.find(ToUnmap);
   void *OldVal;
 
@@ -171,14 +172,14 @@ void ExecutionEngine::addGlobalMapping(const GlobalValue *GV, void *Addr) {
 
   DEBUG(dbgs() << "JIT: Map \'" << GV->getName()
         << "\' to [" << Addr << "]\n";);
-  void *&CurVal = EEState.getGlobalAddressMap(locked)[GV];
+  void *&CurVal = EEState.getGlobalAddressMap()[GV];
   assert((!CurVal || !Addr) && "GlobalMapping already established!");
   CurVal = Addr;
 
   // If we are using the reverse mapping, add it too.
-  if (!EEState.getGlobalAddressReverseMap(locked).empty()) {
+  if (!EEState.getGlobalAddressReverseMap().empty()) {
     AssertingVH<const GlobalValue> &V =
-      EEState.getGlobalAddressReverseMap(locked)[Addr];
+      EEState.getGlobalAddressReverseMap()[Addr];
     assert((!V || !GV) && "GlobalMapping already established!");
     V = GV;
   }
@@ -187,41 +188,41 @@ void ExecutionEngine::addGlobalMapping(const GlobalValue *GV, void *Addr) {
 void ExecutionEngine::clearAllGlobalMappings() {
   MutexGuard locked(lock);
 
-  EEState.getGlobalAddressMap(locked).clear();
-  EEState.getGlobalAddressReverseMap(locked).clear();
+  EEState.getGlobalAddressMap().clear();
+  EEState.getGlobalAddressReverseMap().clear();
 }
 
 void ExecutionEngine::clearGlobalMappingsFromModule(Module *M) {
   MutexGuard locked(lock);
 
   for (Module::iterator FI = M->begin(), FE = M->end(); FI != FE; ++FI)
-    EEState.RemoveMapping(locked, FI);
+    EEState.RemoveMapping(FI);
   for (Module::global_iterator GI = M->global_begin(), GE = M->global_end();
        GI != GE; ++GI)
-    EEState.RemoveMapping(locked, GI);
+    EEState.RemoveMapping(GI);
 }
 
 void *ExecutionEngine::updateGlobalMapping(const GlobalValue *GV, void *Addr) {
   MutexGuard locked(lock);
 
   ExecutionEngineState::GlobalAddressMapTy &Map =
-    EEState.getGlobalAddressMap(locked);
+    EEState.getGlobalAddressMap();
 
   // Deleting from the mapping?
   if (!Addr)
-    return EEState.RemoveMapping(locked, GV);
+    return EEState.RemoveMapping(GV);
 
   void *&CurVal = Map[GV];
   void *OldVal = CurVal;
 
-  if (CurVal && !EEState.getGlobalAddressReverseMap(locked).empty())
-    EEState.getGlobalAddressReverseMap(locked).erase(CurVal);
+  if (CurVal && !EEState.getGlobalAddressReverseMap().empty())
+    EEState.getGlobalAddressReverseMap().erase(CurVal);
   CurVal = Addr;
 
   // If we are using the reverse mapping, add it too.
-  if (!EEState.getGlobalAddressReverseMap(locked).empty()) {
+  if (!EEState.getGlobalAddressReverseMap().empty()) {
     AssertingVH<const GlobalValue> &V =
-      EEState.getGlobalAddressReverseMap(locked)[Addr];
+      EEState.getGlobalAddressReverseMap()[Addr];
     assert((!V || !GV) && "GlobalMapping already established!");
     V = GV;
   }
@@ -232,25 +233,25 @@ void *ExecutionEngine::getPointerToGlobalIfAvailable(const GlobalValue *GV) {
   MutexGuard locked(lock);
 
   ExecutionEngineState::GlobalAddressMapTy::iterator I =
-    EEState.getGlobalAddressMap(locked).find(GV);
-  return I != EEState.getGlobalAddressMap(locked).end() ? I->second : nullptr;
+    EEState.getGlobalAddressMap().find(GV);
+  return I != EEState.getGlobalAddressMap().end() ? I->second : nullptr;
 }
 
 const GlobalValue *ExecutionEngine::getGlobalValueAtAddress(void *Addr) {
   MutexGuard locked(lock);
 
   // If we haven't computed the reverse mapping yet, do so first.
-  if (EEState.getGlobalAddressReverseMap(locked).empty()) {
+  if (EEState.getGlobalAddressReverseMap().empty()) {
     for (ExecutionEngineState::GlobalAddressMapTy::iterator
-         I = EEState.getGlobalAddressMap(locked).begin(),
-         E = EEState.getGlobalAddressMap(locked).end(); I != E; ++I)
-      EEState.getGlobalAddressReverseMap(locked).insert(std::make_pair(
+         I = EEState.getGlobalAddressMap().begin(),
+         E = EEState.getGlobalAddressMap().end(); I != E; ++I)
+      EEState.getGlobalAddressReverseMap().insert(std::make_pair(
                                                           I->second, I->first));
   }
 
   std::map<void *, AssertingVH<const GlobalValue> >::iterator I =
-    EEState.getGlobalAddressReverseMap(locked).find(Addr);
-  return I != EEState.getGlobalAddressReverseMap(locked).end() ? I->second : nullptr;
+    EEState.getGlobalAddressReverseMap().find(Addr);
+  return I != EEState.getGlobalAddressReverseMap().end() ? I->second : nullptr;
 }
 
 namespace {
@@ -304,10 +305,10 @@ void *ArgvArray::reset(LLVMContext &C, ExecutionEngine *EE,
   return Array;
 }
 
-void ExecutionEngine::runStaticConstructorsDestructors(Module *module,
+void ExecutionEngine::runStaticConstructorsDestructors(Module &module,
                                                        bool isDtors) {
   const char *Name = isDtors ? "llvm.global_dtors" : "llvm.global_ctors";
-  GlobalVariable *GV = module->getNamedGlobal(Name);
+  GlobalVariable *GV = module.getNamedGlobal(Name);
 
   // If this global has internal linkage, or if it has a use, then it must be
   // an old-style (llvmgcc3) static ctor with __main linked in and in use.  If
@@ -345,8 +346,8 @@ void ExecutionEngine::runStaticConstructorsDestructors(Module *module,
 
 void ExecutionEngine::runStaticConstructorsDestructors(bool isDtors) {
   // Execute global ctors/dtors for each module in the program.
-  for (unsigned i = 0, e = Modules.size(); i != e; ++i)
-    runStaticConstructorsDestructors(Modules[i], isDtors);
+  for (std::unique_ptr<Module> &M : Modules)
+    runStaticConstructorsDestructors(*M, isDtors);
 }
 
 #ifndef NDEBUG
@@ -407,54 +408,25 @@ int ExecutionEngine::runFunctionAsMain(Function *Fn,
   return runFunction(Fn, GVArgs).IntVal.getZExtValue();
 }
 
-ExecutionEngine *ExecutionEngine::create(Module *M,
-                                         bool ForceInterpreter,
-                                         std::string *ErrorStr,
-                                         CodeGenOpt::Level OptLevel,
-                                         bool GVsWithCode) {
-  EngineBuilder EB =  EngineBuilder(M)
-      .setEngineKind(ForceInterpreter
-                     ? EngineKind::Interpreter
-                     : EngineKind::JIT)
-      .setErrorStr(ErrorStr)
-      .setOptLevel(OptLevel)
-      .setAllocateGVsWithCode(GVsWithCode);
+void EngineBuilder::InitEngine() {
+  WhichEngine = EngineKind::Either;
+  ErrorStr = nullptr;
+  OptLevel = CodeGenOpt::Default;
+  MCJMM = nullptr;
+  JMM = nullptr;
+  Options = TargetOptions();
+  AllocateGVsWithCode = false;
+  RelocModel = Reloc::Default;
+  CMModel = CodeModel::JITDefault;
+  UseMCJIT = false;
 
-  return EB.create();
-}
-
-/// createJIT - This is the factory method for creating a JIT for the current
-/// machine, it does not fall back to the interpreter.  This takes ownership
-/// of the module.
-ExecutionEngine *ExecutionEngine::createJIT(Module *M,
-                                            std::string *ErrorStr,
-                                            JITMemoryManager *JMM,
-                                            CodeGenOpt::Level OL,
-                                            bool GVsWithCode,
-                                            Reloc::Model RM,
-                                            CodeModel::Model CMM) {
-  if (!ExecutionEngine::JITCtor) {
-    if (ErrorStr)
-      *ErrorStr = "JIT has not been linked in.";
-    return nullptr;
-  }
-
-  // Use the defaults for extra parameters.  Users can use EngineBuilder to
-  // set them.
-  EngineBuilder EB(M);
-  EB.setEngineKind(EngineKind::JIT);
-  EB.setErrorStr(ErrorStr);
-  EB.setRelocationModel(RM);
-  EB.setCodeModel(CMM);
-  EB.setAllocateGVsWithCode(GVsWithCode);
-  EB.setOptLevel(OL);
-  EB.setJITMemoryManager(JMM);
-
-  // TODO: permit custom TargetOptions here
-  TargetMachine *TM = EB.selectTarget();
-  if (!TM || (ErrorStr && ErrorStr->length() > 0)) return nullptr;
-
-  return ExecutionEngine::JITCtor(M, ErrorStr, JMM, GVsWithCode, TM);
+// IR module verification is enabled by default in debug builds, and disabled
+// by default in release builds.
+#ifndef NDEBUG
+  VerifyModules = true;
+#else
+  VerifyModules = false;
+#endif
 }
 
 ExecutionEngine *EngineBuilder::create(TargetMachine *TM) {
@@ -500,10 +472,10 @@ ExecutionEngine *EngineBuilder::create(TargetMachine *TM) {
 
     ExecutionEngine *EE = nullptr;
     if (UseMCJIT && ExecutionEngine::MCJITCtor)
-      EE = ExecutionEngine::MCJITCtor(M, ErrorStr, MCJMM ? MCJMM : JMM,
-                                      AllocateGVsWithCode, TheTM.release());
+      EE = ExecutionEngine::MCJITCtor(std::move(M), ErrorStr,
+                                      MCJMM ? MCJMM : JMM, TheTM.release());
     else if (ExecutionEngine::JITCtor)
-      EE = ExecutionEngine::JITCtor(M, ErrorStr, JMM,
+      EE = ExecutionEngine::JITCtor(std::move(M), ErrorStr, JMM,
                                     AllocateGVsWithCode, TheTM.release());
 
     if (EE) {
@@ -516,7 +488,7 @@ ExecutionEngine *EngineBuilder::create(TargetMachine *TM) {
   // an interpreter instead.
   if (WhichEngine & EngineKind::Interpreter) {
     if (ExecutionEngine::InterpCtor)
-      return ExecutionEngine::InterpCtor(M, ErrorStr);
+      return ExecutionEngine::InterpCtor(std::move(M), ErrorStr);
     if (ErrorStr)
       *ErrorStr = "Interpreter has not been linked in.";
     return nullptr;
@@ -536,7 +508,7 @@ void *ExecutionEngine::getPointerToGlobal(const GlobalValue *GV) {
     return getPointerToFunction(F);
 
   MutexGuard locked(lock);
-  if (void *P = EEState.getGlobalAddressMap(locked)[GV])
+  if (void *P = EEState.getGlobalAddressMap()[GV])
     return P;
 
   // Global variable might have been added since interpreter started.
@@ -546,7 +518,7 @@ void *ExecutionEngine::getPointerToGlobal(const GlobalValue *GV) {
   else
     llvm_unreachable("Global hasn't had an address allocated yet!");
 
-  return EEState.getGlobalAddressMap(locked)[GV];
+  return EEState.getGlobalAddressMap()[GV];
 }
 
 /// \brief Converts a Constant* into a GenericValue, including handling of
@@ -1209,20 +1181,18 @@ void ExecutionEngine::emitGlobals() {
   if (Modules.size() != 1) {
     for (unsigned m = 0, e = Modules.size(); m != e; ++m) {
       Module &M = *Modules[m];
-      for (Module::const_global_iterator I = M.global_begin(),
-           E = M.global_end(); I != E; ++I) {
-        const GlobalValue *GV = I;
-        if (GV->hasLocalLinkage() || GV->isDeclaration() ||
-            GV->hasAppendingLinkage() || !GV->hasName())
+      for (const auto &GV : M.globals()) {
+        if (GV.hasLocalLinkage() || GV.isDeclaration() ||
+            GV.hasAppendingLinkage() || !GV.hasName())
           continue;// Ignore external globals and globals with internal linkage.
 
         const GlobalValue *&GVEntry =
-          LinkedGlobalsMap[std::make_pair(GV->getName(), GV->getType())];
+          LinkedGlobalsMap[std::make_pair(GV.getName(), GV.getType())];
 
         // If this is the first time we've seen this global, it is the canonical
         // version.
         if (!GVEntry) {
-          GVEntry = GV;
+          GVEntry = &GV;
           continue;
         }
 
@@ -1232,8 +1202,8 @@ void ExecutionEngine::emitGlobals() {
 
         // Otherwise, we know it's linkonce/weak, replace it if this is a strong
         // symbol.  FIXME is this right for common?
-        if (GV->hasExternalLinkage() || GVEntry->hasExternalWeakLinkage())
-          GVEntry = GV;
+        if (GV.hasExternalLinkage() || GVEntry->hasExternalWeakLinkage())
+          GVEntry = &GV;
       }
     }
   }
@@ -1241,31 +1211,30 @@ void ExecutionEngine::emitGlobals() {
   std::vector<const GlobalValue*> NonCanonicalGlobals;
   for (unsigned m = 0, e = Modules.size(); m != e; ++m) {
     Module &M = *Modules[m];
-    for (Module::const_global_iterator I = M.global_begin(), E = M.global_end();
-         I != E; ++I) {
+    for (const auto &GV : M.globals()) {
       // In the multi-module case, see what this global maps to.
       if (!LinkedGlobalsMap.empty()) {
         if (const GlobalValue *GVEntry =
-              LinkedGlobalsMap[std::make_pair(I->getName(), I->getType())]) {
+              LinkedGlobalsMap[std::make_pair(GV.getName(), GV.getType())]) {
           // If something else is the canonical global, ignore this one.
-          if (GVEntry != &*I) {
-            NonCanonicalGlobals.push_back(I);
+          if (GVEntry != &GV) {
+            NonCanonicalGlobals.push_back(&GV);
             continue;
           }
         }
       }
 
-      if (!I->isDeclaration()) {
-        addGlobalMapping(I, getMemoryForGV(I));
+      if (!GV.isDeclaration()) {
+        addGlobalMapping(&GV, getMemoryForGV(&GV));
       } else {
         // External variable reference. Try to use the dynamic loader to
         // get a pointer to it.
         if (void *SymAddr =
-            sys::DynamicLibrary::SearchForAddressOfSymbol(I->getName()))
-          addGlobalMapping(I, SymAddr);
+            sys::DynamicLibrary::SearchForAddressOfSymbol(GV.getName()))
+          addGlobalMapping(&GV, SymAddr);
         else {
           report_fatal_error("Could not resolve external global address: "
-                            +I->getName());
+                            +GV.getName());
         }
       }
     }
@@ -1285,16 +1254,15 @@ void ExecutionEngine::emitGlobals() {
 
     // Now that all of the globals are set up in memory, loop through them all
     // and initialize their contents.
-    for (Module::const_global_iterator I = M.global_begin(), E = M.global_end();
-         I != E; ++I) {
-      if (!I->isDeclaration()) {
+    for (const auto &GV : M.globals()) {
+      if (!GV.isDeclaration()) {
         if (!LinkedGlobalsMap.empty()) {
           if (const GlobalValue *GVEntry =
-                LinkedGlobalsMap[std::make_pair(I->getName(), I->getType())])
-            if (GVEntry != &*I)  // Not the canonical variable.
+                LinkedGlobalsMap[std::make_pair(GV.getName(), GV.getType())])
+            if (GVEntry != &GV)  // Not the canonical variable.
               continue;
         }
-        EmitGlobalVariable(I);
+        EmitGlobalVariable(&GV);
       }
     }
   }

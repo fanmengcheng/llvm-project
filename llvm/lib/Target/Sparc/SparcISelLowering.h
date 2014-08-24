@@ -12,8 +12,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef SPARC_ISELLOWERING_H
-#define SPARC_ISELLOWERING_H
+#ifndef LLVM_LIB_TARGET_SPARC_SPARCISELLOWERING_H
+#define LLVM_LIB_TARGET_SPARC_SPARCISELLOWERING_H
 
 #include "Sparc.h"
 #include "llvm/Target/TargetLowering.h"
@@ -57,14 +57,14 @@ namespace llvm {
     SparcTargetLowering(TargetMachine &TM);
     SDValue LowerOperation(SDValue Op, SelectionDAG &DAG) const override;
 
-    /// computeMaskedBitsForTargetNode - Determine which of the bits specified
+    /// computeKnownBitsForTargetNode - Determine which of the bits specified
     /// in Mask are known to be either zero or one and return them in the
     /// KnownZero/KnownOne bitsets.
-    void computeMaskedBitsForTargetNode(const SDValue Op,
-                                        APInt &KnownZero,
-                                        APInt &KnownOne,
-                                        const SelectionDAG &DAG,
-                                        unsigned Depth = 0) const override;
+    void computeKnownBitsForTargetNode(const SDValue Op,
+                                       APInt &KnownZero,
+                                       APInt &KnownOne,
+                                       const SelectionDAG &DAG,
+                                       unsigned Depth = 0) const override;
 
     MachineBasicBlock *
       EmitInstrWithCustomInserter(MachineInstr *MI,

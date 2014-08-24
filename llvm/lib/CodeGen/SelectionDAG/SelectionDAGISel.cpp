@@ -141,6 +141,25 @@ STATISTIC(NumFastIselFailShuffleVector,"Fast isel fails on ShuffleVector");
 STATISTIC(NumFastIselFailExtractValue,"Fast isel fails on ExtractValue");
 STATISTIC(NumFastIselFailInsertValue,"Fast isel fails on InsertValue");
 STATISTIC(NumFastIselFailLandingPad,"Fast isel fails on LandingPad");
+
+// Intrinsic instructions...
+STATISTIC(NumFastIselFailIntrinsicCall, "Fast isel fails on Intrinsic call");
+STATISTIC(NumFastIselFailSAddWithOverflow,
+          "Fast isel fails on sadd.with.overflow");
+STATISTIC(NumFastIselFailUAddWithOverflow,
+          "Fast isel fails on uadd.with.overflow");
+STATISTIC(NumFastIselFailSSubWithOverflow,
+          "Fast isel fails on ssub.with.overflow");
+STATISTIC(NumFastIselFailUSubWithOverflow,
+          "Fast isel fails on usub.with.overflow");
+STATISTIC(NumFastIselFailSMulWithOverflow,
+          "Fast isel fails on smul.with.overflow");
+STATISTIC(NumFastIselFailUMulWithOverflow,
+          "Fast isel fails on umul.with.overflow");
+STATISTIC(NumFastIselFailFrameaddress, "Fast isel fails on Frameaddress");
+STATISTIC(NumFastIselFailSqrt, "Fast isel fails on sqrt call");
+STATISTIC(NumFastIselFailStackMap, "Fast isel fails on StackMap call");
+STATISTIC(NumFastIselFailPatchPoint, "Fast isel fails on PatchPoint call");
 #endif
 
 static cl::opt<bool>
@@ -392,9 +411,9 @@ bool SelectionDAGISel::runOnMachineFunction(MachineFunction &mf) {
          "-fast-isel-abort requires -fast-isel");
 
   const Function &Fn = *mf.getFunction();
-  const TargetInstrInfo &TII = *TM.getInstrInfo();
-  const TargetRegisterInfo &TRI = *TM.getRegisterInfo();
-  const TargetLowering *TLI = TM.getTargetLowering();
+  const TargetInstrInfo &TII = *TM.getSubtargetImpl()->getInstrInfo();
+  const TargetRegisterInfo &TRI = *TM.getSubtargetImpl()->getRegisterInfo();
+  const TargetLowering *TLI = TM.getSubtargetImpl()->getTargetLowering();
 
   MF = &mf;
   RegInfo = &MF->getRegInfo();
@@ -515,7 +534,8 @@ bool SelectionDAGISel::runOnMachineFunction(MachineFunction &mf) {
       break;
 
     for (const auto &MI : MBB) {
-      const MCInstrDesc &MCID = TM.getInstrInfo()->get(MI.getOpcode());
+      const MCInstrDesc &MCID =
+          TM.getSubtargetImpl()->getInstrInfo()->get(MI.getOpcode());
       if ((MCID.isCall() && !MCID.isReturn()) ||
           MI.isStackAligningInlineAsm()) {
         MFI->setHasCalls(true);
@@ -621,7 +641,7 @@ void SelectionDAGISel::ComputeLiveOutVRegInfo() {
       continue;
 
     unsigned NumSignBits = CurDAG->ComputeNumSignBits(Src);
-    CurDAG->ComputeMaskedBits(Src, KnownZero, KnownOne);
+    CurDAG->computeKnownBits(Src, KnownZero, KnownOne);
     FuncInfo->AddLiveOutRegInfo(DestReg, NumSignBits, KnownZero, KnownOne);
   } while (!Worklist.empty());
 }
@@ -882,7 +902,8 @@ void SelectionDAGISel::PrepareEHLandingPad() {
   // Assign the call site to the landing pad's begin label.
   MF->getMMI().setCallSiteLandingPad(Label, SDB->LPadToCallSiteMap[MBB]);
 
-  const MCInstrDesc &II = TM.getInstrInfo()->get(TargetOpcode::EH_LABEL);
+  const MCInstrDesc &II =
+      TM.getSubtargetImpl()->getInstrInfo()->get(TargetOpcode::EH_LABEL);
   BuildMI(*MBB, FuncInfo->InsertPt, SDB->getCurDebugLoc(), II)
     .addSym(Label);
 
@@ -974,7 +995,37 @@ static void collectFailStats(const Instruction *I) {
   case Instruction::FCmp:           NumFastIselFailFCmp++; return;
   case Instruction::PHI:            NumFastIselFailPHI++; return;
   case Instruction::Select:         NumFastIselFailSelect++; return;
-  case Instruction::Call:           NumFastIselFailCall++; return;
+  case Instruction::Call: {
+    if (auto const *Intrinsic = dyn_cast<IntrinsicInst>(I)) {
+      switch (Intrinsic->getIntrinsicID()) {
+      default:
+        NumFastIselFailIntrinsicCall++; return;
+      case Intrinsic::sadd_with_overflow:
+        NumFastIselFailSAddWithOverflow++; return;
+      case Intrinsic::uadd_with_overflow:
+        NumFastIselFailUAddWithOverflow++; return;
+      case Intrinsic::ssub_with_overflow:
+        NumFastIselFailSSubWithOverflow++; return;
+      case Intrinsic::usub_with_overflow:
+        NumFastIselFailUSubWithOverflow++; return;
+      case Intrinsic::smul_with_overflow:
+        NumFastIselFailSMulWithOverflow++; return;
+      case Intrinsic::umul_with_overflow:
+        NumFastIselFailUMulWithOverflow++; return;
+      case Intrinsic::frameaddress:
+        NumFastIselFailFrameaddress++; return;
+      case Intrinsic::sqrt:
+          NumFastIselFailSqrt++; return;
+      case Intrinsic::experimental_stackmap:
+        NumFastIselFailStackMap++; return;
+      case Intrinsic::experimental_patchpoint_void: // fall-through
+      case Intrinsic::experimental_patchpoint_i64:
+        NumFastIselFailPatchPoint++; return;
+      }
+    }
+    NumFastIselFailCall++;
+    return;
+  }
   case Instruction::Shl:            NumFastIselFailShl++; return;
   case Instruction::LShr:           NumFastIselFailLShr++; return;
   case Instruction::AShr:           NumFastIselFailAShr++; return;
@@ -1604,7 +1655,7 @@ bool SelectionDAGISel::CheckOrMask(SDValue LHS, ConstantSDNode *RHS,
   APInt NeededMask = DesiredMask & ~ActualMask;
 
   APInt KnownZero, KnownOne;
-  CurDAG->ComputeMaskedBits(LHS, KnownZero, KnownOne);
+  CurDAG->computeKnownBits(LHS, KnownZero, KnownOne);
 
   // If all the missing bits in the or are already known to be set, match!
   if ((NeededMask & KnownOne) == NeededMask)
@@ -1680,7 +1731,7 @@ static SDNode *findGlueUse(SDNode *N) {
 /// This function recursively traverses up the operand chain, ignoring
 /// certain nodes.
 static bool findNonImmUse(SDNode *Use, SDNode* Def, SDNode *ImmedUse,
-                          SDNode *Root, SmallPtrSet<SDNode*, 16> &Visited,
+                          SDNode *Root, SmallPtrSetImpl<SDNode*> &Visited,
                           bool IgnoreChains) {
   // The NodeID's are given uniques ID's where a node ID is guaranteed to be
   // greater than all of its (recursive) operands.  If we scan to a point where
@@ -1813,7 +1864,7 @@ SDNode
   MDNodeSDNode *MD = dyn_cast<MDNodeSDNode>(Op->getOperand(0));
   const MDString *RegStr = dyn_cast<MDString>(MD->getMD()->getOperand(0));
   unsigned Reg = getTargetLowering()->getRegisterByName(
-                 RegStr->getString().data());
+                 RegStr->getString().data(), Op->getValueType(0));
   SDValue New = CurDAG->getCopyFromReg(
                         CurDAG->getEntryNode(), dl, Reg, Op->getValueType(0));
   New->setNodeId(-1);
@@ -1826,7 +1877,7 @@ SDNode
   MDNodeSDNode *MD = dyn_cast<MDNodeSDNode>(Op->getOperand(1));
   const MDString *RegStr = dyn_cast<MDString>(MD->getMD()->getOperand(0));
   unsigned Reg = getTargetLowering()->getRegisterByName(
-                 RegStr->getString().data());
+                 RegStr->getString().data(), Op->getOperand(2).getValueType());
   SDValue New = CurDAG->getCopyToReg(
                         CurDAG->getEntryNode(), dl, Reg, Op->getOperand(2));
   New->setNodeId(-1);
@@ -2400,8 +2451,6 @@ SelectCodeCommon(SDNode *NodeToMatch, const unsigned char *MatcherTable,
   case ISD::BasicBlock:
   case ISD::Register:
   case ISD::RegisterMask:
-  //case ISD::VALUETYPE:
-  //case ISD::CONDCODE:
   case ISD::HANDLENODE:
   case ISD::MDNODE_SDNODE:
   case ISD::TargetConstant:
@@ -3027,7 +3076,8 @@ SelectCodeCommon(SDNode *NodeToMatch, const unsigned char *MatcherTable,
       if (EmitNodeInfo & OPFL_MemRefs) {
         // Only attach load or store memory operands if the generated
         // instruction may load or store.
-        const MCInstrDesc &MCID = TM.getInstrInfo()->get(TargetOpc);
+        const MCInstrDesc &MCID =
+            TM.getSubtargetImpl()->getInstrInfo()->get(TargetOpc);
         bool mayLoad = MCID.mayLoad();
         bool mayStore = MCID.mayStore();
 

@@ -553,7 +553,7 @@ Instruction *InstCombiner::transformZExtICmp(ICmpInst *ICI, Instruction &CI,
       // If Op1C some other power of two, convert:
       uint32_t BitWidth = Op1C->getType()->getBitWidth();
       APInt KnownZero(BitWidth, 0), KnownOne(BitWidth, 0);
-      ComputeMaskedBits(ICI->getOperand(0), KnownZero, KnownOne);
+      computeKnownBits(ICI->getOperand(0), KnownZero, KnownOne);
 
       APInt KnownZeroMask(~KnownZero);
       if (KnownZeroMask.isPowerOf2()) { // Exactly 1 possible 1?
@@ -601,8 +601,8 @@ Instruction *InstCombiner::transformZExtICmp(ICmpInst *ICI, Instruction &CI,
 
       APInt KnownZeroLHS(BitWidth, 0), KnownOneLHS(BitWidth, 0);
       APInt KnownZeroRHS(BitWidth, 0), KnownOneRHS(BitWidth, 0);
-      ComputeMaskedBits(LHS, KnownZeroLHS, KnownOneLHS);
-      ComputeMaskedBits(RHS, KnownZeroRHS, KnownOneRHS);
+      computeKnownBits(LHS, KnownZeroLHS, KnownOneLHS);
+      computeKnownBits(RHS, KnownZeroRHS, KnownOneRHS);
 
       if (KnownZeroLHS == KnownZeroRHS && KnownOneLHS == KnownOneRHS) {
         APInt KnownBits = KnownZeroLHS | KnownOneLHS;
@@ -921,7 +921,7 @@ Instruction *InstCombiner::transformSExtICmp(ICmpInst *ICI, Instruction &CI) {
         ICI->isEquality() && (Op1C->isZero() || Op1C->getValue().isPowerOf2())){
       unsigned BitWidth = Op1C->getType()->getBitWidth();
       APInt KnownZero(BitWidth, 0), KnownOne(BitWidth, 0);
-      ComputeMaskedBits(Op0, KnownZero, KnownOne);
+      computeKnownBits(Op0, KnownZero, KnownOne);
 
       APInt KnownZeroMask(~KnownZero);
       if (KnownZeroMask.isPowerOf2()) {
@@ -1434,7 +1434,12 @@ Instruction *InstCombiner::commonPointerCastTransforms(CastInst &CI) {
   if (GetElementPtrInst *GEP = dyn_cast<GetElementPtrInst>(Src)) {
     // If casting the result of a getelementptr instruction with no offset, turn
     // this into a cast of the original pointer!
-    if (GEP->hasAllZeroIndices()) {
+    if (GEP->hasAllZeroIndices() &&
+        // If CI is an addrspacecast and GEP changes the poiner type, merging
+        // GEP into CI would undo canonicalizing addrspacecast with different
+        // pointer types, causing infinite loops.
+        (!isa<AddrSpaceCastInst>(CI) ||
+          GEP->getType() == GEP->getPointerOperand()->getType())) {
       // Changing the cast operand is usually not a good idea but it is safe
       // here because the pointer operand is being replaced with another
       // pointer operand so the opcode doesn't need to change.
@@ -1904,5 +1909,24 @@ Instruction *InstCombiner::visitBitCast(BitCastInst &CI) {
 }
 
 Instruction *InstCombiner::visitAddrSpaceCast(AddrSpaceCastInst &CI) {
+  // If the destination pointer element type is not the same as the source's
+  // first do a bitcast to the destination type, and then the addrspacecast.
+  // This allows the cast to be exposed to other transforms.
+  Value *Src = CI.getOperand(0);
+  PointerType *SrcTy = cast<PointerType>(Src->getType()->getScalarType());
+  PointerType *DestTy = cast<PointerType>(CI.getType()->getScalarType());
+
+  Type *DestElemTy = DestTy->getElementType();
+  if (SrcTy->getElementType() != DestElemTy) {
+    Type *MidTy = PointerType::get(DestElemTy, SrcTy->getAddressSpace());
+    if (VectorType *VT = dyn_cast<VectorType>(CI.getType())) {
+      // Handle vectors of pointers.
+      MidTy = VectorType::get(MidTy, VT->getNumElements());
+    }
+
+    Value *NewBitCast = Builder->CreateBitCast(Src, MidTy);
+    return new AddrSpaceCastInst(NewBitCast, CI.getType());
+  }
+
   return commonPointerCastTransforms(CI);
 }

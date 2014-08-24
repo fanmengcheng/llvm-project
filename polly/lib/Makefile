@@ -31,14 +31,8 @@ ifeq ($(PLUTO_FOUND), yes)
 POLLY_PLUTO_FILES= Transform/Pluto.cpp
 endif
 
-ifeq ($(SCOPLIB_FOUND), yes)
-POLLY_SCOPLIB_FILES= Exchange/ScopLib.cpp \
-                     Exchange/ScopLibExporter.cpp \
-                     Exchange/ScopLibImporter.cpp \
-		     Transform/Pocc.cpp
-endif
-
 ISL_CODEGEN_FILES= CodeGen/IslAst.cpp \
+                   CodeGen/IslExprBuilder.cpp \
                    CodeGen/IslCodeGeneration.cpp
 
 POLLY_JSON_FILES= JSON/json_reader.cpp \
@@ -52,6 +46,7 @@ SOURCES= Polly.cpp \
 	 Support/ScopHelper.cpp \
 	 Analysis/Dependences.cpp \
 	 Analysis/ScopDetection.cpp \
+	 Analysis/ScopDetectionDiagnostic.cpp \
 	 Analysis/ScopInfo.cpp \
 	 Analysis/ScopGraphPrinter.cpp \
 	 Analysis/ScopPass.cpp \
@@ -60,6 +55,7 @@ SOURCES= Polly.cpp \
 	 CodeGen/LoopGenerators.cpp \
 	 CodeGen/IRBuilder.cpp \
 	 CodeGen/Utils.cpp \
+	 CodeGen/RuntimeDebugBuilder.cpp \
 	 Exchange/JSONExporter.cpp \
 	 Transform/Canonicalization.cpp \
 	 Transform/CodePreparation.cpp \
@@ -71,8 +67,7 @@ SOURCES= Polly.cpp \
 	 ${ISL_CODEGEN_FILES} \
          ${CLOOG_FILES} \
 	 ${POLLY_JSON_FILES} \
-	 ${POLLY_PLUTO_FILES} \
-	 ${POLLY_SCOPLIB_FILES}
+	 ${POLLY_PLUTO_FILES}
 
 #
 # Include Makefile.common so we know what to do.

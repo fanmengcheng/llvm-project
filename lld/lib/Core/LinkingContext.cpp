@@ -7,11 +7,11 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "lld/Core/Alias.h"
 #include "lld/Core/LinkingContext.h"
 #include "lld/Core/Resolver.h"
+#include "lld/Core/Simple.h"
 #include "lld/ReaderWriter/Writer.h"
-#include "lld/ReaderWriter/Simple.h"
-
 #include "llvm/ADT/Triple.h"
 
 namespace lld {
@@ -33,7 +33,7 @@ bool LinkingContext::validate(raw_ostream &diagnostics) {
   return validateImpl(diagnostics);
 }
 
-error_code LinkingContext::writeFile(const File &linkedFile) const {
+std::error_code LinkingContext::writeFile(const File &linkedFile) const {
   return this->writer().writeFile(linkedFile, _outputPath);
 }
 
@@ -71,15 +71,32 @@ LinkingContext::createUndefinedSymbolFile(StringRef filename) const {
   return std::move(undefinedSymFile);
 }
 
+std::unique_ptr<File> LinkingContext::createAliasSymbolFile() const {
+  if (getAliases().empty())
+    return nullptr;
+  std::unique_ptr<SimpleFile> file(new SimpleFile("<alias>"));
+  for (const auto &i : getAliases()) {
+    StringRef from = i.first;
+    StringRef to = i.second;
+    SimpleDefinedAtom *fromAtom = new (_allocator) AliasAtom(*file, from);
+    UndefinedAtom *toAtom = new (_allocator) SimpleUndefinedAtom(*file, to);
+    fromAtom->addReference(Reference::KindNamespace::all,
+                           Reference::KindArch::all, Reference::kindLayoutAfter,
+                           0, toAtom, 0);
+    file->addAtom(*fromAtom);
+    file->addAtom(*toAtom);
+  }
+  return std::move(file);
+}
+
 void LinkingContext::createInternalFiles(
     std::vector<std::unique_ptr<File> > &result) const {
-  std::unique_ptr<File> internalFile;
-  internalFile = createEntrySymbolFile();
-  if (internalFile)
-    result.push_back(std::move(internalFile));
-  internalFile = createUndefinedSymbolFile();
-  if (internalFile)
-    result.push_back(std::move(internalFile));
+  if (std::unique_ptr<File> file = createEntrySymbolFile())
+    result.push_back(std::move(file));
+  if (std::unique_ptr<File> file = createUndefinedSymbolFile())
+    result.push_back(std::move(file));
+  if (std::unique_ptr<File> file = createAliasSymbolFile())
+    result.push_back(std::move(file));
 }
 
 void LinkingContext::addPasses(PassManager &pm) {}

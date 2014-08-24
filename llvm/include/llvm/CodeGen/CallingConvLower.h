@@ -112,6 +112,23 @@ public:
     return Ret;
   }
 
+  // There is no need to differentiate between a pending CCValAssign and other
+  // kinds, as they are stored in a different list.
+  static CCValAssign getPending(unsigned ValNo, MVT ValVT, MVT LocVT,
+                                LocInfo HTP) {
+    return getReg(ValNo, ValVT, 0, LocVT, HTP);
+  }
+
+  void convertToReg(unsigned RegNo) {
+    Loc = RegNo;
+    isMem = false;
+  }
+
+  void convertToMem(unsigned Offset) {
+    Loc = Offset;
+    isMem = true;
+  }
+
   unsigned getValNo() const { return ValNo; }
   MVT getValVT() const { return ValVT; }
 
@@ -157,13 +174,13 @@ private:
   CallingConv::ID CallingConv;
   bool IsVarArg;
   MachineFunction &MF;
-  const TargetMachine &TM;
   const TargetRegisterInfo &TRI;
   SmallVectorImpl<CCValAssign> &Locs;
   LLVMContext &Context;
 
   unsigned StackOffset;
   SmallVector<uint32_t, 16> UsedRegs;
+  SmallVector<CCValAssign, 4> PendingLocs;
 
   // ByValInfo and SmallVector<ByValInfo, 4> ByValRegs:
   //
@@ -220,15 +237,13 @@ protected:
 
 public:
   CCState(CallingConv::ID CC, bool isVarArg, MachineFunction &MF,
-          const TargetMachine &TM, SmallVectorImpl<CCValAssign> &locs,
-          LLVMContext &C);
+          SmallVectorImpl<CCValAssign> &locs, LLVMContext &C);
 
   void addLoc(const CCValAssign &V) {
     Locs.push_back(V);
   }
 
   LLVMContext &getContext() const { return Context; }
-  const TargetMachine &getTarget() const { return TM; }
   MachineFunction &getMachineFunction() const { return MF; }
   CallingConv::ID getCallingConv() const { return CallingConv; }
   bool isVarArg() const { return IsVarArg; }
@@ -317,6 +332,31 @@ public:
     return Reg;
   }
 
+  /// AllocateRegBlock - Attempt to allocate a block of RegsRequired consecutive
+  /// registers. If this is not possible, return zero. Otherwise, return the first
+  /// register of the block that were allocated, marking the entire block as allocated.
+  unsigned AllocateRegBlock(const uint16_t *Regs, unsigned NumRegs, unsigned RegsRequired) {
+    for (unsigned StartIdx = 0; StartIdx <= NumRegs - RegsRequired; ++StartIdx) {
+      bool BlockAvailable = true;
+      // Check for already-allocated regs in this block
+      for (unsigned BlockIdx = 0; BlockIdx < RegsRequired; ++BlockIdx) {
+        if (isAllocated(Regs[StartIdx + BlockIdx])) {
+          BlockAvailable = false;
+          break;
+        }
+      }
+      if (BlockAvailable) {
+        // Mark the entire block as allocated
+        for (unsigned BlockIdx = 0; BlockIdx < RegsRequired; ++BlockIdx) {
+          MarkAllocated(Regs[StartIdx + BlockIdx]);
+        }
+        return Regs[StartIdx];
+      }
+    }
+    // No block was available
+    return 0;
+  }
+
   /// Version of AllocateReg with list of registers to be shadowed.
   unsigned AllocateReg(const MCPhysReg *Regs, const MCPhysReg *ShadowRegs,
                        unsigned NumRegs) {
@@ -331,11 +371,16 @@ public:
     return Reg;
   }
 
+  /// AlignStack - Align the top of the stakc to the specified alignment.
+  void AlignStack(unsigned Align) {
+    assert(Align && ((Align - 1) & Align) == 0); // Align is power of 2.
+    StackOffset = ((StackOffset + Align - 1) & ~(Align - 1));
+  }
+
   /// AllocateStack - Allocate a chunk of stack space with the specified size
   /// and alignment.
   unsigned AllocateStack(unsigned Size, unsigned Align) {
-    assert(Align && ((Align-1) & Align) == 0); // Align is power of 2.
-    StackOffset = ((StackOffset + Align-1) & ~(Align-1));
+    AlignStack(Align);
     unsigned Result = StackOffset;
     StackOffset += Size;
     MF.getFrameInfo()->ensureMaxAlignment(Align);
@@ -410,6 +455,11 @@ public:
   }
 
   ParmContext getCallOrPrologue() const { return CallOrPrologue; }
+
+  // Get list of pending assignments
+  SmallVectorImpl<llvm::CCValAssign> &getPendingLocs() {
+    return PendingLocs;
+  }
 
 private:
   /// MarkAllocated - Mark a register and all of its aliases as allocated.

@@ -751,7 +751,7 @@ bool RegisterCoalescer::reMaterializeTrivialDef(CoalescerPair &CP,
     IsDefCopy = true;
     return false;
   }
-  if (!DefMI->isAsCheapAsAMove())
+  if (!TII->isAsCheapAsAMove(DefMI))
     return false;
   if (!TII->isTriviallyReMaterializable(DefMI, AA))
     return false;
@@ -1035,6 +1035,22 @@ bool RegisterCoalescer::joinCopy(MachineInstr *CopyMI, bool &Again) {
   if (!CP.setRegisters(CopyMI)) {
     DEBUG(dbgs() << "\tNot coalescable.\n");
     return false;
+  }
+
+  if (CP.getNewRC()) {
+    auto SrcRC = MRI->getRegClass(CP.getSrcReg());
+    auto DstRC = MRI->getRegClass(CP.getDstReg());
+    unsigned SrcIdx = CP.getSrcIdx();
+    unsigned DstIdx = CP.getDstIdx();
+    if (CP.isFlipped()) {
+      std::swap(SrcIdx, DstIdx);
+      std::swap(SrcRC, DstRC);
+    }
+    if (!TRI->shouldCoalesce(CopyMI, SrcRC, SrcIdx, DstRC, DstIdx,
+                            CP.getNewRC())) {
+      DEBUG(dbgs() << "\tSubtarget bailed on coalescing.\n");
+      return false;
+    }
   }
 
   // Dead code elimination. This really should be handled by MachineDCE, but
@@ -1423,7 +1439,7 @@ public:
   /// Add erased instructions to ErasedInstrs.
   /// Add foreign virtual registers to ShrinkRegs if their live range ended at
   /// the erased instrs.
-  void eraseInstrs(SmallPtrSet<MachineInstr*, 8> &ErasedInstrs,
+  void eraseInstrs(SmallPtrSetImpl<MachineInstr*> &ErasedInstrs,
                    SmallVectorImpl<unsigned> &ShrinkRegs);
 
   /// Get the value assignments suitable for passing to LiveInterval::join.
@@ -1936,7 +1952,7 @@ void JoinVals::pruneValues(JoinVals &Other,
   }
 }
 
-void JoinVals::eraseInstrs(SmallPtrSet<MachineInstr*, 8> &ErasedInstrs,
+void JoinVals::eraseInstrs(SmallPtrSetImpl<MachineInstr*> &ErasedInstrs,
                            SmallVectorImpl<unsigned> &ShrinkRegs) {
   for (unsigned i = 0, e = LI.getNumValNums(); i != e; ++i) {
     // Get the def location before markUnused() below invalidates it.
@@ -2208,8 +2224,8 @@ bool RegisterCoalescer::runOnMachineFunction(MachineFunction &fn) {
   MF = &fn;
   MRI = &fn.getRegInfo();
   TM = &fn.getTarget();
-  TRI = TM->getRegisterInfo();
-  TII = TM->getInstrInfo();
+  TRI = TM->getSubtargetImpl()->getRegisterInfo();
+  TII = TM->getSubtargetImpl()->getInstrInfo();
   LIS = &getAnalysis<LiveIntervals>();
   AA = &getAnalysis<AliasAnalysis>();
   Loops = &getAnalysis<MachineLoopInfo>();

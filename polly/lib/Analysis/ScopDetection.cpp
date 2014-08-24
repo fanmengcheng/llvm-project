@@ -54,6 +54,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Analysis/PostDominators.h"
 #include "llvm/Analysis/RegionIterator.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
@@ -70,67 +71,73 @@ using namespace polly;
 #define DEBUG_TYPE "polly-detect"
 
 static cl::opt<bool>
-DetectScopsWithoutLoops("polly-detect-scops-in-functions-without-loops",
-                        cl::desc("Detect scops in functions without loops"),
-                        cl::Hidden, cl::init(false), cl::ZeroOrMore,
-                        cl::cat(PollyCategory));
+    DetectScopsWithoutLoops("polly-detect-scops-in-functions-without-loops",
+                            cl::desc("Detect scops in functions without loops"),
+                            cl::Hidden, cl::init(false), cl::ZeroOrMore,
+                            cl::cat(PollyCategory));
 
 static cl::opt<bool>
-DetectRegionsWithoutLoops("polly-detect-scops-in-regions-without-loops",
-                          cl::desc("Detect scops in regions without loops"),
-                          cl::Hidden, cl::init(false), cl::ZeroOrMore,
-                          cl::cat(PollyCategory));
+    DetectRegionsWithoutLoops("polly-detect-scops-in-regions-without-loops",
+                              cl::desc("Detect scops in regions without loops"),
+                              cl::Hidden, cl::init(false), cl::ZeroOrMore,
+                              cl::cat(PollyCategory));
 
-static cl::opt<std::string>
-OnlyFunction("polly-only-func",
-             cl::desc("Only run on functions that contain a certain string"),
-             cl::value_desc("string"), cl::ValueRequired, cl::init(""),
-             cl::cat(PollyCategory));
+static cl::opt<std::string> OnlyFunction(
+    "polly-only-func",
+    cl::desc("Only run on functions that contain a certain string"),
+    cl::value_desc("string"), cl::ValueRequired, cl::init(""),
+    cl::cat(PollyCategory));
 
-static cl::opt<std::string>
-OnlyRegion("polly-only-region",
-           cl::desc("Only run on certain regions (The provided identifier must "
-                    "appear in the name of the region's entry block"),
-           cl::value_desc("identifier"), cl::ValueRequired, cl::init(""),
-           cl::cat(PollyCategory));
-
-static cl::opt<bool>
-IgnoreAliasing("polly-ignore-aliasing",
-               cl::desc("Ignore possible aliasing of the array bases"),
-               cl::Hidden, cl::init(false), cl::ZeroOrMore,
-               cl::cat(PollyCategory));
+static cl::opt<std::string> OnlyRegion(
+    "polly-only-region",
+    cl::desc("Only run on certain regions (The provided identifier must "
+             "appear in the name of the region's entry block"),
+    cl::value_desc("identifier"), cl::ValueRequired, cl::init(""),
+    cl::cat(PollyCategory));
 
 static cl::opt<bool>
-ReportLevel("polly-report",
-            cl::desc("Print information about the activities of Polly"),
-            cl::init(false), cl::ZeroOrMore, cl::cat(PollyCategory));
+    IgnoreAliasing("polly-ignore-aliasing",
+                   cl::desc("Ignore possible aliasing of the array bases"),
+                   cl::Hidden, cl::init(false), cl::ZeroOrMore,
+                   cl::cat(PollyCategory));
 
 static cl::opt<bool>
-AllowNonAffine("polly-allow-nonaffine",
-               cl::desc("Allow non affine access functions in arrays"),
-               cl::Hidden, cl::init(false), cl::ZeroOrMore,
-               cl::cat(PollyCategory));
+    ReportLevel("polly-report",
+                cl::desc("Print information about the activities of Polly"),
+                cl::init(false), cl::ZeroOrMore, cl::cat(PollyCategory));
+
+static cl::opt<bool>
+    AllowNonAffine("polly-allow-nonaffine",
+                   cl::desc("Allow non affine access functions in arrays"),
+                   cl::Hidden, cl::init(false), cl::ZeroOrMore,
+                   cl::cat(PollyCategory));
 
 static cl::opt<bool, true>
-TrackFailures("polly-detect-track-failures",
-              cl::desc("Track failure strings in detecting scop regions"),
-              cl::location(PollyTrackFailures), cl::Hidden, cl::ZeroOrMore,
-              cl::init(false), cl::cat(PollyCategory));
+    TrackFailures("polly-detect-track-failures",
+                  cl::desc("Track failure strings in detecting scop regions"),
+                  cl::location(PollyTrackFailures), cl::Hidden, cl::ZeroOrMore,
+                  cl::init(true), cl::cat(PollyCategory));
+
+static cl::opt<bool> KeepGoing("polly-detect-keep-going",
+                               cl::desc("Do not fail on the first error."),
+                               cl::Hidden, cl::ZeroOrMore, cl::init(false),
+                               cl::cat(PollyCategory));
 
 static cl::opt<bool, true>
-PollyDelinearizeX("polly-delinearize",
-                  cl::desc("Delinearize array access functions"),
-                  cl::location(PollyDelinearize), cl::Hidden, cl::ZeroOrMore,
-                  cl::init(false), cl::cat(PollyCategory));
+    PollyDelinearizeX("polly-delinearize",
+                      cl::desc("Delinearize array access functions"),
+                      cl::location(PollyDelinearize), cl::Hidden,
+                      cl::ZeroOrMore, cl::init(false), cl::cat(PollyCategory));
 
 static cl::opt<bool>
-VerifyScops("polly-detect-verify",
-            cl::desc("Verify the detected SCoPs after each transformation"),
-            cl::Hidden, cl::init(false), cl::ZeroOrMore,
-            cl::cat(PollyCategory));
+    VerifyScops("polly-detect-verify",
+                cl::desc("Verify the detected SCoPs after each transformation"),
+                cl::Hidden, cl::init(false), cl::ZeroOrMore,
+                cl::cat(PollyCategory));
 
 bool polly::PollyTrackFailures = false;
 bool polly::PollyDelinearize = false;
+StringRef polly::PollySkipFnAttr = "polly.skip.fn";
 
 //===----------------------------------------------------------------------===//
 // Statistics.
@@ -182,11 +189,13 @@ inline bool ScopDetection::invalid(DetectionContext &Context, bool Assert,
                                    Args &&... Arguments) const {
 
   if (!Context.Verifying) {
-    RR RejectReason = RR(Arguments...);
-    if (PollyTrackFailures)
-      LastFailure = RejectReason.getMessage();
+    RejectLog &Log = Context.Log;
+    std::shared_ptr<RR> RejectReason = std::make_shared<RR>(Arguments...);
 
-    DEBUG(dbgs() << RejectReason.getMessage());
+    if (PollyTrackFailures)
+      Log.report(RejectReason);
+
+    DEBUG(dbgs() << RejectReason->getMessage());
     DEBUG(dbgs() << "\n");
   } else {
     assert(!Assert && "Verification of detected scop failed");
@@ -206,10 +215,20 @@ bool ScopDetection::isMaxRegionInScop(const Region &R, bool Verify) const {
 }
 
 std::string ScopDetection::regionIsInvalidBecause(const Region *R) const {
-  if (!InvalidRegions.count(R))
+  if (!RejectLogs.count(R))
     return "";
 
-  return InvalidRegions.find(R)->second;
+  // Get the first error we found. Even in keep-going mode, this is the first
+  // reason that caused the candidate to be rejected.
+  RejectLog Errors = RejectLogs.at(R);
+
+  // This can happen when we marked a region invalid, but didn't track
+  // an error for it.
+  if (Errors.size() == 0)
+    return "";
+
+  RejectReasonPtr RR = *Errors.begin();
+  return RR->getMessage();
 }
 
 bool ScopDetection::isValidCFG(BasicBlock &BB,
@@ -233,11 +252,11 @@ bool ScopDetection::isValidCFG(BasicBlock &BB,
 
   // UndefValue is not allowed as condition.
   if (isa<UndefValue>(Condition))
-    return invalid<ReportUndefCond>(Context, /*Assert=*/true, &BB);
+    return invalid<ReportUndefCond>(Context, /*Assert=*/true, Br, &BB);
 
   // Only Constant and ICmpInst are allowed as condition.
   if (!(isa<Constant>(Condition) || isa<ICmpInst>(Condition)))
-    return invalid<ReportInvalidCond>(Context, /*Assert=*/true, &BB);
+    return invalid<ReportInvalidCond>(Context, /*Assert=*/true, Br, &BB);
 
   // Allow perfectly nested conditions.
   assert(Br->getNumSuccessors() == 2 && "Unexpected number of successors");
@@ -254,7 +273,7 @@ bool ScopDetection::isValidCFG(BasicBlock &BB,
     // Are both operands of the ICmp affine?
     if (isa<UndefValue>(ICmp->getOperand(0)) ||
         isa<UndefValue>(ICmp->getOperand(1)))
-      return invalid<ReportUndefOperand>(Context, /*Assert=*/true, &BB);
+      return invalid<ReportUndefOperand>(Context, /*Assert=*/true, &BB, ICmp);
 
     Loop *L = LI->getLoopFor(ICmp->getParent());
     const SCEV *LHS = SE->getSCEVAtScope(ICmp->getOperand(0), L);
@@ -263,7 +282,7 @@ bool ScopDetection::isValidCFG(BasicBlock &BB,
     if (!isAffineExpr(&Context.CurRegion, LHS, *SE) ||
         !isAffineExpr(&Context.CurRegion, RHS, *SE))
       return invalid<ReportNonAffBranch>(Context, /*Assert=*/true, &BB, LHS,
-                                         RHS);
+                                         RHS, ICmp);
   }
 
   // Allow loop exit conditions.
@@ -337,6 +356,54 @@ bool ScopDetection::isInvariant(const Value &Val, const Region &Reg) const {
   return true;
 }
 
+MapInsnToMemAcc InsnToMemAcc;
+
+bool ScopDetection::hasAffineMemoryAccesses(DetectionContext &Context) const {
+  for (auto P : Context.NonAffineAccesses) {
+    const SCEVUnknown *BasePointer = P.first;
+    Value *BaseValue = BasePointer->getValue();
+    ArrayShape *Shape = new ArrayShape(BasePointer);
+
+    // First step: collect parametric terms in all array references.
+    SmallVector<const SCEV *, 4> Terms;
+    for (PairInsnAddRec PIAF : Context.NonAffineAccesses[BasePointer])
+      PIAF.second->collectParametricTerms(*SE, Terms);
+
+    // Also collect terms from the affine memory accesses.
+    for (PairInsnAddRec PIAF : Context.AffineAccesses[BasePointer])
+      PIAF.second->collectParametricTerms(*SE, Terms);
+
+    // Second step: find array shape.
+    SE->findArrayDimensions(Terms, Shape->DelinearizedSizes,
+                            Context.ElementSize[BasePointer]);
+
+    // Third step: compute the access functions for each subscript.
+    for (PairInsnAddRec PIAF : Context.NonAffineAccesses[BasePointer]) {
+      const SCEVAddRecExpr *AF = PIAF.second;
+      const Instruction *Insn = PIAF.first;
+      if (Shape->DelinearizedSizes.empty())
+        return invalid<ReportNonAffineAccess>(Context, /*Assert=*/true, AF,
+                                              Insn, BaseValue);
+
+      MemAcc *Acc = new MemAcc(Insn, Shape);
+      InsnToMemAcc.insert({Insn, Acc});
+      AF->computeAccessFunctions(*SE, Acc->DelinearizedSubscripts,
+                                 Shape->DelinearizedSizes);
+      if (Shape->DelinearizedSizes.empty() ||
+          Acc->DelinearizedSubscripts.empty())
+        return invalid<ReportNonAffineAccess>(Context, /*Assert=*/true, AF,
+                                              Insn, BaseValue);
+
+      // Check that the delinearized subscripts are affine.
+      for (const SCEV *S : Acc->DelinearizedSubscripts)
+        if (!isAffineExpr(&Context.CurRegion, S, *SE, BaseValue))
+          return invalid<ReportNonAffineAccess>(Context, /*Assert=*/true, AF,
+                                                Insn, BaseValue);
+    }
+  }
+  return true;
+}
+
 bool ScopDetection::isValidMemoryAccess(Instruction &Inst,
                                         DetectionContext &Context) const {
   Value *Ptr = getPointerOperand(Inst);
@@ -348,12 +415,12 @@ bool ScopDetection::isValidMemoryAccess(Instruction &Inst,
   BasePointer = dyn_cast<SCEVUnknown>(SE->getPointerBase(AccessFunction));
 
   if (!BasePointer)
-    return invalid<ReportNoBasePtr>(Context, /*Assert=*/true);
+    return invalid<ReportNoBasePtr>(Context, /*Assert=*/true, &Inst);
 
   BaseValue = BasePointer->getValue();
 
   if (isa<UndefValue>(BaseValue))
-    return invalid<ReportUndefBasePtr>(Context, /*Assert=*/true);
+    return invalid<ReportUndefBasePtr>(Context, /*Assert=*/true, &Inst);
 
   // Check that the base address of the access is invariant in the current
   // region.
@@ -361,7 +428,8 @@ bool ScopDetection::isValidMemoryAccess(Instruction &Inst,
     // Verification of this property is difficult as the independent blocks
     // pass may introduce aliasing that we did not have when running the
     // scop detection.
-    return invalid<ReportVariantBasePtr>(Context, /*Assert=*/false, BaseValue);
+    return invalid<ReportVariantBasePtr>(Context, /*Assert=*/false, BaseValue,
+                                         &Inst);
 
   AccessFunction = SE->getMinusSCEV(AccessFunction, BasePointer);
 
@@ -370,27 +438,31 @@ bool ScopDetection::isValidMemoryAccess(Instruction &Inst,
   } else if (!isAffineExpr(&Context.CurRegion, AccessFunction, *SE,
                            BaseValue)) {
     const SCEVAddRecExpr *AF = dyn_cast<SCEVAddRecExpr>(AccessFunction);
+
     if (!PollyDelinearize || !AF)
       return invalid<ReportNonAffineAccess>(Context, /*Assert=*/true,
-                                            AccessFunction);
+                                            AccessFunction, &Inst, BaseValue);
 
-    // Try to delinearize AccessFunction only when the expression is known to
-    // not be affine: as all affine functions can be represented without
-    // problems in Polly, we do not have to delinearize them.
-    SmallVector<const SCEV *, 4> Subscripts, Sizes;
-    AF->delinearize(*SE, Subscripts, Sizes);
-    int size = Subscripts.size();
+    const SCEV *ElementSize = SE->getElementSize(&Inst);
+    Context.ElementSize[BasePointer] = ElementSize;
 
-    for (int i = 0; i < size; ++i)
-      if (!isAffineExpr(&Context.CurRegion, Subscripts[i], *SE, BaseValue))
-        return invalid<ReportNonAffineAccess>(Context, /*Assert=*/true,
-                                              AccessFunction);
+    // Collect all non affine memory accesses, and check whether they are linear
+    // at the end of scop detection. That way we can delinearize all the memory
+    // accesses to the same array in a unique step.
+    if (Context.NonAffineAccesses[BasePointer].size() == 0)
+      Context.NonAffineAccesses[BasePointer] = AFs();
+    Context.NonAffineAccesses[BasePointer].push_back({&Inst, AF});
+  } else if (const SCEVAddRecExpr *AF =
+                 dyn_cast<SCEVAddRecExpr>(AccessFunction)) {
+    if (Context.AffineAccesses[BasePointer].size() == 0)
+      Context.AffineAccesses[BasePointer] = AFs();
+    Context.AffineAccesses[BasePointer].push_back({&Inst, AF});
   }
 
   // FIXME: Alias Analysis thinks IntToPtrInst aliases with alloca instructions
   // created by IndependentBlocks Pass.
-  if (isa<IntToPtrInst>(BaseValue))
-    return invalid<ReportIntToPtr>(Context, /*Assert=*/true, BaseValue);
+  if (IntToPtrInst *Inst = dyn_cast<IntToPtrInst>(BaseValue))
+    return invalid<ReportIntToPtr>(Context, /*Assert=*/true, Inst);
 
   if (IgnoreAliasing)
     return true;
@@ -409,7 +481,7 @@ bool ScopDetection::isValidMemoryAccess(Instruction &Inst,
   // not proof this without -basicaa we would fail. We disable this check to
   // not cause irrelevant verification failures.
   if (!AS.isMustAlias())
-    return invalid<ReportAlias>(Context, /*Assert=*/true, &AS);
+    return invalid<ReportAlias>(Context, /*Assert=*/false, &Inst, AS);
 
   return true;
 }
@@ -476,13 +548,17 @@ Region *ScopDetection::expandRegion(Region &R) {
   while (ExpandedRegion) {
     DetectionContext Context(*ExpandedRegion, *AA, false /* verifying */);
     DEBUG(dbgs() << "\t\tTrying " << ExpandedRegion->getNameStr() << "\n");
+    // Only expand when we did not collect errors.
 
     // Check the exit first (cheap)
-    if (isValidExit(Context)) {
+    if (isValidExit(Context) && !Context.Log.hasErrors()) {
       // If the exit is valid check all blocks
       //  - if true, a valid region was found => store it + keep expanding
       //  - if false, .tbd. => stop  (should this really end the loop?)
-      if (!allBlocksValid(Context))
+      if (!allBlocksValid(Context) || Context.Log.hasErrors())
+        break;
+
+      if (Context.Log.hasErrors())
         break;
 
       // Delete unnecessary regions (allocated by getExpandedRegion)
@@ -546,15 +622,14 @@ void ScopDetection::findScops(Region &R) {
   if (!DetectRegionsWithoutLoops && regionWithoutLoops(R, LI))
     return;
 
-  LastFailure = "";
+  bool IsValidRegion = isValidRegion(R);
+  bool HasErrors = RejectLogs.count(&R) > 0;
 
-  if (isValidRegion(R)) {
+  if (IsValidRegion && !HasErrors) {
     ++ValidRegion;
     ValidRegions.insert(&R);
     return;
   }
-
-  InvalidRegions[&R] = LastFailure;
 
   for (auto &SubRegion : R)
     findScops(*SubRegion);
@@ -571,6 +646,11 @@ void ScopDetection::findScops(Region &R) {
     ToExpand.push_back(SubRegion.get());
 
   for (Region *CurrentRegion : ToExpand) {
+    // Skip regions that had errors.
+    bool HadErrors = RejectLogs.hasErrors(CurrentRegion);
+    if (HadErrors)
+      continue;
+
     // Skip invalid regions. Regions may become invalid, if they are element of
     // an already expanded region.
     if (ValidRegions.find(CurrentRegion) == ValidRegions.end())
@@ -596,18 +676,21 @@ bool ScopDetection::allBlocksValid(DetectionContext &Context) const {
 
   for (const BasicBlock *BB : R.blocks()) {
     Loop *L = LI->getLoopFor(BB);
-    if (L && L->getHeader() == BB && !isValidLoop(L, Context))
+    if (L && L->getHeader() == BB && (!isValidLoop(L, Context) && !KeepGoing))
       return false;
   }
 
   for (BasicBlock *BB : R.blocks())
-    if (!isValidCFG(*BB, Context))
+    if (!isValidCFG(*BB, Context) && !KeepGoing)
       return false;
 
   for (BasicBlock *BB : R.blocks())
     for (BasicBlock::iterator I = BB->begin(), E = --BB->end(); I != E; ++I)
-      if (!isValidInstruction(*I, Context))
+      if (!isValidInstruction(*I, Context) && !KeepGoing)
         return false;
+
+  if (!hasAffineMemoryAccesses(Context))
+    return false;
 
   return true;
 }
@@ -619,7 +702,7 @@ bool ScopDetection::isValidExit(DetectionContext &Context) const {
   if (BasicBlock *Exit = R.getExit()) {
     BasicBlock::iterator I = Exit->begin();
     if (I != Exit->end() && isa<PHINode>(*I))
-      return invalid<ReportPHIinExit>(Context, /*Assert=*/true);
+      return invalid<ReportPHIinExit>(Context, /*Assert=*/true, I);
   }
 
   return true;
@@ -627,7 +710,14 @@ bool ScopDetection::isValidExit(DetectionContext &Context) const {
 
 bool ScopDetection::isValidRegion(Region &R) const {
   DetectionContext Context(R, *AA, false /*verifying*/);
-  return isValidRegion(Context);
+
+  bool RegionIsValid = isValidRegion(Context);
+  bool HasErrors = !RegionIsValid || Context.Log.size() > 0;
+
+  if (PollyTrackFailures && HasErrors)
+    RejectLogs.insert(std::make_pair(&R, Context.Log));
+
+  return RegionIsValid;
 }
 
 bool ScopDetection::isValidRegion(DetectionContext &Context) const {
@@ -661,7 +751,7 @@ bool ScopDetection::isValidRegion(DetectionContext &Context) const {
         // Region entering edges come from the same loop but outside the region
         // are not allowed.
         if (L->contains(*PI) && !R.contains(*PI))
-          return invalid<ReportIndEdge>(Context, /*Assert=*/true);
+          return invalid<ReportIndEdge>(Context, /*Assert=*/true, *PI);
       }
     }
   }
@@ -669,7 +759,7 @@ bool ScopDetection::isValidRegion(DetectionContext &Context) const {
   // SCoP cannot contain the entry block of the function, because we need
   // to insert alloca instruction there when translate scalar to array.
   if (R.getEntry() == &(R.getEntry()->getParent()->getEntryBlock()))
-    return invalid<ReportEntry>(Context, /*Assert=*/true);
+    return invalid<ReportEntry>(Context, /*Assert=*/true, R.getEntry());
 
   if (!isValidExit(Context))
     return false;
@@ -681,31 +771,12 @@ bool ScopDetection::isValidRegion(DetectionContext &Context) const {
   return true;
 }
 
-bool ScopDetection::isValidFunction(llvm::Function &F) {
-  return !InvalidFunctions.count(&F);
+void ScopDetection::markFunctionAsInvalid(Function *F) const {
+  F->addFnAttr(PollySkipFnAttr);
 }
 
-void ScopDetection::getDebugLocation(const Region *R, unsigned &LineBegin,
-                                     unsigned &LineEnd, std::string &FileName) {
-  LineBegin = -1;
-  LineEnd = 0;
-
-  for (const BasicBlock *BB : R->blocks())
-    for (const Instruction &Inst : *BB) {
-      DebugLoc DL = Inst.getDebugLoc();
-      if (DL.isUnknown())
-        continue;
-
-      DIScope Scope(DL.getScope(Inst.getContext()));
-
-      if (FileName.empty())
-        FileName = Scope.getFilename();
-
-      unsigned NewLine = DL.getLine();
-
-      LineBegin = std::min(LineBegin, NewLine);
-      LineEnd = std::max(LineEnd, NewLine);
-    }
+bool ScopDetection::isValidFunction(llvm::Function &F) {
+  return !F.hasFnAttribute(PollySkipFnAttr);
 }
 
 void ScopDetection::printLocations(llvm::Function &F) {
@@ -719,9 +790,37 @@ void ScopDetection::printLocations(llvm::Function &F) {
   }
 }
 
+void
+ScopDetection::emitMissedRemarksForValidRegions(const Function &F,
+                                                const RegionSet &ValidRegions) {
+  for (const Region *R : ValidRegions) {
+    const Region *Parent = R->getParent();
+    if (Parent && !Parent->isTopLevelRegion() && RejectLogs.count(Parent))
+      emitRejectionRemarks(F, RejectLogs.at(Parent));
+  }
+}
+
+void ScopDetection::emitMissedRemarksForLeaves(const Function &F,
+                                               const Region *R) {
+  for (const std::unique_ptr<Region> &Child : *R) {
+    bool IsValid = ValidRegions.count(Child.get());
+    if (IsValid)
+      continue;
+
+    bool IsLeaf = Child->begin() == Child->end();
+    if (!IsLeaf)
+      emitMissedRemarksForLeaves(F, Child.get());
+    else {
+      if (RejectLogs.count(Child.get())) {
+        emitRejectionRemarks(F, RejectLogs.at(Child.get()));
+      }
+    }
+  }
+}
+
 bool ScopDetection::runOnFunction(llvm::Function &F) {
   LI = &getAnalysis<LoopInfo>();
-  RI = &getAnalysis<RegionInfo>();
+  RI = &getAnalysis<RegionInfoPass>().getRegionInfo();
   if (!DetectScopsWithoutLoops && LI->empty())
     return false;
 
@@ -738,6 +837,15 @@ bool ScopDetection::runOnFunction(llvm::Function &F) {
     return false;
 
   findScops(*TopRegion);
+
+  // Only makes sense when we tracked errors.
+  if (PollyTrackFailures) {
+    emitMissedRemarksForValidRegions(F, ValidRegions);
+    emitMissedRemarksForLeaves(F, TopRegion);
+  }
+
+  for (const Region *R : ValidRegions)
+    emitValidRemarks(F, R);
 
   if (ReportLevel >= 1)
     printLocations(F);
@@ -766,7 +874,7 @@ void ScopDetection::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<ScalarEvolution>();
   // We also need AA and RegionInfo when we are verifying analysis.
   AU.addRequiredTransitive<AliasAnalysis>();
-  AU.addRequiredTransitive<RegionInfo>();
+  AU.addRequiredTransitive<RegionInfoPass>();
   AU.setPreservesAll();
 }
 
@@ -779,7 +887,8 @@ void ScopDetection::print(raw_ostream &OS, const Module *) const {
 
 void ScopDetection::releaseMemory() {
   ValidRegions.clear();
-  InvalidRegions.clear();
+  RejectLogs.clear();
+
   // Do not clear the invalid function set.
 }
 
@@ -794,7 +903,7 @@ INITIALIZE_AG_DEPENDENCY(AliasAnalysis);
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass);
 INITIALIZE_PASS_DEPENDENCY(LoopInfo);
 INITIALIZE_PASS_DEPENDENCY(PostDominatorTree);
-INITIALIZE_PASS_DEPENDENCY(RegionInfo);
+INITIALIZE_PASS_DEPENDENCY(RegionInfoPass);
 INITIALIZE_PASS_DEPENDENCY(ScalarEvolution);
 INITIALIZE_PASS_END(ScopDetection, "polly-detect",
                     "Polly - Detect static control parts (SCoPs)", false, false)

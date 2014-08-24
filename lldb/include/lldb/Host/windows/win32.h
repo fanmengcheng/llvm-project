@@ -19,7 +19,7 @@ char * strcasestr(const char *s, const char* find);
 char* realpath(const char * name, char * resolved);
 
 #ifndef PATH_MAX
-#define PATH_MAX MAX_PATH
+#define PATH_MAX 32768
 #endif
 
 #define O_NOCTTY    0
@@ -49,7 +49,10 @@ char* realpath(const char * name, char * resolved);
 #include <stdint.h>
 #include <io.h>
 typedef unsigned short mode_t;
+
+#ifdef LLDB_DISABLE_PYTHON
 typedef uint32_t pid_t;
+#endif
 
 int usleep(uint32_t useconds);
 

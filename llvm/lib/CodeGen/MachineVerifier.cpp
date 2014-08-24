@@ -33,7 +33,6 @@
 #include "llvm/CodeGen/LiveVariables.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
-#include "llvm/CodeGen/MachineInstrBundle.h"
 #include "llvm/CodeGen/MachineMemOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/IR/BasicBlock.h"
@@ -47,6 +46,7 @@
 #include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetRegisterInfo.h"
+#include "llvm/Target/TargetSubtargetInfo.h"
 using namespace llvm;
 
 namespace {
@@ -293,8 +293,8 @@ bool MachineVerifier::runOnMachineFunction(MachineFunction &MF) {
 
   this->MF = &MF;
   TM = &MF.getTarget();
-  TII = TM->getInstrInfo();
-  TRI = TM->getRegisterInfo();
+  TII = TM->getSubtargetImpl()->getInstrInfo();
+  TRI = TM->getSubtargetImpl()->getRegisterInfo();
   MRI = &MF.getRegInfo();
 
   LiveVars = nullptr;
@@ -578,8 +578,8 @@ MachineVerifier::visitMachineBasicBlockBefore(const MachineBasicBlock *MBB) {
         report("MBB exits via unconditional fall-through but its successor "
                "differs from its CFG successor!", MBB);
       }
-      if (!MBB->empty() && getBundleStart(&MBB->back())->isBarrier() &&
-          !TII->isPredicated(getBundleStart(&MBB->back()))) {
+      if (!MBB->empty() && MBB->back().isBarrier() &&
+          !TII->isPredicated(&MBB->back())) {
         report("MBB exits via unconditional fall-through but ends with a "
                "barrier instruction!", MBB);
       }
@@ -599,10 +599,10 @@ MachineVerifier::visitMachineBasicBlockBefore(const MachineBasicBlock *MBB) {
       if (MBB->empty()) {
         report("MBB exits via unconditional branch but doesn't contain "
                "any instructions!", MBB);
-      } else if (!getBundleStart(&MBB->back())->isBarrier()) {
+      } else if (!MBB->back().isBarrier()) {
         report("MBB exits via unconditional branch but doesn't end with a "
                "barrier instruction!", MBB);
-      } else if (!getBundleStart(&MBB->back())->isTerminator()) {
+      } else if (!MBB->back().isTerminator()) {
         report("MBB exits via unconditional branch but the branch isn't a "
                "terminator instruction!", MBB);
       }
@@ -630,10 +630,10 @@ MachineVerifier::visitMachineBasicBlockBefore(const MachineBasicBlock *MBB) {
       if (MBB->empty()) {
         report("MBB exits via conditional branch/fall-through but doesn't "
                "contain any instructions!", MBB);
-      } else if (getBundleStart(&MBB->back())->isBarrier()) {
+      } else if (MBB->back().isBarrier()) {
         report("MBB exits via conditional branch/fall-through but ends with a "
                "barrier instruction!", MBB);
-      } else if (!getBundleStart(&MBB->back())->isTerminator()) {
+      } else if (!MBB->back().isTerminator()) {
         report("MBB exits via conditional branch/fall-through but the branch "
                "isn't a terminator instruction!", MBB);
       }
@@ -658,10 +658,10 @@ MachineVerifier::visitMachineBasicBlockBefore(const MachineBasicBlock *MBB) {
       if (MBB->empty()) {
         report("MBB exits via conditional branch/branch but doesn't "
                "contain any instructions!", MBB);
-      } else if (!getBundleStart(&MBB->back())->isBarrier()) {
+      } else if (!MBB->back().isBarrier()) {
         report("MBB exits via conditional branch/branch but doesn't end with a "
                "barrier instruction!", MBB);
-      } else if (!getBundleStart(&MBB->back())->isTerminator()) {
+      } else if (!MBB->back().isTerminator()) {
         report("MBB exits via conditional branch/branch but the branch "
                "isn't a terminator instruction!", MBB);
       }

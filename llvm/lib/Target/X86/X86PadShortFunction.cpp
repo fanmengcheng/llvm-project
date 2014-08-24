@@ -17,6 +17,7 @@
 
 #include "X86.h"
 #include "X86InstrInfo.h"
+#include "X86Subtarget.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
@@ -101,7 +102,10 @@ bool PadShortFunc::runOnMachineFunction(MachineFunction &MF) {
   }
 
   TM = &MF.getTarget();
-  TII = TM->getInstrInfo();
+  if (!TM->getSubtarget<X86Subtarget>().padShortFunctions())
+    return false;
+
+  TII = TM->getSubtargetImpl()->getInstrInfo();
 
   // Search through basic blocks and mark the ones that have early returns
   ReturnBBs.clear();
@@ -191,7 +195,8 @@ bool PadShortFunc::cyclesUntilReturn(MachineBasicBlock *MBB,
       return true;
     }
 
-    CyclesToEnd += TII->getInstrLatency(TM->getInstrItineraryData(), MI);
+    CyclesToEnd += TII->getInstrLatency(
+        TM->getSubtargetImpl()->getInstrItineraryData(), MI);
   }
 
   VisitedBBs[MBB] = VisitedBBInfo(false, CyclesToEnd);

@@ -291,8 +291,8 @@ protected:
 OptionDefinition
 CommandObjectFrameSelect::CommandOptions::g_option_table[] =
 {
-{ LLDB_OPT_SET_1, false, "relative", 'r', OptionParser::eRequiredArgument, NULL, 0, eArgTypeOffset, "A relative frame index offset from the current frame index."},
-{ 0, false, NULL, 0, 0, NULL, 0, eArgTypeNone, NULL }
+{ LLDB_OPT_SET_1, false, "relative", 'r', OptionParser::eRequiredArgument, NULL, NULL, 0, eArgTypeOffset, "A relative frame index offset from the current frame index."},
+{ 0, false, NULL, 0, 0, NULL, NULL, 0, eArgTypeNone, NULL }
 };
 
 #pragma mark CommandObjectFrameVariable
@@ -471,7 +471,7 @@ protected:
                             if (regex.GetErrorAsCString(regex_error, sizeof(regex_error)))
                                 result.GetErrorStream().Printf ("error: %s\n", regex_error);
                             else
-                                result.GetErrorStream().Printf ("error: unkown regex error when compiling '%s'\n", name_cstr);
+                                result.GetErrorStream().Printf ("error: unknown regex error when compiling '%s'\n", name_cstr);
                         }
                     }
                     else // No regex, either exact variable names or variable expressions.

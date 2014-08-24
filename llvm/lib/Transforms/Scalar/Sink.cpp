@@ -18,6 +18,7 @@
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/CFG.h"
+#include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/Support/Debug.h"
@@ -34,6 +35,7 @@ namespace {
     DominatorTree *DT;
     LoopInfo *LI;
     AliasAnalysis *AA;
+    const DataLayout *DL;
 
   public:
     static char ID; // Pass identification
@@ -54,7 +56,7 @@ namespace {
     }
   private:
     bool ProcessBlock(BasicBlock &BB);
-    bool SinkInstruction(Instruction *I, SmallPtrSet<Instruction *, 8> &Stores);
+    bool SinkInstruction(Instruction *I, SmallPtrSetImpl<Instruction*> &Stores);
     bool AllUsesDominatedByBlock(Instruction *Inst, BasicBlock *BB) const;
     bool IsAcceptableTarget(Instruction *Inst, BasicBlock *SuccToSinkTo) const;
   };
@@ -98,6 +100,8 @@ bool Sinking::runOnFunction(Function &F) {
   DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
   LI = &getAnalysis<LoopInfo>();
   AA = &getAnalysis<AliasAnalysis>();
+  DataLayoutPass *DLP = getAnalysisIfAvailable<DataLayoutPass>();
+  DL = DLP ? &DLP->getDataLayout() : nullptr;
 
   bool MadeChange, EverMadeChange = false;
 
@@ -153,7 +157,7 @@ bool Sinking::ProcessBlock(BasicBlock &BB) {
 }
 
 static bool isSafeToMove(Instruction *Inst, AliasAnalysis *AA,
-                         SmallPtrSet<Instruction *, 8> &Stores) {
+                         SmallPtrSetImpl<Instruction *> &Stores) {
 
   if (Inst->mayWriteToMemory()) {
     Stores.insert(Inst);
@@ -193,7 +197,7 @@ bool Sinking::IsAcceptableTarget(Instruction *Inst,
   if (SuccToSinkTo->getUniquePredecessor() != Inst->getParent()) {
     // We cannot sink a load across a critical edge - there may be stores in
     // other code paths.
-    if (!isSafeToSpeculativelyExecute(Inst))
+    if (!isSafeToSpeculativelyExecute(Inst, DL))
       return false;
 
     // We don't want to sink across a critical edge if we don't dominate the
@@ -216,7 +220,7 @@ bool Sinking::IsAcceptableTarget(Instruction *Inst,
 /// SinkInstruction - Determine whether it is safe to sink the specified machine
 /// instruction out of its current block into a successor.
 bool Sinking::SinkInstruction(Instruction *Inst,
-                              SmallPtrSet<Instruction *, 8> &Stores) {
+                              SmallPtrSetImpl<Instruction *> &Stores) {
 
   // Don't sink static alloca instructions.  CodeGen assumes allocas outside the
   // entry block are dynamically sized stack objects.

@@ -19,9 +19,8 @@ template <class ELFT> class MipsTargetLayout;
 
 template <typename ELFT> class MipsELFWriter {
 public:
-  MipsELFWriter(MipsLinkingContext &context,
-                MipsTargetLayout<ELFT> &targetLayout)
-      : _context(context), _targetLayout(targetLayout) {}
+  MipsELFWriter(MipsLinkingContext &ctx, MipsTargetLayout<ELFT> &targetLayout)
+      : _ctx(ctx), _targetLayout(targetLayout) {}
 
   void setELFHeader(ELFHeader<ELFT> &elfHeader) {
     elfHeader.e_version(1);
@@ -36,39 +35,58 @@ public:
     // merge them and write result here.
     uint32_t flags = llvm::ELF::EF_MIPS_NOREORDER | llvm::ELF::EF_MIPS_ABI_O32 |
                      llvm::ELF::EF_MIPS_CPIC | llvm::ELF::EF_MIPS_ARCH_32R2;
-    if (_context.getOutputELFType() == llvm::ELF::ET_DYN)
+    if (_ctx.getOutputELFType() == llvm::ELF::ET_DYN)
       flags |= EF_MIPS_PIC;
     elfHeader.e_flags(flags);
   }
 
   void finalizeMipsRuntimeAtomValues() {
-    if (!_context.isDynamic())
+    if (!_ctx.isDynamic())
       return;
 
     auto gotSection = _targetLayout.findOutputSection(".got");
     auto got = gotSection ? gotSection->virtualAddr() : 0;
     auto gp = gotSection ? got + _targetLayout.getGPOffset() : 0;
 
-    auto gotAtomIter = _targetLayout.findAbsoluteAtom("_GLOBAL_OFFSET_TABLE_");
-    assert(gotAtomIter != _targetLayout.absoluteAtoms().end());
-    (*gotAtomIter)->_virtualAddr = got;
-
-    auto gpAtomIter = _targetLayout.findAbsoluteAtom("_gp");
-    assert(gpAtomIter != _targetLayout.absoluteAtoms().end());
-    (*gpAtomIter)->_virtualAddr = gp;
-
-    AtomLayout *gpAtom = _targetLayout.getGP();
-    assert(gpAtom != nullptr);
-    gpAtom->_virtualAddr = gp;
+    setAtomValue("_GLOBAL_OFFSET_TABLE_", got);
+    setAtomValue("_gp", gp);
+    setAtomValue("_gp_disp", gp);
+    setAtomValue("__gnu_local_gp", gp);
   }
 
   bool hasGlobalGOTEntry(const Atom *a) const {
     return _targetLayout.getGOTSection().hasGlobalGOTEntry(a);
   }
 
+  std::unique_ptr<MipsRuntimeFile<ELFT>> createRuntimeFile() {
+    auto file = llvm::make_unique<MipsRuntimeFile<ELFT>>(_ctx);
+    if (_ctx.isDynamic()) {
+      file->addAbsoluteAtom("_GLOBAL_OFFSET_TABLE_");
+      file->addAbsoluteAtom("_gp");
+      file->addAbsoluteAtom("_gp_disp");
+      file->addAbsoluteAtom("__gnu_local_gp");
+    }
+    return file;
+  }
+
+  bool isDynSymEntryRequired(const SharedLibraryAtom *sla) const {
+    return _targetLayout.isReferencedByDefinedAtom(sla);
+  }
+
+  bool isNeededTagRequired(const SharedLibraryAtom *sla) const {
+    return _targetLayout.isReferencedByDefinedAtom(sla) ||
+           _targetLayout.isCopied(sla);
+  }
+
 private:
-  MipsLinkingContext &_context;
+  MipsLinkingContext &_ctx;
   MipsTargetLayout<ELFT> &_targetLayout;
+
+  void setAtomValue(StringRef name, uint64_t value) {
+    auto atom = _targetLayout.findAbsoluteAtom(name);
+    assert(atom != _targetLayout.absoluteAtoms().end());
+    (*atom)->_virtualAddr = value;
+  }
 };
 
 } // elf

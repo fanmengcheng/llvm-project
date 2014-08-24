@@ -47,11 +47,10 @@ using namespace polly;
 // TODO: We currently always create the GuardBB. If we can prove the loop is
 //       always executed at least once, we can get rid of this branch.
 Value *polly::createLoop(Value *LB, Value *UB, Value *Stride,
-                         PollyIRBuilder &Builder, Pass *P, BasicBlock *&ExitBB,
+                         PollyIRBuilder &Builder, Pass *P, LoopInfo &LI,
+                         DominatorTree &DT, BasicBlock *&ExitBB,
                          ICmpInst::Predicate Predicate,
                          LoopAnnotator *Annotator, bool Parallel) {
-  DominatorTree &DT = P->getAnalysis<DominatorTreeWrapperPass>().getDomTree();
-  LoopInfo &LI = P->getAnalysis<LoopInfo>();
   Function *F = Builder.GetInsertBlock()->getParent();
   LLVMContext &Context = F->getContext();
 
@@ -229,7 +228,7 @@ Function *OMPGenerator::createSubfunctionDefinition() {
   Function *FN = Function::Create(FT, Function::InternalLinkage,
                                   F->getName() + ".omp_subfn", M);
   // Do not run any polly pass on the new function.
-  P->getAnalysis<polly::ScopDetection>().markFunctionAsInvalid(FN);
+  FN->addFnAttr(PollySkipFnAttr);
 
   Function::arg_iterator AI = FN->arg_begin();
   AI->setName("omp.userContext");
@@ -240,8 +239,8 @@ Function *OMPGenerator::createSubfunctionDefinition() {
 Value *OMPGenerator::loadValuesIntoStruct(SetVector<Value *> &Values) {
   std::vector<Type *> Members;
 
-  for (unsigned i = 0; i < Values.size(); i++)
-    Members.push_back(Values[i]->getType());
+  for (Value *V : Values)
+    Members.push_back(V->getType());
 
   StructType *Ty = StructType::get(Builder.getContext(), Members);
   Value *Struct = Builder.CreateAlloca(Ty, 0, "omp.userContext");
@@ -321,7 +320,8 @@ Value *OMPGenerator::createSubfunction(Value *Stride, Value *StructData,
 
   Builder.CreateBr(CheckNextBB);
   Builder.SetInsertPoint(--Builder.GetInsertPoint());
-  IV = createLoop(LowerBound, UpperBound, Stride, Builder, P, AfterBB,
+  LoopInfo &LI = P->getAnalysis<LoopInfo>();
+  IV = createLoop(LowerBound, UpperBound, Stride, Builder, P, LI, DT, AfterBB,
                   ICmpInst::ICMP_SLE);
 
   BasicBlock::iterator LoopBody = Builder.GetInsertPoint();

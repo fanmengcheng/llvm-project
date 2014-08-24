@@ -37,12 +37,14 @@ set(LLVM_TEST_DEPENDS
           llvm-mc
           llvm-mcmarkup
           llvm-nm
+          llvm-size
           llvm-objdump
           llvm-profdata
           llvm-readobj
           llvm-rtdyld
           llvm-symbolizer
           llvm-tblgen
+          llvm-vtabledump
           macho-dump
           opt
           FileCheck
@@ -50,6 +52,7 @@ set(LLVM_TEST_DEPENDS
           not
           yaml2obj
           obj2yaml
+          verify-uselistorder
         )
 
 # If Intel JIT events are supported, depend on a tool that tests the listener.

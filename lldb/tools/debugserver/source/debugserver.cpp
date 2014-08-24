@@ -23,6 +23,11 @@
 #include <netinet/tcp.h>
 #include <sys/un.h>
 #include <sys/types.h>
+#include <crt_externs.h> // for _NSGetEnviron()
+
+#if defined (__APPLE__)
+#include <sched.h>
+#endif
 
 #include "CFString.h"
 #include "DNB.h"
@@ -862,6 +867,8 @@ static struct option g_long_options[] =
     { "unix-socket",        required_argument,  NULL,               'u' },  // If we need to handshake with our parent process, an option will be passed down that specifies a unix socket name to use
     { "named-pipe",         required_argument,  NULL,               'P' },
     { "reverse-connect",    no_argument,        NULL,               'R' },
+    { "env",                required_argument,  NULL,               'e' },  // When debugserver launches the process, set a single environment entry as specified by the option value ("./debugserver -e FOO=1 -e BAR=2 localhost:1234 -- /bin/ls")
+    { "forward-env",        no_argument,        NULL,               'F' },  // When debugserver launches the process, forward debugserver's current environment variables to the child process ("./debugserver -F localhost:1234 -- /bin/ls"
     { NULL,                 0,                  NULL,               0   }
 };
 
@@ -873,6 +880,19 @@ int
 main (int argc, char *argv[])
 {
     const char *argv_sub_zero = argv[0]; // save a copy of argv[0] for error reporting post-launch
+
+#if defined (__APPLE__)
+    pthread_setname_np ("main thread");
+#if defined (__arm__) || defined (__arm64__) || defined (__aarch64__)
+    struct sched_param thread_param;
+    int thread_sched_policy;
+    if (pthread_getschedparam(pthread_self(), &thread_sched_policy, &thread_param) == 0) 
+    {
+        thread_param.sched_priority = 47;
+        pthread_setschedparam(pthread_self(), thread_sched_policy, &thread_param);
+    }
+#endif
+#endif
 
     g_isatty = ::isatty (STDIN_FILENO);
 
@@ -1193,6 +1213,21 @@ main (int argc, char *argv[])
                 named_pipe_path.assign (optarg);
                 break;
                 
+            case 'e':
+                // Pass a single specified environment variable down to the process that gets launched
+                remote->Context().PushEnvironment(optarg);
+                break;
+            
+            case 'F':
+                // Pass the current environment down to the process that gets launched
+                {
+                    char **host_env = *_NSGetEnviron();
+                    char *env_entry;
+                    size_t i;
+                    for (i=0; (env_entry = host_env[i]) != NULL; ++i)
+                        remote->Context().PushEnvironment(env_entry);
+                }
+                break;
         }
     }
     

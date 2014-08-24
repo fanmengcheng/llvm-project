@@ -22,6 +22,7 @@
 #include "MCTargetDesc/ARMAddressingModes.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
+#include "llvm/CodeGen/MachineInstrBundle.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/Support/CommandLine.h"
@@ -697,9 +698,6 @@ void ARMExpandPseudo::ExpandMOV32BitImm(MachineBasicBlock &MBB,
     HI16Opc = ARM::MOVTi16;
   }
 
-  if (RequiresBundling)
-    BuildMI(MBB, MBBI, MI.getDebugLoc(), TII->get(TargetOpcode::BUNDLE));
-
   LO16 = BuildMI(MBB, MBBI, MI.getDebugLoc(), TII->get(LO16Opc), DstReg);
   HI16 = BuildMI(MBB, MBBI, MI.getDebugLoc(), TII->get(HI16Opc))
     .addReg(DstReg, RegState::Define | getDeadRegState(DstIsDead))
@@ -735,10 +733,8 @@ void ARMExpandPseudo::ExpandMOV32BitImm(MachineBasicBlock &MBB,
   LO16.addImm(Pred).addReg(PredReg);
   HI16.addImm(Pred).addReg(PredReg);
 
-  if (RequiresBundling) {
-    LO16->bundleWithPred();
-    HI16->bundleWithPred();
-  }
+  if (RequiresBundling)
+    finalizeBundle(MBB, &*LO16, &*MBBI);
 
   TransferImpOps(MI, LO16, HI16);
   MI.eraseFromParent();
@@ -871,7 +867,7 @@ bool ARMExpandPseudo::ExpandMI(MachineBasicBlock &MBB,
       if (RI.hasBasePointer(MF)) {
         int32_t NumBytes = AFI->getFramePtrSpillOffset();
         unsigned FramePtr = RI.getFrameRegister(MF);
-        assert(MF.getTarget().getFrameLowering()->hasFP(MF) &&
+        assert(MF.getSubtarget().getFrameLowering()->hasFP(MF) &&
                "base pointer without frame pointer?");
 
         if (AFI->isThumb2Function()) {
@@ -931,10 +927,16 @@ bool ARMExpandPseudo::ExpandMI(MachineBasicBlock &MBB,
     }
     case ARM::tTPsoft:
     case ARM::TPsoft: {
-      MachineInstrBuilder MIB =
-        BuildMI(MBB, MBBI, MI.getDebugLoc(),
-                TII->get(Opcode == ARM::tTPsoft ? ARM::tBL : ARM::BL))
-        .addExternalSymbol("__aeabi_read_tp", 0);
+      MachineInstrBuilder MIB;
+      if (Opcode == ARM::tTPsoft)
+        MIB = BuildMI(MBB, MBBI, MI.getDebugLoc(),
+                      TII->get( ARM::tBL))
+              .addImm((unsigned)ARMCC::AL).addReg(0)
+              .addExternalSymbol("__aeabi_read_tp", 0);
+      else
+        MIB = BuildMI(MBB, MBBI, MI.getDebugLoc(),
+                      TII->get( ARM::BL))
+              .addExternalSymbol("__aeabi_read_tp", 0);
 
       MIB->setMemRefs(MI.memoperands_begin(), MI.memoperands_end());
       TransferImpOps(MI, MIB, MIB);
@@ -1341,8 +1343,9 @@ bool ARMExpandPseudo::ExpandMBB(MachineBasicBlock &MBB) {
 
 bool ARMExpandPseudo::runOnMachineFunction(MachineFunction &MF) {
   const TargetMachine &TM = MF.getTarget();
-  TII = static_cast<const ARMBaseInstrInfo*>(TM.getInstrInfo());
-  TRI = TM.getRegisterInfo();
+  TII = static_cast<const ARMBaseInstrInfo *>(
+      TM.getSubtargetImpl()->getInstrInfo());
+  TRI = TM.getSubtargetImpl()->getRegisterInfo();
   STI = &TM.getSubtarget<ARMSubtarget>();
   AFI = MF.getInfo<ARMFunctionInfo>();
 

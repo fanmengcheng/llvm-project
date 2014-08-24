@@ -19,6 +19,7 @@
 
 namespace clang {
 
+class ASTContext;
 class CompilerInstance;
 namespace ast_matchers {
 class MatchFinder;
@@ -49,34 +50,59 @@ struct ClangTidyMessage {
 ///
 /// FIXME: Make Diagnostics flexible enough to support this directly.
 struct ClangTidyError {
-  ClangTidyError(StringRef CheckName);
+  enum Level {
+    Warning = DiagnosticsEngine::Warning,
+    Error = DiagnosticsEngine::Error
+  };
+
+  ClangTidyError(StringRef CheckName, Level DiagLevel);
 
   std::string CheckName;
   ClangTidyMessage Message;
   tooling::Replacements Fix;
   SmallVector<ClangTidyMessage, 1> Notes;
+
+  Level DiagLevel;
 };
 
-/// \brief Filters checks by name.
-class ChecksFilter {
+/// \brief Read-only set of strings represented as a list of positive and
+/// negative globs. Positive globs add all matched strings to the set, negative
+/// globs remove them in the order of appearance in the list.
+class GlobList {
 public:
-  ChecksFilter(const ClangTidyOptions& Options);
-  bool isCheckEnabled(StringRef Name);
+  /// \brief \p GlobList is a comma-separated list of globs (only '*'
+  /// metacharacter is supported) with optional '-' prefix to denote exclusion.
+  GlobList(StringRef Globs);
+
+  /// \brief Returns \c true if the pattern matches \p S. The result is the last
+  /// matching glob's Positive flag.
+  bool contains(StringRef S) { return contains(S, false); }
 
 private:
-  llvm::Regex EnableChecks;
-  llvm::Regex DisableChecks;
+  bool contains(StringRef S, bool Contains);
+
+  bool Positive;
+  llvm::Regex Regex;
+  std::unique_ptr<GlobList> NextGlob;
 };
 
+/// \brief Contains displayed and ignored diagnostic counters for a ClangTidy
+/// run.
 struct ClangTidyStats {
   ClangTidyStats()
       : ErrorsDisplayed(0), ErrorsIgnoredCheckFilter(0), ErrorsIgnoredNOLINT(0),
-        ErrorsIgnoredNonUserCode(0) {}
+        ErrorsIgnoredNonUserCode(0), ErrorsIgnoredLineFilter(0) {}
 
   unsigned ErrorsDisplayed;
   unsigned ErrorsIgnoredCheckFilter;
   unsigned ErrorsIgnoredNOLINT;
   unsigned ErrorsIgnoredNonUserCode;
+  unsigned ErrorsIgnoredLineFilter;
+
+  unsigned errorsIgnored() const {
+    return ErrorsIgnoredNOLINT + ErrorsIgnoredCheckFilter +
+           ErrorsIgnoredNonUserCode + ErrorsIgnoredLineFilter;
+  }
 };
 
 /// \brief Every \c ClangTidyCheck reports errors through a \c DiagnosticEngine
@@ -90,8 +116,10 @@ struct ClangTidyStats {
 /// \endcode
 class ClangTidyContext {
 public:
-  ClangTidyContext(SmallVectorImpl<ClangTidyError> *Errors,
-                   const ClangTidyOptions &Options);
+  /// \brief Initializes \c ClangTidyContext instance.
+  ///
+  /// Takes ownership of the \c OptionsProvider.
+  ClangTidyContext(ClangTidyOptionsProvider *OptionsProvider);
 
   /// \brief Report any errors detected using this method.
   ///
@@ -102,35 +130,58 @@ public:
                          StringRef Message,
                          DiagnosticIDs::Level Level = DiagnosticIDs::Warning);
 
-  /// \brief Sets the \c DiagnosticsEngine so that Diagnostics can be generated
-  /// correctly.
-  ///
-  /// This is called from the \c ClangTidyCheck base class.
-  void setDiagnosticsEngine(DiagnosticsEngine *Engine);
-
   /// \brief Sets the \c SourceManager of the used \c DiagnosticsEngine.
   ///
   /// This is called from the \c ClangTidyCheck base class.
   void setSourceManager(SourceManager *SourceMgr);
 
+  /// \brief Should be called when starting to process new translation unit.
+  void setCurrentFile(StringRef File);
+
+  /// \brief Sets ASTContext for the current translation unit.
+  void setASTContext(ASTContext *Context);
+
   /// \brief Returns the name of the clang-tidy check which produced this
   /// diagnostic ID.
   StringRef getCheckName(unsigned DiagnosticID) const;
 
-  ChecksFilter &getChecksFilter() { return Filter; }
-  const ClangTidyOptions &getOptions() const { return Options; }
+  /// \brief Returns check filter for the \c CurrentFile.
+  GlobList &getChecksFilter();
+
+  /// \brief Returns global options.
+  const ClangTidyGlobalOptions &getGlobalOptions() const;
+
+  /// \brief Returns options for \c CurrentFile.
+  const ClangTidyOptions &getOptions() const;
+
+  /// \brief Returns \c ClangTidyStats containing issued and ignored diagnostic
+  /// counters.
   const ClangTidyStats &getStats() const { return Stats; }
 
-private:
-  friend class ClangTidyDiagnosticConsumer; // Calls storeError().
+  /// \brief Returns all collected errors.
+  const std::vector<ClangTidyError> &getErrors() const { return Errors; }
 
-  /// \brief Store a \c ClangTidyError.
+  /// \brief Clears collected errors.
+  void clearErrors() { Errors.clear(); }
+
+private:
+  // Calls setDiagnosticsEngine() and storeError().
+  friend class ClangTidyDiagnosticConsumer;
+
+  /// \brief Sets the \c DiagnosticsEngine so that Diagnostics can be generated
+  /// correctly.
+  void setDiagnosticsEngine(DiagnosticsEngine *Engine);
+
+  /// \brief Store an \p Error.
   void storeError(const ClangTidyError &Error);
 
-  SmallVectorImpl<ClangTidyError> *Errors;
+  std::vector<ClangTidyError> Errors;
   DiagnosticsEngine *DiagEngine;
-  ClangTidyOptions Options;
-  ChecksFilter Filter;
+  std::unique_ptr<ClangTidyOptionsProvider> OptionsProvider;
+
+  std::string CurrentFile;
+  std::unique_ptr<GlobList> CheckFilter;
+
   ClangTidyStats Stats;
 
   llvm::DenseMap<unsigned, std::string> CheckNamesByDiagnosticID;
@@ -151,18 +202,27 @@ public:
   void HandleDiagnostic(DiagnosticsEngine::Level DiagLevel,
                         const Diagnostic &Info) override;
 
-  // Flushes the internal diagnostics buffer to the ClangTidyContext.
+  /// \brief Sets \c HeaderFilter to the value configured for this file.
+  void BeginSourceFile(const LangOptions &LangOpts,
+                       const Preprocessor *PP) override;
+
+  /// \brief Flushes the internal diagnostics buffer to the ClangTidyContext.
   void finish() override;
 
 private:
   void finalizeLastError();
-  bool relatesToUserCode(SourceLocation Location);
+
+  /// \brief Updates \c LastErrorRelatesToUserCode and LastErrorPassesLineFilter
+  /// according to the diagnostic \p Location.
+  void checkFilters(SourceLocation Location);
+  bool passesLineFilter(StringRef FileName, unsigned LineNumber) const;
 
   ClangTidyContext &Context;
-  llvm::Regex HeaderFilter;
   std::unique_ptr<DiagnosticsEngine> Diags;
   SmallVector<ClangTidyError, 8> Errors;
+  std::unique_ptr<llvm::Regex> HeaderFilter;
   bool LastErrorRelatesToUserCode;
+  bool LastErrorPassesLineFilter;
 };
 
 } // end namespace tidy

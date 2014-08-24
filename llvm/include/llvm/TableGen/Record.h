@@ -137,12 +137,12 @@ inline raw_ostream &operator<<(raw_ostream &OS, const RecTy &Ty) {
   return OS;
 }
 
-
 /// BitRecTy - 'bit' - Represent a single bit
 ///
 class BitRecTy : public RecTy {
   static BitRecTy Shared;
   BitRecTy() : RecTy(BitRecTyKind) {}
+
 public:
   static bool classof(const RecTy *RT) {
     return RT->getRecTyKind() == BitRecTyKind;
@@ -174,12 +174,12 @@ public:
   bool baseClassOf(const RecTy*) const override;
 };
 
-
 /// BitsRecTy - 'bits<n>' - Represent a fixed number of bits
 ///
 class BitsRecTy : public RecTy {
   unsigned Size;
   explicit BitsRecTy(unsigned Sz) : RecTy(BitsRecTyKind), Size(Sz) {}
+
 public:
   static bool classof(const RecTy *RT) {
     return RT->getRecTyKind() == BitsRecTyKind;
@@ -198,27 +198,27 @@ public:
   Init *convertValue(VarBitInit *VB) override { return nullptr; }
   Init *convertValue(   DefInit *DI) override { return nullptr; }
   Init *convertValue(   DagInit *DI) override { return nullptr; }
-  Init *convertValue( UnOpInit *UI) override { return RecTy::convertValue(UI);}
+  Init *convertValue(  UnOpInit *UI) override { return RecTy::convertValue(UI);}
   Init *convertValue( BinOpInit *UI) override { return RecTy::convertValue(UI);}
-  Init *convertValue( TernOpInit *UI) override {return RecTy::convertValue(UI);}
+  Init *convertValue(TernOpInit *UI) override { return RecTy::convertValue(UI);}
   Init *convertValue( TypedInit *TI) override;
-  Init *convertValue(   VarInit *VI) override{ return RecTy::convertValue(VI);}
-  Init *convertValue( FieldInit *FI) override{ return RecTy::convertValue(FI);}
+  Init *convertValue(   VarInit *VI) override { return RecTy::convertValue(VI);}
+  Init *convertValue( FieldInit *FI) override { return RecTy::convertValue(FI);}
 
   std::string getAsString() const override;
 
-  bool typeIsConvertibleTo(const RecTy *RHS) const override{
+  bool typeIsConvertibleTo(const RecTy *RHS) const override {
     return RHS->baseClassOf(this);
   }
   bool baseClassOf(const RecTy*) const override;
 };
-
 
 /// IntRecTy - 'int' - Represent an integer value of no particular size
 ///
 class IntRecTy : public RecTy {
   static IntRecTy Shared;
   IntRecTy() : RecTy(IntRecTyKind) {}
+
 public:
   static bool classof(const RecTy *RT) {
     return RT->getRecTyKind() == IntRecTyKind;
@@ -256,6 +256,7 @@ public:
 class StringRecTy : public RecTy {
   static StringRecTy Shared;
   StringRecTy() : RecTy(StringRecTyKind) {}
+
 public:
   static bool classof(const RecTy *RT) {
     return RT->getRecTyKind() == StringRecTyKind;
@@ -294,6 +295,7 @@ class ListRecTy : public RecTy {
   RecTy *Ty;
   explicit ListRecTy(RecTy *T) : RecTy(ListRecTyKind), Ty(T) {}
   friend ListRecTy *RecTy::getListTy();
+
 public:
   static bool classof(const RecTy *RT) {
     return RT->getRecTyKind() == ListRecTyKind;
@@ -311,16 +313,16 @@ public:
   Init *convertValue(VarBitInit *VB) override { return nullptr; }
   Init *convertValue(   DefInit *DI) override { return nullptr; }
   Init *convertValue(   DagInit *DI) override { return nullptr; }
-  Init *convertValue( UnOpInit *UI) override { return RecTy::convertValue(UI);}
+  Init *convertValue(  UnOpInit *UI) override { return RecTy::convertValue(UI);}
   Init *convertValue( BinOpInit *UI) override { return RecTy::convertValue(UI);}
-  Init *convertValue( TernOpInit *UI) override{ return RecTy::convertValue(UI);}
+  Init *convertValue(TernOpInit *UI) override { return RecTy::convertValue(UI);}
   Init *convertValue( TypedInit *TI) override;
   Init *convertValue(   VarInit *VI) override { return RecTy::convertValue(VI);}
   Init *convertValue( FieldInit *FI) override { return RecTy::convertValue(FI);}
 
   std::string getAsString() const override;
 
-  bool typeIsConvertibleTo(const RecTy *RHS) const override{
+  bool typeIsConvertibleTo(const RecTy *RHS) const override {
     return RHS->baseClassOf(this);
   }
 
@@ -332,6 +334,7 @@ public:
 class DagRecTy : public RecTy {
   static DagRecTy Shared;
   DagRecTy() : RecTy(DagRecTyKind) {}
+
 public:
   static bool classof(const RecTy *RT) {
     return RT->getRecTyKind() == DagRecTyKind;
@@ -357,11 +360,10 @@ public:
 
   std::string getAsString() const override { return "dag"; }
 
-  bool typeIsConvertibleTo(const RecTy *RHS) const override{
+  bool typeIsConvertibleTo(const RecTy *RHS) const override {
     return RHS->baseClassOf(this);
   }
 };
-
 
 /// RecordRecTy - '[classname]' - Represent an instance of a class, such as:
 /// (R32 X = EAX).
@@ -370,6 +372,7 @@ class RecordRecTy : public RecTy {
   Record *Rec;
   explicit RecordRecTy(Record *R) : RecTy(RecordRecTyKind), Rec(R) {}
   friend class Record;
+
 public:
   static bool classof(const RecTy *RT) {
     return RT->getRecTyKind() == RecordRecTyKind;
@@ -429,8 +432,8 @@ protected:
   /// readability for really no benefit.
   enum InitKind {
     IK_BitInit,
-    IK_BitsInit,
     IK_FirstTypedInit,
+    IK_BitsInit,
     IK_DagInit,
     IK_DefInit,
     IK_FieldInit,
@@ -589,7 +592,6 @@ public:
                                             unsigned Elt) const = 0;
 };
 
-
 /// UnsetInit - ? - Represents an uninitialized value
 ///
 class UnsetInit : public Init {
@@ -615,7 +617,6 @@ public:
   bool isComplete() const override { return false; }
   std::string getAsString() const override { return "?"; }
 };
-
 
 /// BitInit - true/false - Represent a concrete initializer for a bit.
 ///
@@ -650,11 +651,12 @@ public:
 /// BitsInit - { a, b, c } - Represents an initializer for a BitsRecTy value.
 /// It contains a vector of bits, whose size is determined by the type.
 ///
-class BitsInit : public Init, public FoldingSetNode {
+class BitsInit : public TypedInit, public FoldingSetNode {
   std::vector<Init*> Bits;
 
   BitsInit(ArrayRef<Init *> Range)
-    : Init(IK_BitsInit), Bits(Range.begin(), Range.end()) {}
+    : TypedInit(IK_BitsInit, BitsRecTy::get(Range.size())),
+      Bits(Range.begin(), Range.end()) {}
 
   BitsInit(const BitsInit &Other) LLVM_DELETED_FUNCTION;
   BitsInit &operator=(const BitsInit &Other) LLVM_DELETED_FUNCTION;
@@ -687,6 +689,14 @@ public:
   }
   std::string getAsString() const override;
 
+  /// resolveListElementReference - This method is used to implement
+  /// VarListElementInit::resolveReferences.  If the list element is resolvable
+  /// now, we return the resolved value, otherwise we return null.
+  Init *resolveListElementReference(Record &R, const RecordVal *RV,
+                                    unsigned Elt) const override {
+    llvm_unreachable("Illegal element reference off bits<n>");
+  }
+
   Init *resolveReferences(Record &R, const RecordVal *RV) const override;
 
   Init *getBit(unsigned Bit) const override {
@@ -694,7 +704,6 @@ public:
     return Bits[Bit];
   }
 };
-
 
 /// IntInit - 7 - Represent an initialization by a literal integer value.
 ///
@@ -735,7 +744,6 @@ public:
     return BitInit::get((Value & (1ULL << Bit)) != 0);
   }
 };
-
 
 /// StringInit - "foo" - Represent an initialization by a string value.
 ///
@@ -781,6 +789,7 @@ public:
 ///
 class ListInit : public TypedInit, public FoldingSetNode {
   std::vector<Init*> Values;
+
 public:
   typedef std::vector<Init*>::const_iterator const_iterator;
 
@@ -843,7 +852,6 @@ public:
   }
 };
 
-
 /// OpInit - Base class for operators
 ///
 class OpInit : public TypedInit {
@@ -878,12 +886,12 @@ public:
   Init *getBit(unsigned Bit) const override;
 };
 
-
 /// UnOpInit - !op (X) - Transform an init.
 ///
 class UnOpInit : public OpInit {
 public:
   enum UnaryOp { CAST, HEAD, TAIL, EMPTY };
+
 private:
   UnaryOp Opc;
   Init *LHS;
@@ -929,7 +937,7 @@ public:
 ///
 class BinOpInit : public OpInit {
 public:
-  enum BinaryOp { ADD, SHL, SRA, SRL, LISTCONCAT, STRCONCAT, CONCAT, EQ };
+  enum BinaryOp { ADD, AND, SHL, SRA, SRL, LISTCONCAT, STRCONCAT, CONCAT, EQ };
 
 private:
   BinaryOp Opc;
@@ -983,6 +991,7 @@ public:
 class TernOpInit : public OpInit {
 public:
   enum TernaryOp { SUBST, FOREACH, IF };
+
 private:
   TernaryOp Opc;
   Init *LHS, *MHS, *RHS;
@@ -1039,7 +1048,6 @@ public:
   std::string getAsString() const override;
 };
 
-
 /// VarInit - 'Opcode' - Represent a reference to an entire variable object.
 ///
 class VarInit : public TypedInit {
@@ -1088,7 +1096,6 @@ public:
 
   std::string getAsString() const override { return getName(); }
 };
-
 
 /// VarBitInit - Opcode{0} - Represent access to one bit of a variable or field.
 ///
@@ -1214,7 +1221,6 @@ public:
     llvm_unreachable("Illegal element reference off def");
   }
 };
-
 
 /// FieldInit - X.Y - Represent a reference to a subfield of a variable
 ///
@@ -1342,6 +1348,7 @@ class RecordVal {
   RecTy *Ty;
   unsigned Prefix;
   Init *Value;
+
 public:
   RecordVal(Init *N, RecTy *T, unsigned P);
   RecordVal(const std::string &N, RecTy *T, unsigned P);
@@ -1398,7 +1405,6 @@ class Record {
   void checkName();
 
 public:
-
   // Constructs a record.
   explicit Record(const std::string &N, ArrayRef<SMLoc> locs,
                   RecordKeeper &records, bool Anonymous = false) :
@@ -1423,9 +1429,7 @@ public:
 
   ~Record() {}
 
-
   static unsigned getNewUID() { return LastID++; }
-
 
   unsigned getID() const { return ID; }
 

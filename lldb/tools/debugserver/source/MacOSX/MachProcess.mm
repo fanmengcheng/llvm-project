@@ -22,6 +22,7 @@
 #include <sys/stat.h>
 #include <sys/sysctl.h>
 #include <unistd.h>
+#include <pthread.h>
 #include "MacOSX/CFUtils.h"
 #include "SysSignal.h"
 
@@ -126,6 +127,7 @@ MachProcess::MachProcess() :
     m_profile_data_mutex(PTHREAD_MUTEX_RECURSIVE),
     m_profile_data      (),
     m_thread_list        (),
+    m_activities         (),
     m_exception_messages (),
     m_exception_messages_mutex (PTHREAD_MUTEX_RECURSIVE),
     m_state             (eStateUnloaded),
@@ -161,7 +163,7 @@ MachProcess::SetProcessID(pid_t pid)
         m_pid = ::getpid ();
     else
         m_pid = pid;
-    return m_pid;    // Return actualy PID in case a zero pid was passed in
+    return m_pid;    // Return actually PID in case a zero pid was passed in
 }
 
 nub_state_t
@@ -217,6 +219,30 @@ MachProcess::SyncThreadState (nub_thread_t tid)
     else
         return false;
     
+}
+
+ThreadInfo::QoS
+MachProcess::GetRequestedQoS (nub_thread_t tid, nub_addr_t tsd, uint64_t dti_qos_class_index)
+{
+    return m_thread_list.GetRequestedQoS (tid, tsd, dti_qos_class_index);
+}
+
+nub_addr_t
+MachProcess::GetPThreadT (nub_thread_t tid)
+{
+    return m_thread_list.GetPThreadT (tid);
+}
+
+nub_addr_t
+MachProcess::GetDispatchQueueT (nub_thread_t tid)
+{
+    return m_thread_list.GetDispatchQueueT (tid);
+}
+
+nub_addr_t
+MachProcess::GetTSDAddressForThread (nub_thread_t tid, uint64_t plo_pthread_tsd_base_address_offset, uint64_t plo_pthread_tsd_base_offset, uint64_t plo_pthread_tsd_entry_size)
+{
+    return m_thread_list.GetTSDAddressForThread (tid, plo_pthread_tsd_base_address_offset, plo_pthread_tsd_base_offset, plo_pthread_tsd_entry_size);
 }
 
 nub_thread_t
@@ -365,6 +391,7 @@ MachProcess::Clear(bool detaching)
         PTHREAD_MUTEX_LOCKER(locker, m_exception_messages_mutex);
         m_exception_messages.clear();
     }
+    m_activities.Clear();
     if (m_profile_thread)
     {
         pthread_join(m_profile_thread, NULL);
@@ -605,6 +632,7 @@ MachProcess::Detach()
 
     {
         m_thread_actions.Clear();
+        m_activities.Clear();
         DNBThreadResumeAction thread_action;
         thread_action.tid = m_thread_list.ThreadIDAtIndex (thread_idx);
         thread_action.state = eStateRunning;
@@ -929,7 +957,7 @@ MachProcess::DisableBreakpoint(nub_addr_t addr, bool remove)
         const uint8_t * const break_op = DNBArchProtocol::GetBreakpointOpcode (bp->ByteSize());
         if (break_op_size > 0)
         {
-            // Clear a software breakoint instruction
+            // Clear a software breakpoint instruction
             uint8_t curr_break_op[break_op_size];
             bool break_op_found = false;
 
@@ -1250,6 +1278,7 @@ MachProcess::ExceptionMessageBundleComplete()
                     DNBArchProtocol::SetArchitecture (process_cpu_type);
                 }
                 m_thread_list.Clear();
+                m_activities.Clear();
                 m_breakpoints.DisableAll();
             }
             
@@ -1288,6 +1317,7 @@ MachProcess::ExceptionMessageBundleComplete()
         // Let all threads recover from stopping and do any clean up based
         // on the previous thread state (if any).
         m_thread_list.ProcessDidStop(this);
+        m_activities.Clear();
 
         // Let each thread know of any exceptions
         for (i=0; i<m_exception_messages.size(); ++i)
@@ -1416,6 +1446,10 @@ MachProcess::STDIOThread(void *arg)
     MachProcess *proc = (MachProcess*) arg;
     DNBLogThreadedIf(LOG_PROCESS, "MachProcess::%s ( arg = %p ) thread starting...", __FUNCTION__, arg);
 
+#if defined (__APPLE__)
+    pthread_setname_np ("stdio monitoring thread");
+#endif
+
     // We start use a base and more options so we can control if we
     // are currently using a timeout on the mach_msg. We do this to get a
     // bunch of related exceptions on our exception port so we can process
@@ -1427,7 +1461,7 @@ MachProcess::STDIOThread(void *arg)
     // MACH_RCV_TIMEOUT option with a zero timeout to grab all other current
     // exceptions for our process. After we have received the last pending
     // exception, we will get a timeout which enables us to then notify
-    // our main thread that we have an exception bundle avaiable. We then wait
+    // our main thread that we have an exception bundle available. We then wait
     // for the main thread to tell this exception thread to start trying to get
     // exceptions messages again and we start again with a mach_msg read with
     // infinite timeout.
@@ -1582,6 +1616,10 @@ MachProcess::ProfileThread(void *arg)
     MachProcess *proc = (MachProcess*) arg;
     DNBLogThreadedIf(LOG_PROCESS, "MachProcess::%s ( arg = %p ) thread starting...", __FUNCTION__, arg);
 
+#if defined (__APPLE__)
+    pthread_setname_np ("performance profiling thread");
+#endif
+
     while (proc->IsProfilingEnabled())
     {
         nub_state_t state = proc->GetState();
@@ -1664,6 +1702,18 @@ MachProcess::AttachForDebug (pid_t pid, char *err_str, size_t err_len)
         }
     }
     return INVALID_NUB_PROCESS;
+}
+
+Genealogy::ThreadActivitySP 
+MachProcess::GetGenealogyInfoForThread (nub_thread_t tid, bool &timed_out)
+{
+    return m_activities.GetGenealogyInfoForThread (m_pid, tid, m_thread_list, m_task.TaskPort(), timed_out);
+}
+
+Genealogy::ProcessExecutableInfoSP
+MachProcess::GetGenealogyImageInfo (size_t idx)
+{
+    return m_activities.GetProcessExecutableInfosAtIndex (idx);
 }
 
 // Do the process specific setup for attach.  If this returns NULL, then there's no
@@ -1913,7 +1963,7 @@ MachProcess::LaunchForDebug
     const char *path,
     char const *argv[],
     char const *envp[],
-    const char *working_directory, // NULL => dont' change, non-NULL => set working directory for inferior to this
+    const char *working_directory, // NULL => don't change, non-NULL => set working directory for inferior to this
     const char *stdin_path,
     const char *stdout_path,
     const char *stderr_path,

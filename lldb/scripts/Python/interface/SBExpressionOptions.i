@@ -92,6 +92,26 @@ public:
     void
     SetTrapExceptions (bool trap_exceptions = true);
     
+    %feature ("docstring", "Sets the language that LLDB should assume the expression is written in") SetLanguage;
+    void
+    SetLanguage (lldb::LanguageType language);
+
+    bool
+    GetGenerateDebugInfo ();
+
+    %feature("docstring", "Sets whether to generate debug information for the expression and also controls if a SBModule is generated.") SetGenerateDebugInfo;
+    void
+    SetGenerateDebugInfo (bool b = true);
+    
+    bool
+    GetSuppressPersistentResult ();
+    
+    %feature("docstring", "Sets whether to produce a persistent result that can be used in future expressions.") SetSuppressPersistentResult;
+    void
+    SetSuppressPersistentResult (bool b = false);
+
+
+
 protected:
 
     SBExpressionOptions (lldb_private::EvaluateExpressionOptions &expression_options);

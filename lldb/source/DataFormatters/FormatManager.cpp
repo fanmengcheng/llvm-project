@@ -21,6 +21,7 @@
 #include "lldb/Interpreter/ScriptInterpreterPython.h"
 #include "lldb/Target/ExecutionContext.h"
 #include "lldb/Target/Platform.h"
+#include "llvm/ADT/STLExtras.h"
 
 using namespace lldb;
 using namespace lldb_private;
@@ -76,8 +77,7 @@ g_format_infos[] =
     { eFormatVoid           , 'v'   , "void"                }
 };
 
-static uint32_t 
-g_num_format_infos = sizeof(g_format_infos)/sizeof(FormatInfo);
+static uint32_t g_num_format_infos = llvm::array_lengthof(g_format_infos);
 
 static bool
 GetFormatFromFormatChar (char format_char, Format &format)
@@ -185,7 +185,11 @@ FormatManager::GetPossibleMatches (ValueObject& valobj,
         reason |= lldb_private::eFormatterChoiceCriterionStrippedBitField;
     }
     entries.push_back({type_name,reason,did_strip_ptr,did_strip_ref,did_strip_typedef});
-    
+
+    ConstString display_type_name(clang_type.GetDisplayTypeName());
+    if (display_type_name != type_name)
+        entries.push_back({display_type_name,reason,did_strip_ptr,did_strip_ref,did_strip_typedef});
+
     for (bool is_rvalue_ref = true, j = true; j && clang_type.IsReferenceType(nullptr, &is_rvalue_ref); j = false)
     {
         ClangASTType non_ref_type = clang_type.GetNonReferenceType();
@@ -579,11 +583,17 @@ GetTypeForCache (ValueObject& valobj,
     return ConstString();
 }
 
-static lldb::TypeFormatImplSP
-GetHardcodedFormat (ValueObject& valobj,
-                    lldb::DynamicValueType use_dynamic)
+lldb::TypeFormatImplSP
+FormatManager::GetHardcodedFormat (ValueObject& valobj,
+                                   lldb::DynamicValueType use_dynamic)
 {
-    return lldb::TypeFormatImplSP();
+    for (const auto& candidate: m_hardcoded_formats)
+    {
+        auto result = candidate(valobj,use_dynamic,*this);
+        if (result)
+            return result;
+    }
+    return nullptr;
 }
 
 lldb::TypeFormatImplSP
@@ -617,7 +627,7 @@ FormatManager::GetFormat (ValueObject& valobj,
             log->Printf("[FormatManager::GetFormat] Search failed. Giving hardcoded a chance.");
         retval = GetHardcodedFormat(valobj, use_dynamic);
     }
-    if (valobj_type)
+    else if (valobj_type)
     {
         if (log)
             log->Printf("[FormatManager::GetFormat] Caching %p for type %s",
@@ -630,11 +640,17 @@ FormatManager::GetFormat (ValueObject& valobj,
     return retval;
 }
 
-static lldb::TypeSummaryImplSP
-GetHardcodedSummaryFormat (ValueObject& valobj,
-                               lldb::DynamicValueType use_dynamic)
+lldb::TypeSummaryImplSP
+FormatManager::GetHardcodedSummaryFormat (ValueObject& valobj,
+                                          lldb::DynamicValueType use_dynamic)
 {
-    return lldb::TypeSummaryImplSP();
+    for (const auto& candidate: m_hardcoded_summaries)
+    {
+        auto result = candidate(valobj,use_dynamic,*this);
+        if (result)
+            return result;
+    }
+    return nullptr;
 }
 
 lldb::TypeSummaryImplSP
@@ -668,7 +684,7 @@ FormatManager::GetSummaryFormat (ValueObject& valobj,
             log->Printf("[FormatManager::GetSummaryFormat] Search failed. Giving hardcoded a chance.");
         retval = GetHardcodedSummaryFormat(valobj, use_dynamic);
     }
-    if (valobj_type)
+    else if (valobj_type)
     {
         if (log)
             log->Printf("[FormatManager::GetSummaryFormat] Caching %p for type %s",
@@ -682,11 +698,17 @@ FormatManager::GetSummaryFormat (ValueObject& valobj,
 }
 
 #ifndef LLDB_DISABLE_PYTHON
-static lldb::SyntheticChildrenSP
-GetHardcodedSyntheticChildren (ValueObject& valobj,
-                               lldb::DynamicValueType use_dynamic)
+lldb::SyntheticChildrenSP
+FormatManager::GetHardcodedSyntheticChildren (ValueObject& valobj,
+                                              lldb::DynamicValueType use_dynamic)
 {
-    return lldb::SyntheticChildrenSP();
+    for (const auto& candidate: m_hardcoded_synthetics)
+    {
+        auto result = candidate(valobj,use_dynamic,*this);
+        if (result)
+            return result;
+    }
+    return nullptr;
 }
 
 lldb::SyntheticChildrenSP
@@ -720,7 +742,7 @@ FormatManager::GetSyntheticChildren (ValueObject& valobj,
             log->Printf("[FormatManager::GetSyntheticChildren] Search failed. Giving hardcoded a chance.");
         retval = GetHardcodedSyntheticChildren(valobj, use_dynamic);
     }
-    if (valobj_type)
+    else if (valobj_type)
     {
         if (log)
             log->Printf("[FormatManager::GetSyntheticChildren] Caching %p for type %s",
@@ -748,12 +770,17 @@ FormatManager::FormatManager() :
     m_coregraphics_category_name(ConstString("CoreGraphics")),
     m_coreservices_category_name(ConstString("CoreServices")),
     m_vectortypes_category_name(ConstString("VectorTypes")),
-    m_appkit_category_name(ConstString("AppKit"))
+    m_appkit_category_name(ConstString("AppKit")),
+    m_hardcoded_formats(),
+    m_hardcoded_summaries(),
+    m_hardcoded_synthetics()
+    
 {
     LoadSystemFormatters();
     LoadLibStdcppFormatters();
     LoadLibcxxFormatters();
     LoadObjCFormatters();
+    LoadHardcodedFormatters();
     
     EnableCategory(m_objc_category_name,TypeCategoryMap::Last);
     EnableCategory(m_corefoundation_category_name,TypeCategoryMap::Last);
@@ -966,6 +993,7 @@ FormatManager::LoadLibcxxFormatters()
     AddCXXSynthetic(libcxx_category_sp, lldb_private::formatters::LibcxxStdListSyntheticFrontEndCreator, "libc++ std::list synthetic children", ConstString("^std::__1::list<.+>(( )?&)?$"), stl_synth_flags, true);
     AddCXXSynthetic(libcxx_category_sp, lldb_private::formatters::LibcxxStdMapSyntheticFrontEndCreator, "libc++ std::map synthetic children", ConstString("^std::__1::map<.+> >(( )?&)?$"), stl_synth_flags, true);
     AddCXXSynthetic(libcxx_category_sp, lldb_private::formatters::LibcxxVectorBoolSyntheticFrontEndCreator, "libc++ std::vector<bool> synthetic children", ConstString("std::__1::vector<std::__1::allocator<bool> >"), stl_synth_flags);
+    AddCXXSynthetic(libcxx_category_sp, lldb_private::formatters::LibcxxVectorBoolSyntheticFrontEndCreator, "libc++ std::vector<bool> synthetic children", ConstString("std::__1::vector<bool, std::__1::allocator<bool> >"), stl_synth_flags);
     AddCXXSynthetic(libcxx_category_sp, lldb_private::formatters::LibcxxStdMapSyntheticFrontEndCreator, "libc++ std::set synthetic children", ConstString("^std::__1::set<.+> >(( )?&)?$"), stl_synth_flags, true);
     AddCXXSynthetic(libcxx_category_sp, lldb_private::formatters::LibcxxStdMapSyntheticFrontEndCreator, "libc++ std::multiset synthetic children", ConstString("^std::__1::multiset<.+> >(( )?&)?$"), stl_synth_flags, true);
     AddCXXSynthetic(libcxx_category_sp, lldb_private::formatters::LibcxxStdMapSyntheticFrontEndCreator, "libc++ std::multimap synthetic children", ConstString("^std::__1::multimap<.+> >(( )?&)?$"), stl_synth_flags, true);
@@ -979,12 +1007,14 @@ FormatManager::LoadLibcxxFormatters()
     AddCXXSynthetic(libcxx_category_sp, lldb_private::formatters::LibcxxSharedPtrSyntheticFrontEndCreator, "weak_ptr synthetic children", ConstString("^(std::__1::)weak_ptr<.+>(( )?&)?$"), stl_synth_flags, true);
     
     stl_summary_flags.SetDontShowChildren(false);stl_summary_flags.SetSkipPointers(false);
+    AddCXXSynthetic(libcxx_category_sp, lldb_private::formatters::LibcxxVectorBoolSyntheticFrontEndCreator, "libc++ std::vector<bool> synthetic children", ConstString("std::__1::vector<bool, std::__1::allocator<bool> >"), stl_synth_flags);
     
     AddCXXSummary(libcxx_category_sp, lldb_private::formatters::LibcxxContainerSummaryProvider, "libc++ std::vector summary provider", ConstString("^std::__1::vector<.+>(( )?&)?$"), stl_summary_flags, true);
     AddCXXSummary(libcxx_category_sp, lldb_private::formatters::LibcxxContainerSummaryProvider, "libc++ std::list summary provider", ConstString("^std::__1::list<.+>(( )?&)?$"), stl_summary_flags, true);
     AddCXXSummary(libcxx_category_sp, lldb_private::formatters::LibcxxContainerSummaryProvider, "libc++ std::map summary provider", ConstString("^std::__1::map<.+>(( )?&)?$"), stl_summary_flags, true);
     AddCXXSummary(libcxx_category_sp, lldb_private::formatters::LibcxxContainerSummaryProvider, "libc++ std::deque summary provider", ConstString("^std::__1::deque<.+>(( )?&)?$"), stl_summary_flags, true);
     AddCXXSummary(libcxx_category_sp, lldb_private::formatters::LibcxxContainerSummaryProvider, "libc++ std::vector<bool> summary provider", ConstString("std::__1::vector<std::__1::allocator<bool> >"), stl_summary_flags);
+    AddCXXSummary(libcxx_category_sp, lldb_private::formatters::LibcxxContainerSummaryProvider, "libc++ std::vector<bool> summary provider", ConstString("std::__1::vector<bool, std::__1::allocator<bool> >"), stl_summary_flags);
     AddCXXSummary(libcxx_category_sp, lldb_private::formatters::LibcxxContainerSummaryProvider, "libc++ std::set summary provider", ConstString("^std::__1::set<.+>(( )?&)?$"), stl_summary_flags, true);
     AddCXXSummary(libcxx_category_sp, lldb_private::formatters::LibcxxContainerSummaryProvider, "libc++ std::multiset summary provider", ConstString("^std::__1::multiset<.+>(( )?&)?$"), stl_summary_flags, true);
     AddCXXSummary(libcxx_category_sp, lldb_private::formatters::LibcxxContainerSummaryProvider, "libc++ std::multimap summary provider", ConstString("^std::__1::multimap<.+>(( )?&)?$"), stl_summary_flags, true);
@@ -997,6 +1027,7 @@ FormatManager::LoadLibcxxFormatters()
     
     AddCXXSynthetic(libcxx_category_sp, lldb_private::formatters::LibCxxVectorIteratorSyntheticFrontEndCreator, "std::vector iterator synthetic children", ConstString("^std::__1::__wrap_iter<.+>$"), stl_synth_flags, true);
     
+    AddCXXSummary(libcxx_category_sp, lldb_private::formatters::LibcxxContainerSummaryProvider, "libc++ std::vector<bool> summary provider", ConstString("std::__1::vector<bool, std::__1::allocator<bool> >"), stl_summary_flags);
     AddCXXSynthetic(libcxx_category_sp, lldb_private::formatters::LibCxxMapIteratorSyntheticFrontEndCreator, "std::map iterator synthetic children", ConstString("^std::__1::__map_iterator<.+>$"), stl_synth_flags, true);
     
     AddFilter(libcxx_category_sp, {"__a_"}, "libc++ std::atomic filter", ConstString("^std::__1::atomic<.*>$"), stl_synth_flags, true);
@@ -1429,4 +1460,18 @@ FormatManager::LoadObjCFormatters()
                      "",
                      ConstString("vBool32"),
                      vector_flags);
+}
+
+void
+FormatManager::LoadHardcodedFormatters()
+{
+    {
+        // insert code to load formats here
+    }
+    {
+        // insert code to load summaries here
+    }
+    {
+        // insert code to load synthetics here
+    }
 }

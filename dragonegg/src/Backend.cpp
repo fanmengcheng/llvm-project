@@ -45,6 +45,7 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/Target/TargetLibraryInfo.h"
+#include "llvm/Target/TargetSubtargetInfo.h"
 #include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #include "llvm-c/Target.h"
@@ -152,7 +153,7 @@ std::vector<Constant *> AttributeAnnotateGlobals;
 /// code generator.
 static FunctionPassManager *PerFunctionPasses = 0;
 static PassManager *PerModulePasses = 0;
-static FunctionPassManager *CodeGenPasses = 0;
+static PassManager *CodeGenPasses = 0;
 
 static void createPerFunctionOptimizationPasses();
 static void createPerModuleOptimizationPasses();
@@ -313,10 +314,10 @@ static bool SizeOfGlobalMatchesDecl(GlobalValue *GV, tree decl) {
   // TODO: Change getTypeSizeInBits for aggregate types so it is no longer
   // rounded up to the alignment.
   uint64_t gcc_size = getInt64(DECL_SIZE(decl), true);
-  const DataLayout *DL = TheTarget->getDataLayout();
+  const DataLayout *DL = TheTarget->getSubtargetImpl()->getDataLayout();
   unsigned Align = 8 * DL->getABITypeAlignment(Ty);
-  return TheTarget->getDataLayout()->getTypeAllocSizeInBits(Ty) ==
-         ((gcc_size + Align - 1) / Align) * Align;
+  return TheTarget->getSubtargetImpl()->getDataLayout()->getTypeAllocSizeInBits(
+             Ty) == ((gcc_size + Align - 1) / Align) * Align;
 }
 #endif
 
@@ -526,15 +527,15 @@ static void CreateTargetMachine(const std::string &TargetTriple) {
 #ifdef LLVM_SET_TARGET_MACHINE_OPTIONS
   LLVM_SET_TARGET_MACHINE_OPTIONS(Options);
 #endif
-
-  TheTarget = TME->createTargetMachine(TargetTriple, CPU, FeatureStr, Options,
-                                       RelocModel, CMModel, CodeGenOptLevel());
-  assert(TheTarget->getDataLayout()->isBigEndian() == BYTES_BIG_ENDIAN);
-  TheTarget->setMCUseCFI(flag_dwarf2_cfi_asm);
   // Binutils does not yet support the use of file directives with an explicit
   // directory.  FIXME: Once GCC learns to detect support for this, condition
   // on what GCC detected.
-  TheTarget->setMCUseDwarfDirectory(false);
+  Options.MCOptions.MCUseDwarfDirectory = false;
+
+  TheTarget = TME->createTargetMachine(TargetTriple, CPU, FeatureStr, Options,
+                                       RelocModel, CMModel, CodeGenOptLevel());
+  assert(TheTarget->getSubtargetImpl()->getDataLayout()->isBigEndian() ==
+         BYTES_BIG_ENDIAN);
 }
 
 /// output_ident - Insert a .ident directive that identifies the plugin.
@@ -582,8 +583,9 @@ static void CreateModule(const std::string &TargetTriple) {
   // Install information about the target triple and data layout into the module
   // for optimizer use.
   TheModule->setTargetTriple(TargetTriple);
-  TheModule->setDataLayout(
-      TheTarget->getDataLayout()->getStringRepresentation());
+  TheModule->setDataLayout(TheTarget->getSubtargetImpl()
+                               ->getDataLayout()
+                               ->getStringRepresentation());
 }
 
 /// flag_default_initialize_globals - Whether global variables with no explicit
@@ -644,7 +646,7 @@ static void InitializeBackend(void) {
   // Create a module to hold the generated LLVM IR.
   CreateModule(TargetTriple);
 
-  TheFolder = new TargetFolder(TheTarget->getDataLayout());
+  TheFolder = new TargetFolder(TheTarget->getSubtargetImpl()->getDataLayout());
 
   if (debug_info_level > DINFO_LEVEL_NONE) {
     TheDebugInfo = new DebugInfo(TheModule);
@@ -781,9 +783,9 @@ static void createPerModuleOptimizationPasses() {
     // FIXME: This is disabled right now until bugs can be worked out.  Reenable
     // this for fast -O0 compiles!
     if (PerModulePasses || 1) {
-      FunctionPassManager *PM = CodeGenPasses =
-          new FunctionPassManager(TheModule);
-      PM->add(new DataLayoutPass(*TheTarget->getDataLayout()));
+      PassManager *PM = CodeGenPasses = new PassManager();
+      PM->add(
+          new DataLayoutPass(*TheTarget->getSubtargetImpl()->getDataLayout()));
       TheTarget->addAnalysisPasses(*PM);
 
 // Request that addPassesToEmitFile run the Verifier after running
@@ -984,9 +986,11 @@ static void emit_alias(tree decl, tree target) {
   GlobalValue::LinkageTypes Linkage = GetLinkageForAlias(decl);
 
   if (Linkage != GlobalValue::InternalLinkage && !IsWeakRef) {
-    // Create the LLVM alias.
-    GlobalAlias *GA =
-        new GlobalAlias(Aliasee->getType(), Linkage, "", Aliasee, TheModule);
+    auto *GV = cast<GlobalValue>(Aliasee->stripPointerCasts());
+    if (auto *GA = llvm::dyn_cast<GlobalAlias>(GV))
+      GV = cast<GlobalValue>(GA->getAliasee()->stripPointerCasts());
+    auto *GA = GlobalAlias::create(Aliasee->getType()->getElementType(), 0,
+                                   Linkage, "", GV);
     handleVisibility(decl, GA);
 
     // Associate it with decl instead of V.
@@ -1922,7 +1926,7 @@ static void llvm_finish_unit(void */*gcc_data*/, void */*user_data*/) {
 
     ArrayType *AT = ArrayType::get(SBP, AUGs.size());
     Constant *Init = ConstantArray::get(AT, AUGs);
-    GlobalValue *gv =
+    auto *gv =
         new GlobalVariable(*TheModule, AT, false, GlobalValue::AppendingLinkage,
                            Init, "llvm.used");
     gv->setSection("llvm.metadata");
@@ -1942,7 +1946,7 @@ static void llvm_finish_unit(void */*gcc_data*/, void */*user_data*/) {
 
     ArrayType *AT = ArrayType::get(SBP, ACUGs.size());
     Constant *Init = ConstantArray::get(AT, ACUGs);
-    GlobalValue *gv =
+    auto *gv =
         new GlobalVariable(*TheModule, AT, false, GlobalValue::AppendingLinkage,
                            Init, "llvm.compiler.used");
     gv->setSection("llvm.metadata");
@@ -1955,9 +1959,9 @@ static void llvm_finish_unit(void */*gcc_data*/, void */*user_data*/) {
         ArrayType::get(AttributeAnnotateGlobals[0]->getType(),
                        AttributeAnnotateGlobals.size()),
         AttributeAnnotateGlobals);
-    GlobalValue *gv = new GlobalVariable(*TheModule, Array->getType(), false,
-                                         GlobalValue::AppendingLinkage, Array,
-                                         "llvm.global.annotations");
+    auto *gv = new GlobalVariable(*TheModule, Array->getType(), false,
+                                  GlobalValue::AppendingLinkage, Array,
+                                  "llvm.global.annotations");
     gv->setSection("llvm.metadata");
     AttributeAnnotateGlobals.clear();
   }
@@ -1979,12 +1983,7 @@ static void llvm_finish_unit(void */*gcc_data*/, void */*user_data*/) {
     void *OldHandlerData = Context.getInlineAsmDiagnosticContext();
     Context.setInlineAsmDiagnosticHandler(InlineAsmDiagnosticHandler, 0);
 
-    CodeGenPasses->doInitialization();
-    for (Module::iterator I = TheModule->begin(), E = TheModule->end(); I != E;
-         ++I)
-      if (!I->isDeclaration())
-        CodeGenPasses->run(*I);
-    CodeGenPasses->doFinalization();
+    CodeGenPasses->run(*TheModule);
 
     Context.setInlineAsmDiagnosticHandler(OldHandler, OldHandlerData);
   }

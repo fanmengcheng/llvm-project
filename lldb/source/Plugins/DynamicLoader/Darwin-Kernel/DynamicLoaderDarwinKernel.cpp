@@ -326,6 +326,8 @@ DynamicLoaderDarwinKernel::SearchForKernelNearPC (Process *process)
             return addr + 0x1000;
         if (CheckForKernelImageAtAddress (addr + 0x2000, process).IsValid())
             return addr + 0x2000;
+        if (CheckForKernelImageAtAddress (addr + 0x4000, process).IsValid())
+            return addr + 0x4000;
         i++;
         addr -= 0x100000;
     }
@@ -376,6 +378,8 @@ DynamicLoaderDarwinKernel::SearchForKernelViaExhaustiveSearch (Process *process)
             return addr + 0x1000;
         if (CheckForKernelImageAtAddress (addr + 0x2000, process).IsValid())
             return addr + 0x2000;
+        if (CheckForKernelImageAtAddress (addr + 0x4000, process).IsValid())
+            return addr + 0x4000;
         addr += 0x100000;
     }
     return LLDB_INVALID_ADDRESS;
@@ -1129,7 +1133,7 @@ DynamicLoaderDarwinKernel::ReadKextSummaryHeader ()
         const ByteOrder byte_order = m_kernel.GetByteOrder();
         Error error;
         // Read enough bytes for a "OSKextLoadedKextSummaryHeader" structure
-        // which is currenty 4 uint32_t and a pointer.
+        // which is currently 4 uint32_t and a pointer.
         uint8_t buf[24];
         DataExtractor data (buf, sizeof(buf), byte_order, addr_size);
         const size_t count = 4 * sizeof(uint32_t) + addr_size;
@@ -1152,7 +1156,7 @@ DynamicLoaderDarwinKernel::ReadKextSummaryHeader ()
                     {
                         Stream *s = m_process->GetTarget().GetDebugger().GetOutputFile().get();
                         s->Printf ("WARNING: Unable to read kext summary header, got improbable version number %u\n", m_kext_summary_header.version);
-                        // If we get an improbably large veriosn number, we're probably getting bad memory.
+                        // If we get an improbably large version number, we're probably getting bad memory.
                         m_kext_summary_header_addr.Clear();
                         return false;
                     }

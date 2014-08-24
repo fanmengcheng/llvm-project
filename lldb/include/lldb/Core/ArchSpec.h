@@ -101,6 +101,9 @@ public:
 
         eCore_uknownMach32,
         eCore_uknownMach64,
+
+        eCore_kalimba,
+
         kNumCores,
 
         kCore_invalid,
@@ -110,6 +113,7 @@ public:
         kCore_ppc_any,
         kCore_ppc64_any,
         kCore_x86_32_any,
+        kCore_x86_64_any,
         kCore_hexagon_any,
 
         kCore_arm_first     = eCore_arm_generic,
@@ -126,6 +130,9 @@ public:
 
         kCore_x86_32_first  = eCore_x86_32_i386,
         kCore_x86_32_last   = eCore_x86_32_i686,
+
+        kCore_x86_64_first  = eCore_x86_64_x86_64,
+        kCore_x86_64_last   = eCore_x86_64_x86_64h,
 
         kCore_hexagon_first  = eCore_hexagon_generic,
         kCore_hexagon_last   = eCore_hexagon_hexagonv5
@@ -231,7 +238,7 @@ public:
     ///
     /// This will be something like "ubuntu", "fedora", etc. on Linux.
     /// This should be the same value returned by
-    /// Host::GetDistributionId ().
+    /// HostInfo::GetDistributionId ().
     ///------------------------------------------------------------------
     void
     SetDistributionId (const char* distribution_id);
@@ -305,7 +312,7 @@ public:
     ///
     /// @param[in] cpu The required CPU type.
     ///
-    /// @return True if the object and CPU type were sucessfully set.
+    /// @return True if the object and CPU type were successfully set.
     //------------------------------------------------------------------
     bool
     SetArchitecture (ArchitectureType arch_type, 

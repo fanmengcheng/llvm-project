@@ -271,6 +271,8 @@ StringRef MCSymbolRefExpr::getVariantKindName(VariantKind Kind) {
   case VK_Mips_GOT_LO16: return "GOT_LO16";
   case VK_Mips_CALL_HI16: return "CALL_HI16";
   case VK_Mips_CALL_LO16: return "CALL_LO16";
+  case VK_Mips_PCREL_HI16: return "PCREL_HI16";
+  case VK_Mips_PCREL_LO16: return "PCREL_LO16";
   case VK_COFF_IMGREL32: return "IMGREL32";
   }
   llvm_unreachable("Invalid variant kind");
@@ -465,9 +467,27 @@ bool MCExpr::EvaluateAsAbsolute(int64_t &Res, const MCAssembler &Asm) const {
   return EvaluateAsAbsolute(Res, &Asm, nullptr, nullptr);
 }
 
+int64_t MCExpr::evaluateKnownAbsolute(const MCAsmLayout &Layout) const {
+  int64_t Res;
+  bool Abs =
+      evaluateAsAbsolute(Res, &Layout.getAssembler(), &Layout, nullptr, true);
+  (void)Abs;
+  assert(Abs && "Not actually absolute");
+  return Res;
+}
+
 bool MCExpr::EvaluateAsAbsolute(int64_t &Res, const MCAssembler *Asm,
                                 const MCAsmLayout *Layout,
                                 const SectionAddrMap *Addrs) const {
+  // FIXME: The use if InSet = Addrs is a hack. Setting InSet causes us
+  // absolutize differences across sections and that is what the MachO writer
+  // uses Addrs for.
+  return evaluateAsAbsolute(Res, Asm, Layout, Addrs, Addrs);
+}
+
+bool MCExpr::evaluateAsAbsolute(int64_t &Res, const MCAssembler *Asm,
+                                const MCAsmLayout *Layout,
+                                const SectionAddrMap *Addrs, bool InSet) const {
   MCValue Value;
 
   // Fast path constants.
@@ -476,12 +496,8 @@ bool MCExpr::EvaluateAsAbsolute(int64_t &Res, const MCAssembler *Asm,
     return true;
   }
 
-  // FIXME: The use if InSet = Addrs is a hack. Setting InSet causes us
-  // absolutize differences across sections and that is what the MachO writer
-  // uses Addrs for.
-  bool IsRelocatable =
-      EvaluateAsRelocatableImpl(Value, Asm, Layout, Addrs, /*InSet*/ Addrs,
-                                /*ForceVarExpansion*/ false);
+  bool IsRelocatable = EvaluateAsRelocatableImpl(
+      Value, Asm, Layout, nullptr, Addrs, InSet, /*ForceVarExpansion*/ false);
 
   // Record the current value.
   Res = Value.getConstant();
@@ -630,27 +646,31 @@ static bool EvaluateSymbolicAdd(const MCAssembler *Asm,
 }
 
 bool MCExpr::EvaluateAsRelocatable(MCValue &Res,
-                                   const MCAsmLayout *Layout) const {
+                                   const MCAsmLayout *Layout,
+                                   const MCFixup *Fixup) const {
   MCAssembler *Assembler = Layout ? &Layout->getAssembler() : nullptr;
-  return EvaluateAsRelocatableImpl(Res, Assembler, Layout, nullptr, false,
-                                   /*ForceVarExpansion*/ false);
+  return EvaluateAsRelocatableImpl(Res, Assembler, Layout, Fixup, nullptr,
+                                   false, /*ForceVarExpansion*/ false);
 }
 
-bool MCExpr::EvaluateAsValue(MCValue &Res, const MCAsmLayout *Layout) const {
+bool MCExpr::EvaluateAsValue(MCValue &Res, const MCAsmLayout *Layout,
+                             const MCFixup *Fixup) const {
   MCAssembler *Assembler = Layout ? &Layout->getAssembler() : nullptr;
-  return EvaluateAsRelocatableImpl(Res, Assembler, Layout, nullptr, false,
-                                   /*ForceVarExpansion*/ true);
+  return EvaluateAsRelocatableImpl(Res, Assembler, Layout, Fixup, nullptr,
+                                   false, /*ForceVarExpansion*/ true);
 }
 
 bool MCExpr::EvaluateAsRelocatableImpl(MCValue &Res, const MCAssembler *Asm,
                                        const MCAsmLayout *Layout,
+                                       const MCFixup *Fixup,
                                        const SectionAddrMap *Addrs, bool InSet,
                                        bool ForceVarExpansion) const {
   ++stats::MCExprEvaluate;
 
   switch (getKind()) {
   case Target:
-    return cast<MCTargetExpr>(this)->EvaluateAsRelocatableImpl(Res, Layout);
+    return cast<MCTargetExpr>(this)->EvaluateAsRelocatableImpl(Res, Layout,
+                                                               Fixup);
 
   case Constant:
     Res = MCValue::get(cast<MCConstantExpr>(this)->getValue());
@@ -664,7 +684,7 @@ bool MCExpr::EvaluateAsRelocatableImpl(MCValue &Res, const MCAssembler *Asm,
     // Evaluate recursively if this is a variable.
     if (Sym.isVariable() && SRE->getKind() == MCSymbolRefExpr::VK_None) {
       if (Sym.getVariableValue()->EvaluateAsRelocatableImpl(
-              Res, Asm, Layout, Addrs, true, ForceVarExpansion)) {
+              Res, Asm, Layout, Fixup, Addrs, true, ForceVarExpansion)) {
         const MCSymbolRefExpr *A = Res.getSymA();
         const MCSymbolRefExpr *B = Res.getSymB();
 
@@ -695,8 +715,9 @@ bool MCExpr::EvaluateAsRelocatableImpl(MCValue &Res, const MCAssembler *Asm,
     const MCUnaryExpr *AUE = cast<MCUnaryExpr>(this);
     MCValue Value;
 
-    if (!AUE->getSubExpr()->EvaluateAsRelocatableImpl(Value, Asm, Layout, Addrs,
-                                                      InSet, ForceVarExpansion))
+    if (!AUE->getSubExpr()->EvaluateAsRelocatableImpl(Value, Asm, Layout,
+                                                      Fixup, Addrs, InSet,
+                                                      ForceVarExpansion))
       return false;
 
     switch (AUE->getOpcode()) {
@@ -729,10 +750,12 @@ bool MCExpr::EvaluateAsRelocatableImpl(MCValue &Res, const MCAssembler *Asm,
     const MCBinaryExpr *ABE = cast<MCBinaryExpr>(this);
     MCValue LHSValue, RHSValue;
 
-    if (!ABE->getLHS()->EvaluateAsRelocatableImpl(LHSValue, Asm, Layout, Addrs,
-                                                  InSet, ForceVarExpansion) ||
-        !ABE->getRHS()->EvaluateAsRelocatableImpl(RHSValue, Asm, Layout, Addrs,
-                                                  InSet, ForceVarExpansion))
+    if (!ABE->getLHS()->EvaluateAsRelocatableImpl(LHSValue, Asm, Layout,
+                                                  Fixup, Addrs, InSet,
+                                                  ForceVarExpansion) ||
+        !ABE->getRHS()->EvaluateAsRelocatableImpl(RHSValue, Asm, Layout,
+                                                  Fixup, Addrs, InSet,
+                                                  ForceVarExpansion))
       return false;
 
     // We only support a few operations on non-constant expressions, handle

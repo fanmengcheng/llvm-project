@@ -16,11 +16,9 @@
 ///                  +------------+         +------+
 
 #include "MachONormalizedFile.h"
-
 #include "lld/Core/Error.h"
 #include "lld/Core/LLVM.h"
 #include "lld/ReaderWriter/YamlContext.h"
-
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSwitch.h"
@@ -29,14 +27,13 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MachO.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/SourceMgr.h"
-#include "llvm/Support/system_error.h"
 #include "llvm/Support/YAMLTraits.h"
+#include "llvm/Support/raw_ostream.h"
+#include <system_error>
 
 
 using llvm::StringRef;
-using llvm::error_code;
 using namespace llvm::yaml;
 using namespace llvm::MachO;
 using namespace lld::mach_o::normalized;
@@ -48,6 +45,7 @@ LLVM_YAML_IS_SEQUENCE_VECTOR(RebaseLocation)
 LLVM_YAML_IS_SEQUENCE_VECTOR(BindLocation)
 LLVM_YAML_IS_SEQUENCE_VECTOR(Export)
 LLVM_YAML_IS_SEQUENCE_VECTOR(StringRef)
+LLVM_YAML_IS_SEQUENCE_VECTOR(DataInCode)
 
 
 // for compatibility with gcc-4.7 in C++11 mode, add extra namespace
@@ -278,9 +276,19 @@ struct MappingTraits<Section> {
     io.mapOptional("attributes",      sect.attributes);
     io.mapOptional("alignment",       sect.alignment, 0U);
     io.mapRequired("address",         sect.address);
-    MappingNormalization<NormalizedContent, ArrayRef<uint8_t>> content(
+    if (sect.type == llvm::MachO::S_ZEROFILL) {
+      // S_ZEROFILL sections use "size:" instead of "content:"
+      uint64_t size = sect.content.size();
+      io.mapOptional("size",          size);
+      if (!io.outputting()) {
+        uint8_t *bytes = nullptr;
+        sect.content = makeArrayRef(bytes, size);
+      }
+    } else {
+      MappingNormalization<NormalizedContent, ArrayRef<uint8_t>> content(
         io, sect.content);
-    io.mapOptional("content",         content->_normalizedContent);
+      io.mapOptional("content",         content->_normalizedContent);
+    }
     io.mapOptional("relocations",     sect.relocations);
     io.mapOptional("indirect-syms",   sect.indirectSymbols);
   }
@@ -406,8 +414,18 @@ struct MappingTraits<Symbol> {
     io.mapRequired("type",    sym.type);
     io.mapOptional("scope",   sym.scope, SymbolScope(0));
     io.mapOptional("sect",    sym.sect, (uint8_t)0);
-    io.mapOptional("desc",    sym.desc, SymbolDesc(0));
-    io.mapRequired("value",   sym.value);
+    if (sym.type == llvm::MachO::N_UNDF) {
+      // In undef symbols, desc field contains alignment/ordinal info
+      // which is better represented as a hex vaule.
+      uint16_t t1 = sym.desc;
+      Hex16 t2 = t1;
+      io.mapOptional("desc",  t2, Hex16(0));
+      sym.desc = t2;
+    } else {
+      // In defined symbols, desc fit is a set of option bits.
+      io.mapOptional("desc",    sym.desc, SymbolDesc(0));
+    }
+    io.mapRequired("value",  sym.value);
   }
 };
 
@@ -490,7 +508,6 @@ struct MappingTraits<DependentDylib> {
     io.mapOptional("kind",    dylib.kind,       llvm::MachO::LC_LOAD_DYLIB);
   }
 };
-
 
 template <>
 struct ScalarEnumerationTraits<RebaseType> {
@@ -580,6 +597,31 @@ struct MappingTraits<Export> {
   }
 };
 
+template <>
+struct ScalarEnumerationTraits<DataRegionType> {
+  static void enumeration(IO &io, DataRegionType &value) {
+    io.enumCase(value, "DICE_KIND_DATA",
+                        llvm::MachO::DICE_KIND_DATA);
+    io.enumCase(value, "DICE_KIND_JUMP_TABLE8",
+                        llvm::MachO::DICE_KIND_JUMP_TABLE8);
+    io.enumCase(value, "DICE_KIND_JUMP_TABLE16",
+                        llvm::MachO::DICE_KIND_JUMP_TABLE16);
+    io.enumCase(value, "DICE_KIND_JUMP_TABLE32",
+                        llvm::MachO::DICE_KIND_JUMP_TABLE32);
+    io.enumCase(value, "DICE_KIND_ABS_JUMP_TABLE32",
+                        llvm::MachO::DICE_KIND_ABS_JUMP_TABLE32);
+  }
+};
+
+template <>
+struct MappingTraits<DataInCode> {
+  static void mapping(IO &io, DataInCode &entry) {
+    io.mapRequired("offset",       entry.offset);
+    io.mapRequired("length",       entry.length);
+    io.mapRequired("kind",         entry.kind);
+  }
+};
+
 
 template <>
 struct MappingTraits<NormalizedFile> {
@@ -606,6 +648,7 @@ struct MappingTraits<NormalizedFile> {
     io.mapOptional("weak-bindings",    file.weakBindingInfo);
     io.mapOptional("lazy-bindings",    file.lazyBindingInfo);
     io.mapOptional("exports",          file.exportInfo);
+    io.mapOptional("dataInCode",       file.dataInCode);
   }
   static StringRef validate(IO &io, NormalizedFile &file) {
     return StringRef();
@@ -634,13 +677,25 @@ bool MachOYamlIOTaggedDocumentHandler::handledDocTag(llvm::yaml::IO &io,
   // Step 2: parse normalized mach-o struct into atoms.
   ErrorOr<std::unique_ptr<lld::File>> foe = normalizedToAtoms(nf, info->_path,
                                                               true);
+  if (nf.arch != _arch) {
+    io.setError(Twine("file is wrong architecture. Expected ("
+                      + MachOLinkingContext::nameFromArch(_arch)
+                      + ") found ("
+                      + MachOLinkingContext::nameFromArch(nf.arch)
+                      + ")"));
+    return false;
+  }
+  info->_normalizeMachOFile = nullptr;
+
   if (foe) {
     // Transfer ownership to "out" File parameter.
     std::unique_ptr<lld::File> f = std::move(foe.get());
     file = f.release();
     return true;
+  } else {
+    io.setError(foe.getError().message());
+    return false;
   }
-  return false;
 }
 
 
@@ -671,8 +726,7 @@ readYaml(std::unique_ptr<MemoryBuffer> &mb) {
 
 
 /// Writes a yaml encoded mach-o files from an in-memory normalized view.
-error_code
-writeYaml(const NormalizedFile &file, raw_ostream &out) {
+std::error_code writeYaml(const NormalizedFile &file, raw_ostream &out) {
   // YAML I/O is not const aware, so need to cast away ;-(
   NormalizedFile *f = const_cast<NormalizedFile*>(&file);
 
@@ -684,7 +738,7 @@ writeYaml(const NormalizedFile &file, raw_ostream &out) {
   // Stream out yaml.
   yout << *f;
 
-  return error_code::success();
+  return std::error_code();
 }
 
 } // namespace normalized

@@ -63,20 +63,20 @@ struct isl_set;
 
 namespace polly {
 static cl::opt<bool>
-OpenMP("enable-polly-openmp", cl::desc("Generate OpenMP parallel code"),
-       cl::value_desc("OpenMP code generation enabled if true"),
-       cl::init(false), cl::ZeroOrMore, cl::cat(PollyCategory));
+    OpenMP("enable-polly-openmp", cl::desc("Generate OpenMP parallel code"),
+           cl::value_desc("OpenMP code generation enabled if true"),
+           cl::init(false), cl::ZeroOrMore, cl::cat(PollyCategory));
 
 #ifdef GPU_CODEGEN
 static cl::opt<bool>
-GPGPU("enable-polly-gpgpu", cl::desc("Generate GPU parallel code"), cl::Hidden,
-      cl::value_desc("GPGPU code generation enabled if true"), cl::init(false),
-      cl::ZeroOrMore, cl::cat(PollyCategory));
+    GPGPU("enable-polly-gpgpu", cl::desc("Generate GPU parallel code"),
+          cl::Hidden, cl::value_desc("GPGPU code generation enabled if true"),
+          cl::init(false), cl::ZeroOrMore, cl::cat(PollyCategory));
 
 static cl::opt<std::string>
-GPUTriple("polly-gpgpu-triple",
-          cl::desc("Target triple for GPU code generation"), cl::Hidden,
-          cl::init(""), cl::cat(PollyCategory));
+    GPUTriple("polly-gpgpu-triple",
+              cl::desc("Target triple for GPU code generation"), cl::Hidden,
+              cl::init(""), cl::cat(PollyCategory));
 #endif /* GPU_CODEGEN */
 
 typedef DenseMap<const char *, Value *> CharMapT;
@@ -243,6 +243,9 @@ private:
   // The Scop we code generate.
   Scop *S;
   Pass *P;
+  LoopInfo &LI;
+  ScalarEvolution &SE;
+  DominatorTree &DT;
 
   // The Builder specifies the current location to code generate at.
   PollyIRBuilder &Builder;
@@ -463,7 +466,8 @@ void ClastStmtCodeGen::codegen(const clast_user_stmt *u,
   int VectorDimensions = IVS ? IVS->size() : 1;
 
   if (VectorDimensions == 1) {
-    BlockGenerator::generate(Builder, *Statement, ValueMap, LoopToScev, P);
+    BlockGenerator::generate(Builder, *Statement, ValueMap, LoopToScev, P, LI,
+                             SE);
     isl_set_free(Domain);
     return;
   }
@@ -491,7 +495,7 @@ void ClastStmtCodeGen::codegen(const clast_user_stmt *u,
 
   isl_map *Schedule = extractPartialSchedule(Statement, Domain);
   VectorBlockGenerator::generate(Builder, *Statement, VectorMap, VLTS, Schedule,
-                                 P);
+                                 P, LI, SE);
   isl_map_free(Schedule);
 }
 
@@ -509,7 +513,7 @@ void ClastStmtCodeGen::codegenForSequential(const clast_for *f) {
   UpperBound = ExpGen.codegen(f->UB, IntPtrTy);
   Stride = Builder.getInt(APInt_from_MPZ(f->stride));
 
-  IV = createLoop(LowerBound, UpperBound, Stride, Builder, P, ExitBlock,
+  IV = createLoop(LowerBound, UpperBound, Stride, Builder, P, LI, DT, ExitBlock,
                   CmpInst::ICMP_SLE);
 
   // Add loop iv to symbols.
@@ -536,14 +540,8 @@ public:
     const BasicBlock *BB = S->getBasicBlock();
 
     // Check all the operands of instructions in the basic block.
-    for (BasicBlock::const_iterator BI = BB->begin(), BE = BB->end(); BI != BE;
-         ++BI) {
-      const Instruction &Inst = *BI;
-      for (Instruction::const_op_iterator II = Inst.op_begin(),
-                                          IE = Inst.op_end();
-           II != IE; ++II) {
-        Value *SrcVal = *II;
-
+    for (const Instruction &Inst : *BB) {
+      for (Value *SrcVal : Inst.operands()) {
         if (Instruction *OpInst = dyn_cast<Instruction>(SrcVal))
           if (S->getParent()->getRegion().contains(OpInst))
             continue;
@@ -671,18 +669,15 @@ SetVector<Value *> ClastStmtCodeGen::getGPUValues(unsigned &OutputBytes) {
   OutputBytes = 0;
 
   // Record the memory reference base addresses.
-  for (Scop::iterator SI = S->begin(), SE = S->end(); SI != SE; ++SI) {
-    ScopStmt *Stmt = *SI;
-    for (SmallVector<MemoryAccess *, 8>::iterator I = Stmt->memacc_begin(),
-                                                  E = Stmt->memacc_end();
-         I != E; ++I) {
-      Value *BaseAddr = const_cast<Value *>((*I)->getBaseAddr());
+  for (ScopStmt *Stmt : *S) {
+    for (MemoryAccess *MA : *Stmt) {
+      Value *BaseAddr = MA->getBaseAddr();
       Values.insert((BaseAddr));
 
       // FIXME: we assume that there is one and only one array to be written
       // in a SCoP.
       int NumWrites = 0;
-      if ((*I)->isWrite()) {
+      if (MA->isWrite()) {
         ++NumWrites;
         assert(NumWrites <= 1 &&
                "We support at most one array to be written in a SCoP.");
@@ -781,7 +776,7 @@ void ClastStmtCodeGen::codegenForGPGPU(const clast_for *F) {
     LowerBound = ExpGen.codegen(InnerFor->LB, IntPtrTy);
     UpperBound = ExpGen.codegen(InnerFor->UB, IntPtrTy);
     Stride = Builder.getInt(APInt_from_MPZ(InnerFor->stride));
-    IV = createLoop(LowerBound, UpperBound, Stride, Builder, P, AfterBB,
+    IV = createLoop(LowerBound, UpperBound, Stride, Builder, P, LI, DT, AfterBB,
                     CmpInst::ICMP_SLE);
     const Value *OldIV_ = Statement->getInductionVariableForDimension(2);
     Value *OldIV = const_cast<Value *>(OldIV_);
@@ -790,7 +785,8 @@ void ClastStmtCodeGen::codegenForGPGPU(const clast_for *F) {
 
   updateWithValueMap(VMap);
 
-  BlockGenerator::generate(Builder, *Statement, ValueMap, LoopToScev, P);
+  BlockGenerator::generate(Builder, *Statement, ValueMap, LoopToScev, P, LI,
+                           SE);
 
   if (AfterBB)
     Builder.SetInsertPoint(AfterBB->begin());
@@ -870,13 +866,35 @@ void ClastStmtCodeGen::codegenForVector(const clast_for *F) {
   ClastVars.erase(F->iterator);
 }
 
+static isl_union_map *getCombinedScheduleForSpace(Scop *S, unsigned dimLevel) {
+  isl_space *Space = S->getParamSpace();
+  isl_union_map *schedule = isl_union_map_empty(Space);
+
+  for (ScopStmt *Stmt : *S) {
+    unsigned remainingDimensions = Stmt->getNumScattering() - dimLevel;
+    isl_map *Scattering = isl_map_project_out(
+        Stmt->getScattering(), isl_dim_out, dimLevel, remainingDimensions);
+    schedule = isl_union_map_add_map(schedule, Scattering);
+  }
+
+  return schedule;
+}
+
 bool ClastStmtCodeGen::isParallelFor(const clast_for *f) {
   isl_set *Domain = isl_set_copy(isl_set_from_cloog_domain(f->domain));
   assert(Domain && "Cannot access domain of loop");
 
   Dependences &D = P->getAnalysis<Dependences>();
-
-  return D.isParallelDimension(Domain, isl_set_n_dim(Domain));
+  isl_union_map *Deps =
+      D.getDependences(Dependences::TYPE_RAW | Dependences::TYPE_WAW |
+                       Dependences::TYPE_WAR | Dependences::TYPE_RAW);
+  isl_union_map *Schedule =
+      getCombinedScheduleForSpace(S, isl_set_n_dim(Domain));
+  Schedule =
+      isl_union_map_intersect_range(Schedule, isl_union_set_from_set(Domain));
+  bool IsParallel = D.isParallel(Schedule, Deps);
+  isl_union_map_free(Schedule);
+  return IsParallel;
 }
 
 void ClastStmtCodeGen::codegen(const clast_for *f) {
@@ -1016,7 +1034,10 @@ void ClastStmtCodeGen::codegen(const clast_root *r) {
 }
 
 ClastStmtCodeGen::ClastStmtCodeGen(Scop *scop, PollyIRBuilder &B, Pass *P)
-    : S(scop), P(P), Builder(B), ExpGen(Builder, ClastVars) {}
+    : S(scop), P(P), LI(P->getAnalysis<LoopInfo>()),
+      SE(P->getAnalysis<ScalarEvolution>()),
+      DT(P->getAnalysis<DominatorTreeWrapperPass>().getDomTree()), Builder(B),
+      ExpGen(Builder, ClastVars) {}
 
 namespace {
 class CodeGeneration : public ScopPass {
@@ -1060,7 +1081,7 @@ public:
     AU.addRequired<CloogInfo>();
     AU.addRequired<Dependences>();
     AU.addRequired<DominatorTreeWrapperPass>();
-    AU.addRequired<RegionInfo>();
+    AU.addRequired<RegionInfoPass>();
     AU.addRequired<ScalarEvolution>();
     AU.addRequired<ScopDetection>();
     AU.addRequired<ScopInfo>();
@@ -1076,7 +1097,7 @@ public:
 
     // FIXME: We do not yet add regions for the newly generated code to the
     //        region tree.
-    AU.addPreserved<RegionInfo>();
+    AU.addPreserved<RegionInfoPass>();
     AU.addPreserved<TempScopInfo>();
     AU.addPreserved<ScopInfo>();
     AU.addPreservedID(IndependentBlocksID);
@@ -1093,7 +1114,7 @@ INITIALIZE_PASS_BEGIN(CodeGeneration, "polly-codegen",
 INITIALIZE_PASS_DEPENDENCY(CloogInfo);
 INITIALIZE_PASS_DEPENDENCY(Dependences);
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass);
-INITIALIZE_PASS_DEPENDENCY(RegionInfo);
+INITIALIZE_PASS_DEPENDENCY(RegionInfoPass);
 INITIALIZE_PASS_DEPENDENCY(ScalarEvolution);
 INITIALIZE_PASS_DEPENDENCY(ScopDetection);
 INITIALIZE_PASS_DEPENDENCY(DataLayoutPass);

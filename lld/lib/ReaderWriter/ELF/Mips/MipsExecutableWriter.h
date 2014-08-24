@@ -22,8 +22,7 @@ template <typename ELFT> class MipsTargetLayout;
 template <class ELFT>
 class MipsExecutableWriter : public ExecutableWriter<ELFT> {
 public:
-  MipsExecutableWriter(MipsLinkingContext &context,
-                       MipsTargetLayout<ELFT> &layout);
+  MipsExecutableWriter(MipsLinkingContext &ctx, MipsTargetLayout<ELFT> &layout);
 
 protected:
   void buildDynamicSymbolTable(const File &file) override;
@@ -33,10 +32,18 @@ protected:
 
   void finalizeDefaultAtomValues() override;
 
-  error_code setELFHeader() override {
+  std::error_code setELFHeader() override {
     ExecutableWriter<ELFT>::setELFHeader();
     _writeHelper.setELFHeader(*this->_elfHeader);
-    return error_code::success();
+    return std::error_code();
+  }
+
+  bool isDynSymEntryRequired(const SharedLibraryAtom *sla) const override {
+    return _writeHelper.isDynSymEntryRequired(sla);
+  }
+
+  bool isNeededTagRequired(const SharedLibraryAtom *sla) const override {
+    return _writeHelper.isNeededTagRequired(sla);
   }
 
   LLD_UNIQUE_BUMP_PTR(DynamicTable<ELFT>) createDynamicTable();
@@ -44,32 +51,29 @@ protected:
   LLD_UNIQUE_BUMP_PTR(DynamicSymbolTable<ELFT>) createDynamicSymbolTable();
 
 private:
-  void addDefaultAtoms() {
-    if (this->_context.isDynamic()) {
-      _mipsRuntimeFile->addAbsoluteAtom("_GLOBAL_OFFSET_TABLE_");
-      _mipsRuntimeFile->addAbsoluteAtom("_gp");
-      _mipsRuntimeFile->addAbsoluteAtom("_gp_disp");
-    }
-  }
-
   MipsELFWriter<ELFT> _writeHelper;
-  std::unique_ptr<MipsRuntimeFile<ELFT>> _mipsRuntimeFile;
   MipsLinkingContext &_mipsContext;
   MipsTargetLayout<Mips32ElELFType> &_mipsTargetLayout;
 };
 
 template <class ELFT>
-MipsExecutableWriter<ELFT>::MipsExecutableWriter(MipsLinkingContext &context,
+MipsExecutableWriter<ELFT>::MipsExecutableWriter(MipsLinkingContext &ctx,
                                                  MipsTargetLayout<ELFT> &layout)
-    : ExecutableWriter<ELFT>(context, layout),
-      _writeHelper(context, layout),
-      _mipsRuntimeFile(new MipsRuntimeFile<ELFT>(context)),
-      _mipsContext(context), _mipsTargetLayout(layout) {}
+    : ExecutableWriter<ELFT>(ctx, layout), _writeHelper(ctx, layout),
+      _mipsContext(ctx), _mipsTargetLayout(layout) {}
 
 template <class ELFT>
 void MipsExecutableWriter<ELFT>::buildDynamicSymbolTable(const File &file) {
   // MIPS ABI requires to add to dynsym even undefined symbols
   // if they have a corresponding entries in a global part of GOT.
+  for (auto sec : this->_layout.sections())
+    if (auto section = dyn_cast<AtomSection<ELFT>>(sec))
+      for (const auto &atom : section->atoms()) {
+        if (_writeHelper.hasGlobalGOTEntry(atom->_atom))
+          this->_dynamicSymbolTable->addSymbol(atom->_atom, section->ordinal(),
+                                               atom->_virtualAddr, atom);
+      }
+
   for (const UndefinedAtom *a : file.undefined())
     // FIXME (simon): Consider to move this check to the
     // MipsELFUndefinedAtom class method. That allows to
@@ -84,9 +88,7 @@ template <class ELFT>
 bool MipsExecutableWriter<ELFT>::createImplicitFiles(
     std::vector<std::unique_ptr<File>> &result) {
   ExecutableWriter<ELFT>::createImplicitFiles(result);
-  // Add the default atoms as defined for mips
-  addDefaultAtoms();
-  result.push_back(std::move(_mipsRuntimeFile));
+  result.push_back(std::move(_writeHelper.createRuntimeFile()));
   return true;
 }
 

@@ -57,7 +57,7 @@ public:
   ErrorOr<StringRef> getPath(const LinkingContext &ctx) const override;
 
   /// \brief create an error string for printing purposes
-  std::string errStr(error_code) override;
+  std::string errStr(std::error_code) override;
 
   /// \brief Dump the Input Element
   bool dump(raw_ostream &diagnostics) override {
@@ -72,7 +72,7 @@ public:
   }
 
   /// \brief Parse the input file to lld::File.
-  error_code parse(const LinkingContext &, raw_ostream &) override;
+  std::error_code parse(const LinkingContext &, raw_ostream &) override;
 
   /// \brief This is used by Group Nodes, when there is a need to reset the
   /// the file to be processed next. When handling a group node that contains
@@ -80,8 +80,9 @@ public:
   /// to start processing files as part of the input element from beginning.
   /// Reset the next file index to 0 only if the node is an archive library.
   void resetNextIndex() override {
-    if (_files[0]->kind() == File::kindArchiveLibrary &&
-        !_attributes._isWholeArchive) {
+    auto kind = _files[0]->kind();
+    if (kind == File::kindSharedLibrary ||
+        (kind == File::kindArchiveLibrary && !_attributes._isWholeArchive)) {
       _nextFileIndex = 0;
     }
   }
@@ -110,7 +111,7 @@ public:
       : FileNode(userPath), _elfLinkingContext(ctx), _linkerScript(nullptr) {}
 
   /// \brief Parse the linker script.
-  error_code parse(const LinkingContext &, raw_ostream &) override;
+  std::error_code parse(const LinkingContext &, raw_ostream &) override;
 
 protected:
   ELFLinkingContext &_elfLinkingContext;
@@ -125,7 +126,8 @@ public:
   ELFGNULdScript(ELFLinkingContext &ctx, StringRef userPath)
       : GNULdScript(ctx, userPath) {}
 
-  error_code parse(const LinkingContext &ctx, raw_ostream &diagnostics) override;
+  std::error_code parse(const LinkingContext &ctx,
+                        raw_ostream &diagnostics) override;
 
   bool getReplacements(InputGraph::InputElementVectorT &result) override {
     for (std::unique_ptr<InputElement> &elt : _expandElements)

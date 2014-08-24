@@ -29,7 +29,7 @@ static cl::opt<bool> DisablePPCConstHoist("disable-ppc-constant-hoisting",
 cl::desc("disable constant hoisting on PPC"), cl::init(false), cl::Hidden);
 
 // Declare the pass initialization routine locally as target-specific passes
-// don't havve a target-wide initialization entry point, and so we rely on the
+// don't have a target-wide initialization entry point, and so we rely on the
 // pass constructor initialization.
 namespace llvm {
 void initializePPCTTIPass(PassRegistry &);
@@ -48,7 +48,7 @@ public:
 
   PPCTTI(const PPCTargetMachine *TM)
       : ImmutablePass(ID), ST(TM->getSubtargetImpl()),
-        TLI(TM->getTargetLowering()) {
+        TLI(TM->getSubtargetImpl()->getTargetLowering()) {
     initializePPCTTIPass(*PassRegistry::getPassRegistry());
   }
 

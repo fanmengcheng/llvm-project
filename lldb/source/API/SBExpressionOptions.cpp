@@ -150,10 +150,41 @@ SBExpressionOptions::SetTrapExceptions (bool trap_exceptions)
 }
 
 void
+SBExpressionOptions::SetLanguage (lldb::LanguageType language)
+{
+    m_opaque_ap->SetLanguage(language);
+}
+
+void
 SBExpressionOptions::SetCancelCallback (lldb::ExpressionCancelCallback callback, void *baton)
 {
     m_opaque_ap->SetCancelCallback (callback, baton);
 }
+
+bool
+SBExpressionOptions::GetGenerateDebugInfo ()
+{
+    return m_opaque_ap->GetGenerateDebugInfo();
+}
+
+void
+SBExpressionOptions::SetGenerateDebugInfo (bool b)
+{
+    return m_opaque_ap->SetGenerateDebugInfo(b);
+}
+
+bool
+SBExpressionOptions::GetSuppressPersistentResult ()
+{
+    return m_opaque_ap->GetResultIsInternal ();
+}
+
+void
+SBExpressionOptions::SetSuppressPersistentResult (bool b)
+{
+    return m_opaque_ap->SetResultIsInternal (b);
+}
+
 
 EvaluateExpressionOptions *
 SBExpressionOptions::get() const

@@ -17,9 +17,10 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "HexagonTargetMachine.h"
 #include "HexagonMachineFunctionInfo.h"
 #include "HexagonSubtarget.h"
+#include "HexagonTargetMachine.h"
+#include "HexagonTargetObjectFile.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/LatencyPriorityQueue.h"
 #include "llvm/CodeGen/MachineDominators.h"
@@ -47,13 +48,12 @@ using namespace llvm;
 namespace {
 
 class HexagonSplitConst32AndConst64 : public MachineFunctionPass {
-    const HexagonTargetMachine& QTM;
-    const HexagonSubtarget &QST;
+  const HexagonTargetMachine &QTM;
 
  public:
     static char ID;
-    HexagonSplitConst32AndConst64(const HexagonTargetMachine& TM)
-      : MachineFunctionPass(ID), QTM(TM), QST(*TM.getSubtargetImpl()) {}
+    HexagonSplitConst32AndConst64(const HexagonTargetMachine &TM)
+        : MachineFunctionPass(ID), QTM(TM) {}
 
     const char *getPassName() const override {
       return "Hexagon Split Const32s and Const64s";
@@ -67,7 +67,14 @@ char HexagonSplitConst32AndConst64::ID = 0;
 
 bool HexagonSplitConst32AndConst64::runOnMachineFunction(MachineFunction &Fn) {
 
-  const TargetInstrInfo *TII = QTM.getInstrInfo();
+  const HexagonTargetObjectFile &TLOF =
+      (const HexagonTargetObjectFile &)QTM.getSubtargetImpl()
+          ->getTargetLowering()
+          ->getObjFileLowering();
+  if (TLOF.IsSmallDataEnabled())
+    return true;
+
+  const TargetInstrInfo *TII = QTM.getSubtargetImpl()->getInstrInfo();
 
   // Loop over all of the basic blocks
   for (MachineFunction::iterator MBBb = Fn.begin(), MBBe = Fn.end();
@@ -132,10 +139,10 @@ bool HexagonSplitConst32AndConst64::runOnMachineFunction(MachineFunction &Fn) {
       else if (Opc == Hexagon::CONST64_Int_Real) {
         int DestReg = MI->getOperand(0).getReg();
         int64_t ImmValue = MI->getOperand(1).getImm ();
-        unsigned DestLo =
-          QTM.getRegisterInfo()->getSubReg (DestReg, Hexagon::subreg_loreg);
-        unsigned DestHi =
-          QTM.getRegisterInfo()->getSubReg (DestReg, Hexagon::subreg_hireg);
+        unsigned DestLo = QTM.getSubtargetImpl()->getRegisterInfo()->getSubReg(
+            DestReg, Hexagon::subreg_loreg);
+        unsigned DestHi = QTM.getSubtargetImpl()->getRegisterInfo()->getSubReg(
+            DestReg, Hexagon::subreg_hireg);
 
         int32_t LowWord = (ImmValue & 0xFFFFFFFF);
         int32_t HighWord = (ImmValue >> 32) & 0xFFFFFFFF;

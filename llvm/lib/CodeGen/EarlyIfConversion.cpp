@@ -153,8 +153,8 @@ private:
 public:
   /// runOnMachineFunction - Initialize per-function data structures.
   void runOnMachineFunction(MachineFunction &MF) {
-    TII = MF.getTarget().getInstrInfo();
-    TRI = MF.getTarget().getRegisterInfo();
+    TII = MF.getSubtarget().getInstrInfo();
+    TRI = MF.getSubtarget().getRegisterInfo();
     MRI = &MF.getRegInfo();
     LiveRegUnits.clear();
     LiveRegUnits.setUniverse(TRI->getNumRegUnits());
@@ -776,8 +776,14 @@ bool EarlyIfConverter::tryConvertIf(MachineBasicBlock *MBB) {
 bool EarlyIfConverter::runOnMachineFunction(MachineFunction &MF) {
   DEBUG(dbgs() << "********** EARLY IF-CONVERSION **********\n"
                << "********** Function: " << MF.getName() << '\n');
-  TII = MF.getTarget().getInstrInfo();
-  TRI = MF.getTarget().getRegisterInfo();
+  // Only run if conversion if the target wants it.
+  if (!MF.getTarget()
+           .getSubtarget<TargetSubtargetInfo>()
+           .enableEarlyIfConversion())
+    return false;
+
+  TII = MF.getSubtarget().getInstrInfo();
+  TRI = MF.getSubtarget().getRegisterInfo();
   SchedModel =
     MF.getTarget().getSubtarget<TargetSubtargetInfo>().getSchedModel();
   MRI = &MF.getRegInfo();

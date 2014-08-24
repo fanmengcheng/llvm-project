@@ -140,7 +140,7 @@ class SystemZDAGToDAGISel : public SelectionDAGISel {
   }
 
   const SystemZInstrInfo *getInstrInfo() const {
-    return getTargetMachine().getInstrInfo();
+    return getTargetMachine().getSubtargetImpl()->getInstrInfo();
   }
 
   // Try to fold more of the base or index of AM into AM, where IsBase
@@ -315,9 +315,9 @@ class SystemZDAGToDAGISel : public SelectionDAGISel {
 
 public:
   SystemZDAGToDAGISel(SystemZTargetMachine &TM, CodeGenOpt::Level OptLevel)
-    : SelectionDAGISel(TM, OptLevel),
-      Lowering(*TM.getTargetLowering()),
-      Subtarget(*TM.getSubtargetImpl()) { }
+      : SelectionDAGISel(TM, OptLevel),
+        Lowering(*TM.getSubtargetImpl()->getTargetLowering()),
+        Subtarget(*TM.getSubtargetImpl()) {}
 
   // Override MachineFunctionPass.
   const char *getPassName() const override {
@@ -665,7 +665,7 @@ bool SystemZDAGToDAGISel::detectOrAndInsertion(SDValue &Op,
   uint64_t Used = allOnes(Op.getValueType().getSizeInBits());
   if (Used != (AndMask | InsertMask)) {
     APInt KnownZero, KnownOne;
-    CurDAG->ComputeMaskedBits(Op.getOperand(0), KnownZero, KnownOne);
+    CurDAG->computeKnownBits(Op.getOperand(0), KnownZero, KnownOne);
     if (Used != (AndMask | InsertMask | KnownZero.getZExtValue()))
       return false;
   }
@@ -714,7 +714,7 @@ bool SystemZDAGToDAGISel::expandRxSBG(RxSBGOperands &RxSBG) const {
       // been removed from the mask.  See if adding them back in makes the
       // mask suitable.
       APInt KnownZero, KnownOne;
-      CurDAG->ComputeMaskedBits(Input, KnownZero, KnownOne);
+      CurDAG->computeKnownBits(Input, KnownZero, KnownOne);
       Mask |= KnownZero.getZExtValue();
       if (!refineRxSBGMask(RxSBG, Mask))
         return false;
@@ -738,7 +738,7 @@ bool SystemZDAGToDAGISel::expandRxSBG(RxSBGOperands &RxSBG) const {
       // been removed from the mask.  See if adding them back in makes the
       // mask suitable.
       APInt KnownZero, KnownOne;
-      CurDAG->ComputeMaskedBits(Input, KnownZero, KnownOne);
+      CurDAG->computeKnownBits(Input, KnownZero, KnownOne);
       Mask &= ~KnownOne.getZExtValue();
       if (!refineRxSBGMask(RxSBG, Mask))
         return false;
@@ -1000,8 +1000,8 @@ bool SystemZDAGToDAGISel::canUseBlockOperation(StoreSDNode *Store,
   if (V1 == V2 && End1 == End2)
     return false;
 
-  return !AA->alias(AliasAnalysis::Location(V1, End1, Load->getTBAAInfo()),
-                    AliasAnalysis::Location(V2, End2, Store->getTBAAInfo()));
+  return !AA->alias(AliasAnalysis::Location(V1, End1, Load->getAAInfo()),
+                    AliasAnalysis::Location(V2, End2, Store->getAAInfo()));
 }
 
 bool SystemZDAGToDAGISel::storeLoadCanUseMVC(SDNode *N) const {

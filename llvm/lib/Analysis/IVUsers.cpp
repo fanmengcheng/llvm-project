@@ -84,7 +84,7 @@ static bool isInteresting(const SCEV *S, const Instruction *I, const Loop *L,
 /// form.
 static bool isSimplifiedLoopNest(BasicBlock *BB, const DominatorTree *DT,
                                  const LoopInfo *LI,
-                                 SmallPtrSet<Loop*,16> &SimpleLoopNests) {
+                                 SmallPtrSetImpl<Loop*> &SimpleLoopNests) {
   Loop *NearestLoop = nullptr;
   for (DomTreeNode *Rung = DT->getNode(BB);
        Rung; Rung = Rung->getIDom()) {
@@ -112,7 +112,7 @@ static bool isSimplifiedLoopNest(BasicBlock *BB, const DominatorTree *DT,
 /// reducible SCEV, recursively add its users to the IVUsesByStride set and
 /// return true.  Otherwise, return false.
 bool IVUsers::AddUsersImpl(Instruction *I,
-                           SmallPtrSet<Loop*,16> &SimpleLoopNests) {
+                           SmallPtrSetImpl<Loop*> &SimpleLoopNests) {
   // Add this IV user to the Processed set before returning false to ensure that
   // all IV users are members of the set. See IVUsers::isIVUserOrOperand.
   if (!Processed.insert(I))
@@ -287,7 +287,10 @@ void IVUsers::print(raw_ostream &OS, const Module *M) const {
       OS << ")";
     }
     OS << " in  ";
-    UI->getUser()->print(OS);
+    if (UI->getUser())
+      UI->getUser()->print(OS);
+    else
+      OS << "Printing <null> User";
     OS << '\n';
   }
 }

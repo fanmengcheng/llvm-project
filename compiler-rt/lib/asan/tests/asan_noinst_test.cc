@@ -16,6 +16,7 @@
 #include "asan_internal.h"
 #include "asan_mapping.h"
 #include "asan_test_utils.h"
+#include <sanitizer/allocator_interface.h>
 
 #include <assert.h>
 #include <stdio.h>
@@ -30,12 +31,14 @@
 // in this test. The static runtime library is linked explicitly (without
 // -fsanitize=address), thus the interceptors do not work correctly on OS X.
 
+#if !defined(_WIN32)
 extern "C" {
 // Set specific ASan options for uninstrumented unittest.
 const char* __asan_default_options() {
   return "allow_reexec=0";
 }
 }  // extern "C"
+#endif
 
 // Make sure __asan_init is called before any test case is run.
 struct AsanInitCaller {
@@ -173,12 +176,12 @@ void *ThreadedQuarantineTestWorker(void *unused) {
 // destroyed.
 TEST(AddressSanitizer, ThreadedQuarantineTest) {
   const int n_threads = 3000;
-  size_t mmaped1 = __asan_get_heap_size();
+  size_t mmaped1 = __sanitizer_get_heap_size();
   for (int i = 0; i < n_threads; i++) {
     pthread_t t;
     PTHREAD_CREATE(&t, NULL, ThreadedQuarantineTestWorker, 0);
     PTHREAD_JOIN(t, 0);
-    size_t mmaped2 = __asan_get_heap_size();
+    size_t mmaped2 = __sanitizer_get_heap_size();
     EXPECT_LT(mmaped2 - mmaped1, 320U * (1 << 20));
   }
 }

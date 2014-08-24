@@ -992,7 +992,8 @@ void ARMTargetELFStreamer::emitLabel(MCSymbol *Symbol) {
     return;
 
   const MCSymbolData &SD = Streamer.getOrCreateSymbolData(Symbol);
-  if (MCELF::GetType(SD) & (ELF::STT_FUNC << ELF_STT_Shift))
+  unsigned Type = MCELF::GetType(SD);
+  if (Type == ELF_STT_Func || Type == ELF_STT_GnuIFunc)
     Streamer.EmitThumbFunc(Symbol);
 }
 
@@ -1134,11 +1135,14 @@ void ARMELFStreamer::emitFnEnd() {
     // the second word of exception index table entry.  The size of the unwind
     // opcodes should always be 4 bytes.
     assert(PersonalityIndex == ARM::EHABI::AEABI_UNWIND_CPP_PR0 &&
-           "Compact model must use __aeabi_cpp_unwind_pr0 as personality");
+           "Compact model must use __aeabi_unwind_cpp_pr0 as personality");
     assert(Opcodes.size() == 4u &&
-           "Unwind opcode size for __aeabi_cpp_unwind_pr0 must be equal to 4");
-    EmitBytes(StringRef(reinterpret_cast<const char*>(Opcodes.data()),
-                        Opcodes.size()));
+           "Unwind opcode size for __aeabi_unwind_cpp_pr0 must be equal to 4");
+    uint64_t Intval = Opcodes[0] |
+                      Opcodes[1] << 8 |
+                      Opcodes[2] << 16 |
+                      Opcodes[3] << 24;
+    EmitIntValue(Intval, Opcodes.size());
   }
 
   // Switch to the section containing FnStart
@@ -1157,7 +1161,7 @@ void ARMELFStreamer::EmitPersonalityFixup(StringRef Name) {
   const MCSymbolRefExpr *PersonalityRef = MCSymbolRefExpr::Create(
       PersonalitySym, MCSymbolRefExpr::VK_ARM_NONE, getContext());
 
-  AddValueSymbols(PersonalityRef);
+  visitUsedExpr(*PersonalityRef);
   MCDataFragment *DF = getOrCreateDataFragment();
   DF->getFixups().push_back(MCFixup::Create(DF->getContents().size(),
                                             PersonalityRef,
@@ -1210,8 +1214,15 @@ void ARMELFStreamer::FlushUnwindOpcodes(bool NoHandlerData) {
   }
 
   // Emit unwind opcodes
-  EmitBytes(StringRef(reinterpret_cast<const char *>(Opcodes.data()),
-                      Opcodes.size()));
+  assert((Opcodes.size() % 4) == 0 &&
+         "Unwind opcode size for __aeabi_cpp_unwind_pr0 must be multiple of 4");
+  for (unsigned I = 0; I != Opcodes.size(); I += 4) {
+    uint64_t Intval = Opcodes[I] |
+                      Opcodes[I + 1] << 8 |
+                      Opcodes[I + 2] << 16 |
+                      Opcodes[I + 3] << 24;
+    EmitIntValue(Intval, 4);
+  }
 
   // According to ARM EHABI section 9.2, if the __aeabi_unwind_cpp_pr1() or
   // __aeabi_unwind_cpp_pr2() is used, then the handler data must be emitted
@@ -1313,14 +1324,18 @@ void ARMELFStreamer::emitUnwindRaw(int64_t Offset,
 namespace llvm {
 
 MCStreamer *createMCAsmStreamer(MCContext &Ctx, formatted_raw_ostream &OS,
-                                bool isVerboseAsm, bool useCFI,
-                                bool useDwarfDirectory,
+                                bool isVerboseAsm, bool useDwarfDirectory,
                                 MCInstPrinter *InstPrint, MCCodeEmitter *CE,
                                 MCAsmBackend *TAB, bool ShowInst) {
-  MCStreamer *S =
-      llvm::createAsmStreamer(Ctx, OS, isVerboseAsm, useCFI, useDwarfDirectory,
-                              InstPrint, CE, TAB, ShowInst);
+  MCStreamer *S = llvm::createAsmStreamer(
+      Ctx, OS, isVerboseAsm, useDwarfDirectory, InstPrint, CE, TAB, ShowInst);
   new ARMTargetAsmStreamer(*S, OS, *InstPrint, isVerboseAsm);
+  return S;
+}
+
+MCStreamer *createARMNullStreamer(MCContext &Ctx) {
+  MCStreamer *S = llvm::createNullStreamer(Ctx);
+  new ARMTargetStreamer(*S);
   return S;
 }
 

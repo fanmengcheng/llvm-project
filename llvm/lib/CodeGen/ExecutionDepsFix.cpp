@@ -30,6 +30,8 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/Target/TargetSubtargetInfo.h"
+
 using namespace llvm;
 
 #define DEBUG_TYPE "execution-fix"
@@ -405,7 +407,7 @@ void ExeDepsFix::enterBasicBlock(MachineBasicBlock *MBB) {
 
       // We have a live DomainValue from more than one predecessor.
       if (LiveRegs[rx].Value->isCollapsed()) {
-        // We are already collapsed, but predecessor is not. Force him.
+        // We are already collapsed, but predecessor is not. Force it.
         unsigned Domain = LiveRegs[rx].Value->getFirstDomain();
         if (!pdv->isCollapsed() && pdv->hasDomain(Domain))
           collapse(pdv, Domain);
@@ -713,8 +715,8 @@ void ExeDepsFix::visitSoftInstr(MachineInstr *mi, unsigned mask) {
 
 bool ExeDepsFix::runOnMachineFunction(MachineFunction &mf) {
   MF = &mf;
-  TII = MF->getTarget().getInstrInfo();
-  TRI = MF->getTarget().getRegisterInfo();
+  TII = MF->getSubtarget().getInstrInfo();
+  TRI = MF->getSubtarget().getRegisterInfo();
   LiveRegs = nullptr;
   assert(NumRegs == RC->getNumRegs() && "Bad regclass");
 

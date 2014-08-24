@@ -123,7 +123,7 @@ FakeStack *AsanThread::AsyncSignalSafeLazyInitFakeStack() {
   // 1   -- being initialized
   // ptr -- initialized
   // This CAS checks if the state was 0 and if so changes it to state 1,
-  // if that was successfull, it initilizes the pointer.
+  // if that was successful, it initializes the pointer.
   if (atomic_compare_exchange_strong(
       reinterpret_cast<atomic_uintptr_t *>(&fake_stack_), &old_val, 1UL,
       memory_order_relaxed)) {
@@ -141,7 +141,10 @@ FakeStack *AsanThread::AsyncSignalSafeLazyInitFakeStack() {
 }
 
 void AsanThread::Init() {
+  fake_stack_ = 0;  // Will be initialized lazily if needed.
+  CHECK_EQ(this->stack_size(), 0U);
   SetThreadStackAndTls();
+  CHECK_GT(this->stack_size(), 0U);
   CHECK(AddrIsInMem(stack_bottom_));
   CHECK(AddrIsInMem(stack_top_ - 1));
   ClearShadowForThreadStackAndTLS();
@@ -149,7 +152,6 @@ void AsanThread::Init() {
   VReport(1, "T%d: stack [%p,%p) size 0x%zx; local=%p\n", tid(),
           (void *)stack_bottom_, (void *)stack_top_, stack_top_ - stack_bottom_,
           &local);
-  fake_stack_ = 0;  // Will be initialized lazily if needed.
   AsanPlatformThreadInit();
 }
 

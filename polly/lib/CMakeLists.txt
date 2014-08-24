@@ -1,7 +1,7 @@
 set(LLVM_NO_RTTI 1)
 
 if (PLUTO_FOUND)
-  set(POLLY_PLUTO_FILES Pluto.cpp)
+  set(POLLY_PLUTO_FILES Transform/Pluto.cpp)
 endif (PLUTO_FOUND)
 
 set(POLLY_JSON_FILES
@@ -18,6 +18,7 @@ endif (CLOOG_FOUND)
 
 set(ISL_CODEGEN_FILES
     CodeGen/IslAst.cpp
+    CodeGen/IslExprBuilder.cpp
     CodeGen/IslCodeGeneration.cpp)
 
 if (GPU_CODEGEN)
@@ -25,17 +26,10 @@ if (GPU_CODEGEN)
        CodeGen/PTXGenerator.cpp)
 endif (GPU_CODEGEN)
 
-if (SCOPLIB_FOUND)
-  set(POLLY_SCOPLIB_FILES
-      Transform/Pocc.cpp
-      Exchange/ScopLib.cpp
-      Exchange/ScopLibExporter.cpp
-      Exchange/ScopLibImporter.cpp)
-endif (SCOPLIB_FOUND)
-
 add_polly_library(Polly
   Analysis/Dependences.cpp
   Analysis/ScopDetection.cpp
+  Analysis/ScopDetectionDiagnostic.cpp
   Analysis/ScopInfo.cpp
   Analysis/ScopGraphPrinter.cpp
   Analysis/ScopPass.cpp
@@ -46,9 +40,9 @@ add_polly_library(Polly
   CodeGen/LoopGenerators.cpp
   CodeGen/IRBuilder.cpp
   CodeGen/Utils.cpp
+  CodeGen/RuntimeDebugBuilder.cpp
   ${GPGPU_CODEGEN_FILES}
   Exchange/JSONExporter.cpp
-  ${POLLY_SCOPLIB_FILES}
   Support/GICHelper.cpp
   Support/SCEVValidator.cpp
   Support/RegisterPasses.cpp

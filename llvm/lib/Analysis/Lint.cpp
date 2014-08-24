@@ -96,7 +96,7 @@ namespace {
 
     Value *findValue(Value *V, bool OffsetOk) const;
     Value *findValueImpl(Value *V, bool OffsetOk,
-                         SmallPtrSet<Value *, 4> &Visited) const;
+                         SmallPtrSetImpl<Value *> &Visited) const;
 
   public:
     Module *Mod;
@@ -513,7 +513,7 @@ static bool isZero(Value *V, const DataLayout *DL) {
   if (!VecTy) {
     unsigned BitWidth = V->getType()->getIntegerBitWidth();
     APInt KnownZero(BitWidth, 0), KnownOne(BitWidth, 0);
-    ComputeMaskedBits(V, KnownZero, KnownOne, DL);
+    computeKnownBits(V, KnownZero, KnownOne, DL);
     return KnownZero.isAllOnesValue();
   }
 
@@ -534,7 +534,7 @@ static bool isZero(Value *V, const DataLayout *DL) {
       return true;
 
     APInt KnownZero(BitWidth, 0), KnownOne(BitWidth, 0);
-    ComputeMaskedBits(Elem, KnownZero, KnownOne, DL);
+    computeKnownBits(Elem, KnownZero, KnownOne, DL);
     if (KnownZero.isAllOnesValue())
       return true;
   }
@@ -622,7 +622,7 @@ Value *Lint::findValue(Value *V, bool OffsetOk) const {
 
 /// findValueImpl - Implementation helper for findValue.
 Value *Lint::findValueImpl(Value *V, bool OffsetOk,
-                           SmallPtrSet<Value *, 4> &Visited) const {
+                           SmallPtrSetImpl<Value *> &Visited) const {
   // Detect self-referential values.
   if (!Visited.insert(V))
     return UndefValue::get(V->getType());

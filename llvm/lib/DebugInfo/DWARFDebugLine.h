@@ -7,10 +7,11 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_DEBUGINFO_DWARFDEBUGLINE_H
-#define LLVM_DEBUGINFO_DWARFDEBUGLINE_H
+#ifndef LLVM_LIB_DEBUGINFO_DWARFDEBUGLINE_H
+#define LLVM_LIB_DEBUGINFO_DWARFDEBUGLINE_H
 
 #include "DWARFRelocMap.h"
+#include "llvm/DebugInfo/DIContext.h"
 #include "llvm/Support/DataExtractor.h"
 #include <map>
 #include <string>
@@ -179,7 +180,7 @@ public:
     // Extracts filename by its index in filename table in prologue.
     // Returns true on success.
     bool getFileNameByIndex(uint64_t FileIndex,
-                            bool NeedsAbsoluteFilePath,
+                            DILineInfoSpecifier::FileLineInfoKind Kind,
                             std::string &Result) const;
 
     void dump(raw_ostream &OS) const;

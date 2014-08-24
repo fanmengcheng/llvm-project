@@ -41,32 +41,34 @@ private:
 
 template <typename T>
 std::string runCheckOnCode(StringRef Code,
-                           SmallVectorImpl<ClangTidyError> &Errors) {
+                           std::vector<ClangTidyError> *Errors = nullptr,
+                           const Twine &Filename = "input.cc",
+                           ArrayRef<std::string> ExtraArgs = None) {
   T Check;
-  ClangTidyContext Context(&Errors, ClangTidyOptions());
+  ClangTidyContext Context(
+      new DefaultOptionsProvider(ClangTidyGlobalOptions(), ClangTidyOptions()));
   ClangTidyDiagnosticConsumer DiagConsumer(Context);
   Check.setContext(&Context);
   std::vector<std::string> ArgCXX11(1, "-std=c++11");
+  ArgCXX11.insert(ArgCXX11.end(), ExtraArgs.begin(), ExtraArgs.end());
 
   if (!tooling::runToolOnCodeWithArgs(new TestPPAction(Check, &Context), Code,
-                                      ArgCXX11))
+                                      ArgCXX11, Filename))
     return "";
   ast_matchers::MatchFinder Finder;
   Check.registerMatchers(&Finder);
   std::unique_ptr<tooling::FrontendActionFactory> Factory(
       tooling::newFrontendActionFactory(&Finder));
-  if (!tooling::runToolOnCodeWithArgs(Factory->create(), Code, ArgCXX11))
+  if (!tooling::runToolOnCodeWithArgs(Factory->create(), Code, ArgCXX11,
+                                      Filename))
     return "";
   DiagConsumer.finish();
   tooling::Replacements Fixes;
-  for (const ClangTidyError &Error : Errors)
+  for (const ClangTidyError &Error : Context.getErrors())
     Fixes.insert(Error.Fix.begin(), Error.Fix.end());
+  if (Errors)
+    *Errors = Context.getErrors();
   return tooling::applyAllReplacements(Code, Fixes);
-}
-
-template <typename T> std::string runCheckOnCode(StringRef Code) {
-  SmallVector<ClangTidyError, 16> Errors;
-  return runCheckOnCode<T>(Code, Errors);
 }
 
 } // namespace test

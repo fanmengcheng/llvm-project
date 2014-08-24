@@ -311,7 +311,7 @@ def tHLT : T1I<(outs), (ins imm0_63:$val), NoItinerary, "hlt\t$val",
 }
 
 def tSETEND : T1I<(outs), (ins setend_op:$end), NoItinerary, "setend\t$end",
-                  []>, T1Encoding<0b101101>, Deprecated<HasV8Ops> {
+                  []>, T1Encoding<0b101101>, Requires<[IsNotMClass]>, Deprecated<HasV8Ops> {
   bits<1> end;
   // A8.6.156
   let Inst{9-5} = 0b10010;
@@ -466,7 +466,7 @@ let isCall = 1,
                  (outs), (ins pred:$p, t_blxtarget:$func), IIC_Br,
                    "blx${p}\t$func",
                    [(ARMcall tglobaladdr:$func)]>,
-              Requires<[IsThumb, HasV5T]>, Sched<[WriteBrL]> {
+              Requires<[IsThumb, HasV5T, IsNotMClass]>, Sched<[WriteBrL]> {
     bits<24> func;
     let Inst{26} = func{23};
     let Inst{25-16} = func{20-11};
@@ -1193,6 +1193,15 @@ def tTST :                      // A8.6.230
                [(ARMcmpZ (and_su tGPR:$Rn, tGPR:$Rm), 0)]>,
                Sched<[WriteALU]>;
 
+// A8.8.247  UDF - Undefined (Encoding T1)
+def tUDF : TI<(outs), (ins imm0_255:$imm8), IIC_Br, "udf\t$imm8",
+              [(int_arm_undefined imm0_255:$imm8)]>, Encoding16 {
+  bits<8> imm8;
+  let Inst{15-12} = 0b1101;
+  let Inst{11-8} = 0b1110;
+  let Inst{7-0} = imm8;
+}
+
 // Zero-extend byte
 def tUXTB :                     // A8.6.262
   T1pIMiscEncode<{0,0,1,0,1,1,?}, (outs tGPR:$Rd), (ins tGPR:$Rm),
@@ -1308,6 +1317,18 @@ def : T1Pat<(addc   tGPR:$lhs, imm8_255_neg:$rhs),
 def : T1Pat<(subc   tGPR:$lhs, tGPR:$rhs),
             (tSUBrr tGPR:$lhs, tGPR:$rhs)>;
 
+// Bswap 16 with load/store
+def : T1Pat<(srl (bswap (extloadi16 t_addrmode_rrs2:$addr)), (i32 16)),
+            (tREV16 (tLDRHr t_addrmode_rrs2:$addr))>;
+def : T1Pat<(srl (bswap (extloadi16 t_addrmode_is2:$addr)), (i32 16)),
+            (tREV16 (tLDRHi t_addrmode_is2:$addr))>;
+def : T1Pat<(truncstorei16 (srl (bswap tGPR:$Rn), (i32 16)),
+                           t_addrmode_rrs2:$addr),
+            (tSTRHr (tREV16 tGPR:$Rn), t_addrmode_rrs2:$addr)>;
+def : T1Pat<(truncstorei16 (srl (bswap tGPR:$Rn), (i32 16)),
+                           t_addrmode_is2:$addr),
+            (tSTRHi(tREV16 tGPR:$Rn), t_addrmode_is2:$addr)>;
+
 // ConstantPool
 def : T1Pat<(ARMWrapper  tconstpool  :$dst), (tLEApcrel tconstpool  :$dst)>;
 
@@ -1334,7 +1355,7 @@ def : T1Pat<(ARMtcall texternalsym:$func), (tBL texternalsym:$func)>,
       Requires<[IsThumb]>;
 
 def : Tv5Pat<(ARMcall texternalsym:$func), (tBLXi texternalsym:$func)>,
-      Requires<[IsThumb, HasV5T]>;
+      Requires<[IsThumb, HasV5T, IsNotMClass]>;
 
 // Indirect calls to ARM routines
 def : Tv5Pat<(ARMcall GPR:$dst), (tBLXr GPR:$dst)>,

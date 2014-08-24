@@ -53,7 +53,7 @@ static void AsanDie() {
       UnmapOrDie((void*)kLowShadowBeg, kHighShadowEnd - kLowShadowBeg);
     }
   }
-  if (flags()->coverage)
+  if (common_flags()->coverage)
     __sanitizer_cov_dump();
   if (death_callback)
     death_callback();
@@ -80,7 +80,7 @@ static const char *MaybeCallAsanDefaultOptions() {
   return (&__asan_default_options) ? __asan_default_options() : "";
 }
 
-static const char *MaybeUseAsanDefaultOptionsCompileDefiniton() {
+static const char *MaybeUseAsanDefaultOptionsCompileDefinition() {
 #ifdef ASAN_DEFAULT_OPTIONS
 // Stringize the macro value.
 # define ASAN_STRINGIZE(x) #x
@@ -172,14 +172,6 @@ static void ParseFlagsFromString(Flags *f, const char *str) {
   ParseFlag(str, &f->atexit, "atexit",
       "If set, prints ASan exit stats even after program terminates "
       "successfully.");
-  ParseFlag(str, &f->coverage, "coverage",
-      "If set, coverage information will be dumped at program shutdown (if the "
-      "coverage instrumentation was enabled at compile time).");
-
-  ParseFlag(str, &f->disable_core, "disable_core",
-      "Disable core dumping. By default, disable_core=1 on 64-bit to avoid "
-      "dumping a 16T+ core file. "
-      "Ignored on OSes that don't dump core by default.");
 
   ParseFlag(str, &f->allow_reexec, "allow_reexec",
       "Allow the tool to re-exec the program. This may interfere badly with "
@@ -194,6 +186,9 @@ static void ParseFlagsFromString(Flags *f, const char *str) {
       "Poison (or not) the heap memory on [de]allocation. Zero value is useful "
       "for benchmarking the allocator or instrumentator.");
 
+  ParseFlag(str, &f->poison_array_cookie, "poison_array_cookie",
+      "Poison (or not) the array cookie after operator new[].");
+
   ParseFlag(str, &f->poison_partial, "poison_partial",
       "If true, poison partially addressable 8-byte aligned words "
       "(default=true). This flag affects heap and global buffers, but not "
@@ -201,6 +196,10 @@ static void ParseFlagsFromString(Flags *f, const char *str) {
 
   ParseFlag(str, &f->alloc_dealloc_mismatch, "alloc_dealloc_mismatch",
       "Report errors on malloc/delete, new/free, new/delete[], etc.");
+
+  ParseFlag(str, &f->new_delete_type_mismatch, "new_delete_type_mismatch",
+      "Report errors on mismatch betwen size of new and delete.");
+
   ParseFlag(str, &f->strict_memcmp, "strict_memcmp",
       "If true, assume that memcmp(p1, p2, n) always reads n bytes before "
       "comparing p1 and p2.");
@@ -236,10 +235,11 @@ static void ParseFlagsFromString(Flags *f, const char *str) {
 void InitializeFlags(Flags *f, const char *env) {
   CommonFlags *cf = common_flags();
   SetCommonFlagsDefaults(cf);
-  cf->detect_leaks = false;  // CAN_SANITIZE_LEAKS;
+  cf->detect_leaks = CAN_SANITIZE_LEAKS;
   cf->external_symbolizer_path = GetEnv("ASAN_SYMBOLIZER_PATH");
   cf->malloc_context_size = kDefaultMallocContextSize;
   cf->intercept_tls_get_addr = true;
+  cf->coverage = false;
 
   internal_memset(f, 0, sizeof(*f));
   f->quarantine_size = (ASAN_LOW_MEMORY) ? 1UL << 26 : 1UL << 28;
@@ -266,23 +266,26 @@ void InitializeFlags(Flags *f, const char *env) {
   f->print_stats = false;
   f->print_legend = true;
   f->atexit = false;
-  f->coverage = false;
-  f->disable_core = (SANITIZER_WORDSIZE == 64);
   f->allow_reexec = true;
   f->print_full_thread_history = true;
   f->poison_heap = true;
+  f->poison_array_cookie = true;
   f->poison_partial = true;
   // Turn off alloc/dealloc mismatch checker on Mac and Windows for now.
+  // https://code.google.com/p/address-sanitizer/issues/detail?id=131
+  // https://code.google.com/p/address-sanitizer/issues/detail?id=309
   // TODO(glider,timurrrr): Fix known issues and enable this back.
   f->alloc_dealloc_mismatch = (SANITIZER_MAC == 0) && (SANITIZER_WINDOWS == 0);
+  f->new_delete_type_mismatch = true;
   f->strict_memcmp = true;
   f->strict_init_order = false;
   f->start_deactivated = false;
   f->detect_invalid_pointer_pairs = 0;
   f->detect_container_overflow = true;
+  f->detect_odr_violation = 2;
 
   // Override from compile definition.
-  ParseFlagsFromString(f, MaybeUseAsanDefaultOptionsCompileDefiniton());
+  ParseFlagsFromString(f, MaybeUseAsanDefaultOptionsCompileDefinition());
 
   // Override from user-specified string.
   ParseFlagsFromString(f, MaybeCallAsanDefaultOptions());
@@ -459,13 +462,6 @@ static NOINLINE void force_interface_symbols() {
     case 15: __asan_set_error_report_callback(0); break;
     case 16: __asan_handle_no_return(); break;
     case 17: __asan_address_is_poisoned(0); break;
-    case 18: __asan_get_allocated_size(0); break;
-    case 19: __asan_get_current_allocated_bytes(); break;
-    case 20: __asan_get_estimated_allocated_size(0); break;
-    case 21: __asan_get_free_bytes(); break;
-    case 22: __asan_get_heap_size(); break;
-    case 23: __asan_get_ownership(0); break;
-    case 24: __asan_get_unmapped_bytes(); break;
     case 25: __asan_poison_memory_region(0, 0); break;
     case 26: __asan_unpoison_memory_region(0, 0); break;
     case 27: __asan_set_error_exit_code(0); break;
@@ -553,10 +549,16 @@ static void PrintAddressSpaceLayout() {
 }
 
 static void AsanInitInternal() {
-  if (asan_inited) return;
+  if (LIKELY(asan_inited)) return;
   SanitizerToolName = "AddressSanitizer";
   CHECK(!asan_init_is_running && "ASan init calls itself!");
   asan_init_is_running = true;
+
+  // Initialize flags. This must be done early, because most of the
+  // initialization steps look at flags().
+  const char *options = GetEnv("ASAN_OPTIONS");
+  InitializeFlags(flags(), options);
+
   InitializeHighMemEnd();
 
   // Make sure we are not statically linked.
@@ -566,11 +568,6 @@ static void AsanInitInternal() {
   SetDieCallback(AsanDie);
   SetCheckFailedCallback(AsanCheckFailed);
   SetPrintfAndReportCallback(AppendToErrorMessageBuffer);
-
-  // Initialize flags. This must be done early, because most of the
-  // initialization steps look at flags().
-  const char *options = GetEnv("ASAN_OPTIONS");
-  InitializeFlags(flags(), options);
 
   if (!flags()->start_deactivated)
     ParseExtraActivationFlags();
@@ -596,7 +593,6 @@ static void AsanInitInternal() {
   InitializeAsanInterceptors();
 
   ReplaceSystemMalloc();
-  ReplaceOperatorsNewAndDelete();
 
   uptr shadow_start = kLowShadowBeg;
   if (kLowShadowBeg)
@@ -604,7 +600,8 @@ static void AsanInitInternal() {
   bool full_shadow_is_available =
       MemoryRangeIsAvailable(shadow_start, kHighShadowEnd);
 
-#if SANITIZER_LINUX && defined(__x86_64__) && !ASAN_FIXED_MAPPING
+#if SANITIZER_LINUX && defined(__x86_64__) && defined(_LP64) &&                \
+    !ASAN_FIXED_MAPPING
   if (!full_shadow_is_available) {
     kMidMemBeg = kLowMemEnd < 0x3000000000ULL ? 0x3000000000ULL : 0;
     kMidMemEnd = kLowMemEnd < 0x3000000000ULL ? 0x4fffffffffULL : 0;
@@ -614,9 +611,7 @@ static void AsanInitInternal() {
   if (common_flags()->verbosity)
     PrintAddressSpaceLayout();
 
-  if (flags()->disable_core) {
-    DisableCoreDumper();
-  }
+  DisableCoreDumperIfNecessary();
 
   if (full_shadow_is_available) {
     // mmap the low shadow plus at least one page at the left.
@@ -655,7 +650,7 @@ static void AsanInitInternal() {
   // fork() on Mac locks the allocator.
   InitializeAllocator();
 
-  Symbolizer::Init(common_flags()->external_symbolizer_path);
+  Symbolizer::GetOrInit();
 
   // On Linux AsanThread::ThreadStart() calls malloc() that's why asan_inited
   // should be set to 1 prior to initializing the threads.
@@ -665,7 +660,7 @@ static void AsanInitInternal() {
   if (flags()->atexit)
     Atexit(asan_atexit);
 
-  if (flags()->coverage) {
+  if (common_flags()->coverage) {
     __sanitizer_cov_init();
     Atexit(__sanitizer_cov_dump);
   }
@@ -685,7 +680,7 @@ static void AsanInitInternal() {
   SanitizerInitializeUnwinder();
 
 #if CAN_SANITIZE_LEAKS
-  __lsan::InitCommonLsan();
+  __lsan::InitCommonLsan(false);
   if (common_flags()->detect_leaks && common_flags()->leak_check_at_exit) {
     Atexit(__lsan::DoLeakCheck);
   }
@@ -709,7 +704,7 @@ public:  // NOLINT
   AsanInitializer() {
     AsanCheckIncompatibleRT();
     AsanCheckDynamicRTPrereqs();
-    if (!asan_inited)
+    if (UNLIKELY(!asan_inited))
       __asan_init();
   }
 };

@@ -26,28 +26,41 @@ set(SANITIZER_UNITTESTS
   sanitizer_thread_registry_test.cc)
 
 set(SANITIZER_TEST_HEADERS
+  sanitizer_pthread_wrappers.h
+  sanitizer_test_config.h
   sanitizer_test_utils.h)
 foreach(header ${SANITIZER_HEADERS})
   list(APPEND SANITIZER_TEST_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/../${header})
 endforeach()
 
 set(SANITIZER_TEST_CFLAGS_COMMON
+  ${COMPILER_RT_TEST_CFLAGS}
   ${COMPILER_RT_GTEST_CFLAGS}
   -I${COMPILER_RT_SOURCE_DIR}/include
   -I${COMPILER_RT_SOURCE_DIR}/lib
   -I${COMPILER_RT_SOURCE_DIR}/lib/sanitizer_common
-  -DGTEST_HAS_RTTI=0
-  -O2 -g -fno-rtti
+  -fno-rtti
+  -O2
   -Werror=sign-compare
   -Wno-non-virtual-dtor)
 
-set(SANITIZER_TEST_LINK_FLAGS_COMMON
-  -lstdc++)
+# -gline-tables-only must be enough for these tests, so use it if possible.
+if(COMPILER_RT_TEST_COMPILER_ID MATCHES "Clang")
+  list(APPEND ASAN_UNITTEST_COMMON_CFLAGS -gline-tables-only)
+else()
+  list(APPEND ASAN_UNITTEST_COMMON_CFLAGS -g)
+endif()
+
+if(NOT MSVC)
+  list(APPEND SANITIZER_TEST_LINK_FLAGS_COMMON --driver-mode=g++)
+endif()
+
 append_if(COMPILER_RT_HAS_LIBDL -ldl SANITIZER_TEST_LINK_FLAGS_COMMON)
-append_if(COMPILER_RT_HAS_LIBPTHREAD -lpthread SANITIZER_TEST_LINK_FLAGS_COMMON)
-# x86_64 FreeBSD 9.2 additionally requires libc++ to build the tests.
+append_if(COMPILER_RT_HAS_LIBPTHREAD -pthread SANITIZER_TEST_LINK_FLAGS_COMMON)
+# x86_64 FreeBSD 9.2 additionally requires libc++ to build the tests. Also,
+# 'libm' shall be specified explicitly to build i386 tests.
 if(CMAKE_SYSTEM MATCHES "FreeBSD-9.2-RELEASE")
-  list(APPEND SANITIZER_TEST_LINK_FLAGS_COMMON "-lc++")
+  list(APPEND SANITIZER_TEST_LINK_FLAGS_COMMON "-lc++ -lm")
 endif()
 
 include_directories(..)
@@ -68,7 +81,11 @@ function(get_sanitizer_common_lib_for_arch arch lib lib_name)
     set(tgt_name "RTSanitizerCommon.test.${arch}")
   endif()
   set(${lib} "${tgt_name}" PARENT_SCOPE)
-  set(${lib_name} "lib${tgt_name}.a" PARENT_SCOPE)
+  if(NOT MSVC)
+    set(${lib_name} "lib${tgt_name}.a" PARENT_SCOPE)
+  else()
+    set(${lib_name} "${tgt_name}.lib" PARENT_SCOPE)
+  endif()
 endfunction()
 
 # Sanitizer_common unit tests testsuite.
@@ -124,7 +141,7 @@ macro(add_sanitizer_tests_for_arch arch)
   endif()
 endmacro()
 
-if(COMPILER_RT_CAN_EXECUTE_TESTS)
+if(COMPILER_RT_CAN_EXECUTE_TESTS AND NOT ANDROID)
   # We use just-built clang to build sanitizer_common unittests, so we must
   # be sure that produced binaries would work.
   if(APPLE)

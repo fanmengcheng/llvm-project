@@ -11,8 +11,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef CODEGEN_ASMPRINTER_DWARFCOMPILEUNIT_H
-#define CODEGEN_ASMPRINTER_DWARFCOMPILEUNIT_H
+#ifndef LLVM_LIB_CODEGEN_ASMPRINTER_DWARFUNIT_H
+#define LLVM_LIB_CODEGEN_ASMPRINTER_DWARFUNIT_H
 
 #include "DIE.h"
 #include "DwarfDebug.h"
@@ -60,8 +60,6 @@ public:
   const SmallVectorImpl<RangeSpan> &getRanges() const { return Ranges; }
   void addRange(RangeSpan Range) { Ranges.push_back(Range); }
 };
-
-enum AbstractOrInlined { AOI_None, AOI_Inlined, AOI_Abstract };
 
 //===----------------------------------------------------------------------===//
 /// Unit - This dwarf writer support class manages information associated
@@ -348,8 +346,10 @@ public:
 
   /// addConstantValue - Add constant value entry in variable DIE.
   void addConstantValue(DIE &Die, const MachineOperand &MO, DIType Ty);
-  void addConstantValue(DIE &Die, const ConstantInt *CI, bool Unsigned);
+  void addConstantValue(DIE &Die, const ConstantInt *CI, DIType Ty);
+  void addConstantValue(DIE &Die, const APInt &Val, DIType Ty);
   void addConstantValue(DIE &Die, const APInt &Val, bool Unsigned);
+  void addConstantValue(DIE &Die, bool Unsigned, uint64_t Val);
 
   /// addConstantFPValue - Add constant value entry in variable DIE.
   void addConstantFPValue(DIE &Die, const MachineOperand &MO);
@@ -359,7 +359,8 @@ public:
   void addTemplateParams(DIE &Buffer, DIArray TParams);
 
   /// addRegisterOp - Add register operand.
-  void addRegisterOp(DIELoc &TheDie, unsigned Reg);
+  void addRegisterOpPiece(DIELoc &TheDie, unsigned Reg,
+                          unsigned SizeInBits = 0, unsigned OffsetInBits = 0);
 
   /// addRegisterOffset - Add register offset.
   void addRegisterOffset(DIELoc &TheDie, unsigned Reg, int64_t Offset);
@@ -399,6 +400,10 @@ public:
   /// getOrCreateSubprogramDIE - Create new DIE using SP.
   DIE *getOrCreateSubprogramDIE(DISubprogram SP);
 
+  void applySubprogramAttributes(DISubprogram SP, DIE &SPDie);
+  void applySubprogramAttributesToDefinition(DISubprogram SP, DIE &SPDie);
+  void applyVariableAttributes(const DbgVariable &Var, DIE &VariableDie);
+
   /// getOrCreateTypeDIE - Find existing DIE or create new DIE for the
   /// given DIType.
   DIE *getOrCreateTypeDIE(const MDNode *N);
@@ -415,10 +420,10 @@ public:
 
   /// constructVariableDIE - Construct a DIE for the given DbgVariable.
   std::unique_ptr<DIE> constructVariableDIE(DbgVariable &DV,
-                                            AbstractOrInlined AbsIn = AOI_None);
+                                            bool Abstract = false);
 
   /// constructSubprogramArguments - Construct function argument DIEs.
-  void constructSubprogramArguments(DIE &Buffer, DIArray Args);
+  void constructSubprogramArguments(DIE &Buffer, DITypeArray Args);
 
   /// Create a DIE with the given Tag, add the DIE to its parent, and
   /// call insertDIE if MD is not null.
@@ -453,7 +458,7 @@ private:
   /// \brief Construct a DIE for the given DbgVariable without initializing the
   /// DbgVariable's DIE reference.
   std::unique_ptr<DIE> constructVariableDIEImpl(const DbgVariable &DV,
-                                                AbstractOrInlined AbsIn);
+                                                bool Abstract);
 
   /// constructTypeDIE - Construct basic type die from DIBasicType.
   void constructTypeDIE(DIE &Buffer, DIBasicType BTy);
@@ -575,6 +580,10 @@ public:
            sizeof(uint32_t);                               // Type DIE Offset
   }
   void initSection(const MCSection *Section);
+  // Bring in the base function (taking two args, including the section symbol)
+  // for use when building DWO type units (they don't go in unique comdat
+  // sections)
+  using DwarfUnit::initSection;
   DwarfCompileUnit &getCU() override { return CU; }
 
 protected:

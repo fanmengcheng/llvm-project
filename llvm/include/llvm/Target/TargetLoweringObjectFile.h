@@ -70,7 +70,8 @@ public:
 
   /// Given a constant with the SectionKind, return a section that it should be
   /// placed in.
-  virtual const MCSection *getSectionForConstant(SectionKind Kind) const;
+  virtual const MCSection *getSectionForConstant(SectionKind Kind,
+                                                 const Constant *C) const;
 
   /// Classify the specified global variable into a set of target independent
   /// categories embodied in SectionKind.
@@ -130,14 +131,13 @@ public:
   getTTypeReference(const MCSymbolRefExpr *Sym, unsigned Encoding,
                     MCStreamer &Streamer) const;
 
-  virtual const MCSection *
-  getStaticCtorSection(unsigned Priority = 65535) const {
-    (void)Priority;
+  virtual const MCSection *getStaticCtorSection(unsigned Priority,
+                                                const MCSymbol *KeySym) const {
     return StaticCtorSection;
   }
-  virtual const MCSection *
-  getStaticDtorSection(unsigned Priority = 65535) const {
-    (void)Priority;
+
+  virtual const MCSection *getStaticDtorSection(unsigned Priority,
+                                                const MCSymbol *KeySym) const {
     return StaticDtorSection;
   }
 

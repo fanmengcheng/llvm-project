@@ -26,7 +26,7 @@ BasicBlock *polly::executeScopConditionally(Scop &S, Pass *PassInfo) {
   PollyIRBuilder Builder(R.getEntry());
   DominatorTree &DT =
       PassInfo->getAnalysis<DominatorTreeWrapperPass>().getDomTree();
-  RegionInfo &RI = PassInfo->getAnalysis<RegionInfo>();
+  RegionInfo &RI = PassInfo->getAnalysis<RegionInfoPass>().getRegionInfo();
   LoopInfo &LI = PassInfo->getAnalysis<LoopInfo>();
 
   // Split the entry edge of the region and generate a new basic block on this
@@ -37,9 +37,9 @@ BasicBlock *polly::executeScopConditionally(Scop &S, Pass *PassInfo) {
     std::string OldName = OldBlock->getName();
 
     // Update ScopInfo.
-    for (Scop::iterator SI = S.begin(), SE = S.end(); SI != SE; ++SI)
-      if ((*SI)->getBasicBlock() == OldBlock) {
-        (*SI)->setBasicBlock(NewBlock);
+    for (ScopStmt *Stmt : S)
+      if (Stmt->getBasicBlock() == OldBlock) {
+        Stmt->setBasicBlock(NewBlock);
         break;
       }
 

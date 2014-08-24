@@ -66,6 +66,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "AMDGPU.h"
+#include "AMDGPUSubtarget.h"
 #include "SIInstrInfo.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
@@ -195,10 +196,10 @@ bool SIFixSGPRCopies::isVGPRToSGPRCopy(const MachineInstr &Copy,
 
 bool SIFixSGPRCopies::runOnMachineFunction(MachineFunction &MF) {
   MachineRegisterInfo &MRI = MF.getRegInfo();
-  const SIRegisterInfo *TRI = static_cast<const SIRegisterInfo *>(
-      MF.getTarget().getRegisterInfo());
-  const SIInstrInfo *TII = static_cast<const SIInstrInfo *>(
-      MF.getTarget().getInstrInfo());
+  const SIRegisterInfo *TRI =
+      static_cast<const SIRegisterInfo *>(MF.getSubtarget().getRegisterInfo());
+  const SIInstrInfo *TII =
+      static_cast<const SIInstrInfo *>(MF.getSubtarget().getInstrInfo());
   for (MachineFunction::iterator BI = MF.begin(), BE = MF.end();
                                                   BI != BE; ++BI) {
 
@@ -259,14 +260,17 @@ bool SIFixSGPRCopies::runOnMachineFunction(MachineFunction &MF) {
         break;
       }
       case AMDGPU::INSERT_SUBREG: {
-        const TargetRegisterClass *DstRC, *SrcRC;
+        const TargetRegisterClass *DstRC, *Src0RC, *Src1RC;
         DstRC = MRI.getRegClass(MI.getOperand(0).getReg());
-        SrcRC = MRI.getRegClass(MI.getOperand(1).getReg());
-        if (!TRI->isSGPRClass(DstRC) || !TRI->hasVGPRs(SrcRC))
-          break;
-        DEBUG(dbgs() << " Fixing INSERT_SUBREG:\n");
-        DEBUG(MI.print(dbgs()));
-        TII->moveToVALU(MI);
+        Src0RC = MRI.getRegClass(MI.getOperand(1).getReg());
+        Src1RC = MRI.getRegClass(MI.getOperand(2).getReg());
+        if (TRI->isSGPRClass(DstRC) &&
+            (TRI->hasVGPRs(Src0RC) || TRI->hasVGPRs(Src1RC))) {
+          DEBUG(dbgs() << " Fixing INSERT_SUBREG:\n");
+          DEBUG(MI.print(dbgs()));
+          TII->moveToVALU(MI);
+        }
+        break;
       }
       }
     }

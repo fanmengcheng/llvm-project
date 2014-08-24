@@ -274,6 +274,14 @@ AppleGetPendingItemsHandler::GetPendingItems (Thread &thread, addr_t queue, addr
 
     error.Clear();
 
+    if (thread.SafeToCallFunctions() == false)
+    {
+        if (log)
+            log->Printf ("Not safe to call functions on thread 0x%" PRIx64, thread.GetID());
+        error.SetErrorString ("Not safe to call functions on this thread.");
+        return return_value;
+    }
+
     // Set up the arguments for a call to
 
     // struct get_pending_items_return_values
@@ -365,6 +373,7 @@ AppleGetPendingItemsHandler::GetPendingItems (Thread &thread, addr_t queue, addr
     if (m_get_pending_items_function == NULL)
     {
         error.SetErrorString ("Unable to compile function to call __introspection_dispatch_queue_get_pending_items");
+        return return_value;
     }
 
 

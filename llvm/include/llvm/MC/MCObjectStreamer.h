@@ -35,6 +35,8 @@ class MCObjectStreamer : public MCStreamer {
   MCAssembler *Assembler;
   MCSectionData *CurSectionData;
   MCSectionData::iterator CurInsertionPoint;
+  bool EmitEHFrame;
+  bool EmitDebugFrame;
 
   virtual void EmitInstToData(const MCInst &Inst, const MCSubtargetInfo&) = 0;
   void EmitCFIStartProcImpl(MCDwarfFrameInfo &Frame) override;
@@ -57,6 +59,8 @@ public:
   MCSymbolData &getOrCreateSymbolData(const MCSymbol *Symbol) {
     return getAssembler().getOrCreateSymbolData(*Symbol);
   }
+  void EmitFrames(MCAsmBackend *MAB);
+  void EmitCFISections(bool EH, bool Debug) override;
 
 protected:
   MCSectionData *getCurrentSectionData() const {
@@ -74,16 +78,15 @@ protected:
   /// fragment is not a data fragment.
   MCDataFragment *getOrCreateDataFragment() const;
 
-  const MCExpr *AddValueSymbols(const MCExpr *Value);
-
 public:
+  void visitUsedSymbol(const MCSymbol &Sym) override;
+
   MCAssembler &getAssembler() { return *Assembler; }
 
   /// @name MCStreamer Interface
   /// @{
 
   void EmitLabel(MCSymbol *Symbol) override;
-  void EmitDebugLabel(MCSymbol *Symbol) override;
   void EmitAssignment(MCSymbol *Symbol, const MCExpr *Value) override;
   void EmitValueImpl(const MCExpr *Value, unsigned Size,
                      const SMLoc &Loc = SMLoc()) override;
@@ -114,14 +117,18 @@ public:
                              StringRef FileName) override;
   void EmitDwarfAdvanceLineAddr(int64_t LineDelta, const MCSymbol *LastLabel,
                                 const MCSymbol *Label,
-                                unsigned PointerSize) override;
+                                unsigned PointerSize);
   void EmitDwarfAdvanceFrameAddr(const MCSymbol *LastLabel,
-                                 const MCSymbol *Label) override;
+                                 const MCSymbol *Label);
   void EmitGPRel32Value(const MCExpr *Value) override;
   void EmitGPRel64Value(const MCExpr *Value) override;
   void EmitFill(uint64_t NumBytes, uint8_t FillValue) override;
   void EmitZeros(uint64_t NumBytes) override;
   void FinishImpl() override;
+
+  virtual bool mayHaveInstructions() const {
+    return getCurrentSectionData()->hasInstructions();
+  }
 };
 
 } // end namespace llvm

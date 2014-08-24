@@ -214,10 +214,29 @@ public:
 
   void appendLLVMOption(const char *opt) { _llvmOptions.push_back(opt); }
 
+  void addAlias(StringRef from, StringRef to) { _aliasSymbols[from] = to; }
+  const std::map<std::string, std::string> &getAliases() const {
+    return _aliasSymbols;
+  }
+
   void setInputGraph(std::unique_ptr<InputGraph> inputGraph) {
     _inputGraph = std::move(inputGraph);
   }
   InputGraph &getInputGraph() const { return *_inputGraph; }
+
+  /// Notify the LinkingContext when an atom is added to the symbol table.
+  /// This is an opportunity for flavor specific work to be done.
+  virtual void notifySymbolTableAdd(const Atom *atom) const {
+  }
+
+  /// Notify the LinkingContext when the symbol table found a name collision.
+  /// The useNew parameter specifies which the symbol table plans to keep,
+  /// but that can be changed by the LinkingContext.  This is also an
+  /// opportunity for flavor specific processing.
+  virtual void notifySymbolTableCoalesce(const Atom *existingAtom,
+                                         const Atom *newAtom,
+                                         bool &useNew) const {
+  }
 
   /// This method adds undefined symbols specified by the -u option to the to
   /// the list of undefined symbols known to the linker. This option essentially
@@ -294,7 +313,7 @@ public:
   /// Calls through to the writeFile() method on the specified Writer.
   ///
   /// \param linkedFile This is the merged/linked graph of all input file Atoms.
-  virtual error_code writeFile(const File &linkedFile) const;
+  virtual std::error_code writeFile(const File &linkedFile) const;
 
   /// Return the next ordinal and Increment it.
   virtual uint64_t getNextOrdinalAndIncrement() const { return _nextOrdinal++; }
@@ -307,13 +326,16 @@ protected:
   /// Abstract method to lazily instantiate the Writer.
   virtual Writer &writer() const = 0;
 
-  /// Method to create a internal file for the entry symbol
+  /// Method to create an internal file for the entry symbol
   virtual std::unique_ptr<File> createEntrySymbolFile() const;
   std::unique_ptr<File> createEntrySymbolFile(StringRef filename) const;
 
-  /// Method to create a internal file for an undefined symbol
+  /// Method to create an internal file for an undefined symbol
   virtual std::unique_ptr<File> createUndefinedSymbolFile() const;
   std::unique_ptr<File> createUndefinedSymbolFile(StringRef filename) const;
+
+  /// Method to create an internal file for alias symbols
+  std::unique_ptr<File> createAliasSymbolFile() const;
 
   StringRef _outputPath;
   StringRef _entrySymbolName;
@@ -330,6 +352,7 @@ protected:
   bool _allowShlibUndefines;
   OutputFileType _outputFileType;
   std::vector<StringRef> _deadStripRoots;
+  std::map<std::string, std::string> _aliasSymbols;
   std::vector<const char *> _llvmOptions;
   StringRefVector _initialUndefinedSymbols;
   std::unique_ptr<InputGraph> _inputGraph;

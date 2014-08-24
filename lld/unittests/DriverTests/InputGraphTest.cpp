@@ -16,7 +16,7 @@
 
 #include "lld/Core/InputGraph.h"
 #include "lld/Core/Resolver.h"
-#include "lld/ReaderWriter/Simple.h"
+#include "lld/Core/Simple.h"
 
 using namespace lld;
 
@@ -68,7 +68,7 @@ public:
 
   void expectEnd() {
     ErrorOr<File &> file = _graph->getNextFile();
-    EXPECT_EQ(InputGraphError::no_more_files, file.getError());
+    EXPECT_EQ(file.getError(), InputGraphError::no_more_files);
   }
 
 protected:
@@ -190,4 +190,19 @@ TEST_F(InputGraphTest, Normalize) {
   EXPECT_EQ("file5", getNext());
   EXPECT_EQ("file6", getNext());
   expectEnd();
+}
+
+TEST_F(InputGraphTest, Observer) {
+  std::vector<std::string> files;
+  _graph->registerObserver([&](File *file) { files.push_back(file->path()); });
+
+  _graph->addInputElement(createFile1("file1"));
+  _graph->addInputElement(createFile1("file2"));
+  EXPECT_EQ("file1", getNext());
+  EXPECT_EQ("file2", getNext());
+  expectEnd();
+
+  EXPECT_EQ(2U, files.size());
+  EXPECT_EQ("file1", files[0]);
+  EXPECT_EQ("file2", files[1]);
 }

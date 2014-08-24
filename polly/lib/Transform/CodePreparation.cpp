@@ -18,7 +18,7 @@
 // variables. Such variables are generated before scop detection and
 // also before the code preparation pass. All PHI nodes that are not canonical
 // induction variables are not supported by the indvars based code generation
-// and are consequently translated into explict memory accesses.
+// and are consequently translated into explicit memory accesses.
 //
 // - scev based code generation:
 //
@@ -40,6 +40,7 @@
 #include "polly/LinkAllPasses.h"
 #include "polly/CodeGen/BlockGenerators.h"
 #include "polly/Support/ScopHelper.h"
+#include "llvm/Analysis/DominanceFrontier.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/RegionInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
@@ -215,7 +216,7 @@ void CodePreparation::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<ScalarEvolution>();
 
   AU.addPreserved<LoopInfo>();
-  AU.addPreserved<RegionInfo>();
+  AU.addPreserved<RegionInfoPass>();
   AU.addPreserved<DominatorTreeWrapperPass>();
   AU.addPreserved<DominanceFrontier>();
 }

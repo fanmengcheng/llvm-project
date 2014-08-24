@@ -35,7 +35,6 @@ class Target;
 class DataLayout;
 class TargetLibraryInfo;
 class TargetFrameLowering;
-class TargetInstrInfo;
 class TargetIntrinsicInfo;
 class TargetJITInfo;
 class TargetLowering;
@@ -84,14 +83,11 @@ protected: // Can only create subclasses.
   ///
   const MCAsmInfo *AsmInfo;
 
-  unsigned MCRelaxAll : 1;
-  unsigned MCNoExecStack : 1;
-  unsigned MCSaveTempLabels : 1;
-  unsigned MCUseCFI : 1;
-  unsigned MCUseDwarfDirectory : 1;
   unsigned RequireStructuredCFG : 1;
 
 public:
+  mutable TargetOptions Options;
+
   virtual ~TargetMachine();
 
   const Target &getTarget() const { return TheTarget; }
@@ -105,34 +101,10 @@ public:
   virtual const TargetSubtargetInfo *getSubtargetImpl() const {
     return nullptr;
   }
-
-  mutable TargetOptions Options;
-
-  /// \brief Reset the target options based on the function's attributes.
-  void resetTargetOptions(const MachineFunction *MF) const;
-
-  // Interfaces to the major aspects of target machine information:
-  //
-  // -- Instruction opcode and operand information
-  // -- Pipelines and scheduling information
-  // -- Stack frame information
-  // -- Selection DAG lowering information
-  //
-  // N.B. These objects may change during compilation. It's not safe to cache
-  // them between functions.
-  virtual const TargetInstrInfo  *getInstrInfo() const { return nullptr; }
-  virtual const TargetFrameLowering *getFrameLowering() const {
-    return nullptr;
+  TargetSubtargetInfo *getSubtargetImpl() {
+    const TargetMachine *TM = this;
+    return const_cast<TargetSubtargetInfo *>(TM->getSubtargetImpl());
   }
-  virtual const TargetLowering *getTargetLowering() const { return nullptr; }
-  virtual const TargetSelectionDAGInfo *getSelectionDAGInfo() const {
-    return nullptr;
-  }
-  virtual const DataLayout *getDataLayout() const { return nullptr; }
-
-  /// getMCAsmInfo - Return target specific asm information.
-  ///
-  const MCAsmInfo *getMCAsmInfo() const { return AsmInfo; }
 
   /// getSubtarget - This method returns a pointer to the specified type of
   /// TargetSubtargetInfo.  In debug builds, it verifies that the object being
@@ -141,67 +113,22 @@ public:
     return *static_cast<const STC*>(getSubtargetImpl());
   }
 
-  /// getRegisterInfo - If register information is available, return it.  If
-  /// not, return null.  This is kept separate from RegInfo until RegInfo has
-  /// details of graph coloring register allocation removed from it.
+  /// \brief Reset the target options based on the function's attributes.
+  void resetTargetOptions(const MachineFunction *MF) const;
+
+  /// getMCAsmInfo - Return target specific asm information.
   ///
-  virtual const TargetRegisterInfo *getRegisterInfo() const { return nullptr; }
+  const MCAsmInfo *getMCAsmInfo() const { return AsmInfo; }
 
   /// getIntrinsicInfo - If intrinsic information is available, return it.  If
   /// not, return null.
   ///
-  virtual const TargetIntrinsicInfo *getIntrinsicInfo() const { return nullptr;}
-
-  /// getJITInfo - If this target supports a JIT, return information for it,
-  /// otherwise return null.
-  ///
-  virtual TargetJITInfo *getJITInfo() { return nullptr; }
-
-  /// getInstrItineraryData - Returns instruction itinerary data for the target
-  /// or specific subtarget.
-  ///
-  virtual const InstrItineraryData *getInstrItineraryData() const {
+  virtual const TargetIntrinsicInfo *getIntrinsicInfo() const {
     return nullptr;
   }
 
   bool requiresStructuredCFG() const { return RequireStructuredCFG; }
   void setRequiresStructuredCFG(bool Value) { RequireStructuredCFG = Value; }
-
-  /// hasMCRelaxAll - Check whether all machine code instructions should be
-  /// relaxed.
-  bool hasMCRelaxAll() const { return MCRelaxAll; }
-
-  /// setMCRelaxAll - Set whether all machine code instructions should be
-  /// relaxed.
-  void setMCRelaxAll(bool Value) { MCRelaxAll = Value; }
-
-  /// hasMCSaveTempLabels - Check whether temporary labels will be preserved
-  /// (i.e., not treated as temporary).
-  bool hasMCSaveTempLabels() const { return MCSaveTempLabels; }
-
-  /// setMCSaveTempLabels - Set whether temporary labels will be preserved
-  /// (i.e., not treated as temporary).
-  void setMCSaveTempLabels(bool Value) { MCSaveTempLabels = Value; }
-
-  /// hasMCNoExecStack - Check whether an executable stack is not needed.
-  bool hasMCNoExecStack() const { return MCNoExecStack; }
-
-  /// setMCNoExecStack - Set whether an executabel stack is not needed.
-  void setMCNoExecStack(bool Value) { MCNoExecStack = Value; }
-
-  /// hasMCUseCFI - Check whether we should use dwarf's .cfi_* directives.
-  bool hasMCUseCFI() const { return MCUseCFI; }
-
-  /// setMCUseCFI - Set whether we should use dwarf's .cfi_* directives.
-  void setMCUseCFI(bool Value) { MCUseCFI = Value; }
-
-  /// hasMCUseDwarfDirectory - Check whether we should use .file directives with
-  /// explicit directories.
-  bool hasMCUseDwarfDirectory() const { return MCUseDwarfDirectory; }
-
-  /// setMCUseDwarfDirectory - Set whether all we should use .file directives
-  /// with explicit directories.
-  void setMCUseDwarfDirectory(bool Value) { MCUseDwarfDirectory = Value; }
 
   /// getRelocationModel - Returns the code generation relocation model. The
   /// choices are static, PIC, and dynamic-no-pic, and target default.
@@ -228,26 +155,26 @@ public:
 
   /// getAsmVerbosityDefault - Returns the default value of asm verbosity.
   ///
-  static bool getAsmVerbosityDefault();
+  bool getAsmVerbosityDefault() const ;
 
   /// setAsmVerbosityDefault - Set the default value of asm verbosity. Default
   /// is false.
-  static void setAsmVerbosityDefault(bool);
+  void setAsmVerbosityDefault(bool);
 
   /// getDataSections - Return true if data objects should be emitted into their
   /// own section, corresponds to -fdata-sections.
-  static bool getDataSections();
+  bool getDataSections() const;
 
   /// getFunctionSections - Return true if functions should be emitted into
   /// their own section, corresponding to -ffunction-sections.
-  static bool getFunctionSections();
+  bool getFunctionSections() const;
 
   /// setDataSections - Set if the data are emit into separate sections.
-  static void setDataSections(bool);
+  void setDataSections(bool);
 
   /// setFunctionSections - Set if the functions are emit into separate
   /// sections.
-  static void setFunctionSections(bool);
+  void setFunctionSections(bool);
 
   /// \brief Register analysis passes for this target with a pass manager.
   virtual void addAnalysisPasses(PassManagerBase &) {}

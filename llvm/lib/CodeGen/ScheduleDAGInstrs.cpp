@@ -50,12 +50,11 @@ static cl::opt<bool> UseTBAA("use-tbaa-in-sched-mi", cl::Hidden,
     cl::init(true), cl::desc("Enable use of TBAA during MI GAD construction"));
 
 ScheduleDAGInstrs::ScheduleDAGInstrs(MachineFunction &mf,
-                                     const MachineLoopInfo &mli,
-                                     const MachineDominatorTree &mdt,
+                                     const MachineLoopInfo *mli,
                                      bool IsPostRAFlag,
                                      bool RemoveKillFlags,
                                      LiveIntervals *lis)
-  : ScheduleDAG(mf), MLI(mli), MDT(mdt), MFI(mf.getFrameInfo()), LIS(lis),
+  : ScheduleDAG(mf), MLI(mli), MFI(mf.getFrameInfo()), LIS(lis),
     IsPostRA(IsPostRAFlag), RemoveKillFlags(RemoveKillFlags),
     CanHandleTerminators(false), FirstDbgValue(nullptr) {
   assert((IsPostRA || LIS) && "PreRA scheduling requires LiveIntervals");
@@ -563,9 +562,9 @@ static bool MIsNeedChainEdge(AliasAnalysis *AA, const MachineFrameInfo *MFI,
 
   AliasAnalysis::AliasResult AAResult = AA->alias(
       AliasAnalysis::Location(MMOa->getValue(), Overlapa,
-                              UseTBAA ? MMOa->getTBAAInfo() : nullptr),
+                              UseTBAA ? MMOa->getAAInfo() : AAMDNodes()),
       AliasAnalysis::Location(MMOb->getValue(), Overlapb,
-                              UseTBAA ? MMOb->getTBAAInfo() : nullptr));
+                              UseTBAA ? MMOb->getAAInfo() : AAMDNodes()));
 
   return (AAResult != AliasAnalysis::NoAlias);
 }
@@ -575,7 +574,7 @@ static bool MIsNeedChainEdge(AliasAnalysis *AA, const MachineFrameInfo *MFI,
 static unsigned
 iterateChainSucc(AliasAnalysis *AA, const MachineFrameInfo *MFI,
                  SUnit *SUa, SUnit *SUb, SUnit *ExitSU, unsigned *Depth,
-                 SmallPtrSet<const SUnit*, 16> &Visited) {
+                 SmallPtrSetImpl<const SUnit*> &Visited) {
   if (!SUa || !SUb || SUb == ExitSU)
     return *Depth;
 
@@ -702,10 +701,10 @@ void ScheduleDAGInstrs::initSUnits() {
 
     // If this SUnit uses a reserved or unbuffered resource, mark it as such.
     //
-    // Reserved resources block an instruction from issueing and stall the
+    // Reserved resources block an instruction from issuing and stall the
     // entire pipeline. These are identified by BufferSize=0.
     //
-    // Unbuffered resources prevent execution of subsequeny instructions that
+    // Unbuffered resources prevent execution of subsequent instructions that
     // require the same resources. This is used for in-order execution pipelines
     // within an out-of-order core. These are identified by BufferSize=1.
     if (SchedModel.hasInstrSchedModel()) {
@@ -1508,7 +1507,7 @@ void SchedDFSResult::scheduleTree(unsigned SubtreeID) {
   }
 }
 
-#if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
+LLVM_DUMP_METHOD
 void ILPValue::print(raw_ostream &OS) const {
   OS << InstrCount << " / " << Length << " = ";
   if (!Length)
@@ -1517,16 +1516,17 @@ void ILPValue::print(raw_ostream &OS) const {
     OS << format("%g", ((double)InstrCount / Length));
 }
 
+LLVM_DUMP_METHOD
 void ILPValue::dump() const {
   dbgs() << *this << '\n';
 }
 
 namespace llvm {
 
+LLVM_DUMP_METHOD
 raw_ostream &operator<<(raw_ostream &OS, const ILPValue &Val) {
   Val.print(OS);
   return OS;
 }
 
 } // namespace llvm
-#endif // !NDEBUG || LLVM_ENABLE_DUMP

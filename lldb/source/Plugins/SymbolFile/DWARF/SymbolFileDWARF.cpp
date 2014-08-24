@@ -110,7 +110,7 @@ DW_ACCESS_to_AccessType (uint32_t dwarf_accessibility)
     return eAccessNone;
 }
 
-#if defined(LLDB_CONFIGURATION_DEBUG) or defined(LLDB_CONFIGURATION_RELEASE)
+#if defined(LLDB_CONFIGURATION_DEBUG) || defined(LLDB_CONFIGURATION_RELEASE)
 
 class DIEStack
 {
@@ -1985,7 +1985,7 @@ SymbolFileDWARF::ParseChildMembers
                                     const uint64_t word_width = 32;
                                     
                                     // Objective-C has invalid DW_AT_bit_offset values in older versions
-                                    // of clang, so we have to be careful and only insert unnammed bitfields
+                                    // of clang, so we have to be careful and only insert unnamed bitfields
                                     // if we have a new enough clang.
                                     bool detect_unnamed_bitfields = true;
                                     
@@ -2576,7 +2576,7 @@ SymbolFileDWARF::ResolveClangOpaqueTypeDefinition (ClangASTType &clang_type)
                                     // is complete. If we don't do this, clang will crash when we
                                     // call setBases() inside of "clang_type.SetBaseClassesForClassType()"
                                     // below. Since we provide layout assistance, all ivars in this
-                                    // class and other classe will be fine, this is the best we can do
+                                    // class and other classes will be fine, this is the best we can do
                                     // short of crashing.
                                     base_class_type.StartTagDeclarationDefinition ();
                                     base_class_type.CompleteTagDeclarationDefinition ();
@@ -3081,7 +3081,7 @@ SymbolFileDWARF::DIEIsInNamespace (const ClangNamespaceDecl *namespace_decl,
                                    DWARFCompileUnit* cu, 
                                    const DWARFDebugInfoEntry* die)
 {
-    // No namespace specified, so the answesr i
+    // No namespace specified, so the answer is
     if (namespace_decl == NULL)
         return true;
     
@@ -3111,7 +3111,7 @@ SymbolFileDWARF::DIEIsInNamespace (const ClangNamespaceDecl *namespace_decl,
         {
             // We have a namespace_decl that was not NULL but it contained
             // a NULL "clang::NamespaceDecl", so this means the global namespace
-            // So as long the the contained decl context DIE isn't a namespace
+            // So as long the contained decl context DIE isn't a namespace
             // we should be ok.
             if (decl_ctx_die->Tag() != DW_TAG_namespace)
                 return true;
@@ -4968,7 +4968,7 @@ SymbolFileDWARF::DIEDeclContextsMatch (DWARFCompileUnit* cu1, const DWARFDebugIn
     if (count1 != count2)
         return false;
     
-    // Make sure the DW_TAG values match all the way back up the the
+    // Make sure the DW_TAG values match all the way back up the
     // compile unit. If they don't, then we are done.
     const DWARFDebugInfoEntry *decl_ctx_die1;
     const DWARFDebugInfoEntry *decl_ctx_die2;
@@ -5681,7 +5681,7 @@ SymbolFileDWARF::ParseType (const SymbolContext& sc, DWARFCompileUnit* dwarf_cu,
     if (type_is_new_ptr)
         *type_is_new_ptr = false;
 
-#if defined(LLDB_CONFIGURATION_DEBUG) or defined(LLDB_CONFIGURATION_RELEASE)
+#if defined(LLDB_CONFIGURATION_DEBUG) || defined(LLDB_CONFIGURATION_RELEASE)
     static DIEStack g_die_stack;
     DIEStack::ScopedPopper scoped_die_logger(g_die_stack);
 #endif
@@ -5702,7 +5702,7 @@ SymbolFileDWARF::ParseType (const SymbolContext& sc, DWARFCompileUnit* dwarf_cu,
                                                       DW_TAG_value_to_name(die->Tag()),
                                                       die->GetName(this, dwarf_cu));
 
-#if defined(LLDB_CONFIGURATION_DEBUG) or defined(LLDB_CONFIGURATION_RELEASE)
+#if defined(LLDB_CONFIGURATION_DEBUG) || defined(LLDB_CONFIGURATION_RELEASE)
             scoped_die_logger.Push (dwarf_cu, die);
             g_die_stack.LogDIEs(log, this);
 #endif
@@ -6185,7 +6185,7 @@ SymbolFileDWARF::ParseType (const SymbolContext& sc, DWARFCompileUnit* dwarf_cu,
                         if (accessibility == eAccessNone && decl_ctx)
                         {
                             // Check the decl context that contains this class/struct/union.
-                            // If it is a class we must give it an accessability.
+                            // If it is a class we must give it an accessibility.
                             const clang::Decl::Kind containing_decl_kind = decl_ctx->getDeclKind();
                             if (DeclKindIsCXXClass (containing_decl_kind))
                                 accessibility = default_accessibility;
@@ -6313,8 +6313,8 @@ SymbolFileDWARF::ParseType (const SymbolContext& sc, DWARFCompileUnit* dwarf_cu,
                         {
                             // Start the definition if the class is not objective C since
                             // the underlying decls respond to isCompleteDefinition(). Objective
-                            // C decls dont' respond to isCompleteDefinition() so we can't
-                            // start the declaration definition right away. For C++ classs/union/structs
+                            // C decls don't respond to isCompleteDefinition() so we can't
+                            // start the declaration definition right away. For C++ class/union/structs
                             // we want to start the definition in case the class is needed as the
                             // declaration context for a contained class or type without the need
                             // to complete that type..
@@ -6577,7 +6577,7 @@ SymbolFileDWARF::ParseType (const SymbolContext& sc, DWARFCompileUnit* dwarf_cu,
 
                     const bool is_cxx_method = DeclKindIsCXXClass (containing_decl_kind);
                     // Start off static. This will be set to false in ParseChildParameters(...)
-                    // if we find a "this" paramters as the first parameter
+                    // if we find a "this" parameters as the first parameter
                     if (is_cxx_method)
                         is_static = true;
                     
@@ -7333,6 +7333,7 @@ SymbolFileDWARF::ParseVariableDIE
             bool is_artificial = false;
             bool location_is_const_value_data = false;
             bool has_explicit_location = false;
+            DWARFFormValue const_value;
             //AccessType accessibility = eAccessNone;
 
             for (i=0; i<num_attributes; ++i)
@@ -7371,7 +7372,21 @@ SymbolFileDWARF::ParseVariableDIE
                                 const uint8_t *fixed_form_sizes = DWARFFormValue::GetFixedFormSizesForAddressSize (dwarf_cu->GetAddressByteSize());
                                 uint32_t data_offset = attributes.DIEOffsetAtIndex(i);
                                 uint32_t data_length = fixed_form_sizes[form_value.Form()];
-                                location.CopyOpcodeData(module, debug_info_data, data_offset, data_length);
+                                if (data_length == 0)
+                                {
+                                    const uint8_t *data_pointer = form_value.BlockData();
+                                    if (data_pointer)
+                                    {
+                                        data_length = form_value.Unsigned();
+                                    }
+                                    else if (DWARFFormValue::IsDataForm(form_value.Form()))
+                                    {
+                                        // we need to get the byte size of the type later after we create the variable
+                                        const_value = form_value;
+                                    }
+                                }
+                                else
+                                    location.CopyOpcodeData(module, debug_info_data, data_offset, data_length);
                             }
                             else
                             {
@@ -7446,7 +7461,7 @@ SymbolFileDWARF::ParseVariableDIE
 
             // DWARF doesn't specify if a DW_TAG_variable is a local, global
             // or static variable, so we have to do a little digging by
-            // looking at the location of a varaible to see if it contains
+            // looking at the location of a variable to see if it contains
             // a DW_OP_addr opcode _somewhere_ in the definition. I say
             // somewhere because clang likes to combine small global variables
             // into the same symbol and have locations like:
@@ -7583,10 +7598,15 @@ SymbolFileDWARF::ParseVariableDIE
 
             if (symbol_context_scope)
             {
+                SymbolFileTypeSP type_sp(new SymbolFileType(*this, type_uid));
+                
+                if (const_value.Form() && type_sp && type_sp->GetType())
+                    location.CopyOpcodeData(const_value.Unsigned(), type_sp->GetType()->GetByteSize(), dwarf_cu->GetAddressByteSize());
+                
                 var_sp.reset (new Variable (MakeUserID(die->GetOffset()), 
                                             name, 
                                             mangled,
-                                            SymbolFileTypeSP (new SymbolFileType(*this, type_uid)),
+                                            type_sp,
                                             scope, 
                                             symbol_context_scope, 
                                             &decl, 
@@ -7754,7 +7774,7 @@ SymbolFileDWARF::ParseVariables
                                 if (block == NULL)
                                 {
                                     // This must be a specification or abstract origin with 
-                                    // a concrete block couterpart in the current function. We need
+                                    // a concrete block counterpart in the current function. We need
                                     // to find the concrete block so we can correctly add the 
                                     // variable to it
                                     DWARFCompileUnit *concrete_block_die_cu = dwarf_cu;

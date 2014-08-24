@@ -23,6 +23,7 @@
 namespace llvm {
 
 class AliasAnalysis;
+class DominatorTree;
 class Instruction;
 class MDNode;
 class Pass;
@@ -33,7 +34,6 @@ class TerminatorInst;
 /// DeleteDeadBlock - Delete the specified block, which must have no
 /// predecessors.
 void DeleteDeadBlock(BasicBlock *BB);
-
 
 /// FoldSingleEntryPHINodes - We know that BB has one predecessor.  If there are
 /// any single-entry PHI nodes in it, fold them away.  This handles the case
@@ -203,10 +203,12 @@ ReturnInst *FoldReturnIntoUncondBranch(ReturnInst *RI, BasicBlock *BB,
 /// If Unreachable is true, then ThenBlock ends with
 /// UnreachableInst, otherwise it branches to Tail.
 /// Returns the NewBasicBlock's terminator.
+///
+/// Updates DT if given.
 TerminatorInst *SplitBlockAndInsertIfThen(Value *Cond, Instruction *SplitBefore,
                                           bool Unreachable,
-                                          MDNode *BranchWeights = nullptr);
-
+                                          MDNode *BranchWeights = nullptr,
+                                          DominatorTree *DT = nullptr);
 
 /// SplitBlockAndInsertIfThenElse is similar to SplitBlockAndInsertIfThen,
 /// but also creates the ElseBlock.

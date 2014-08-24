@@ -65,10 +65,6 @@ void MCELFStreamer::EmitLabel(MCSymbol *Symbol) {
     MCELF::SetType(SD, ELF::STT_TLS);
 }
 
-void MCELFStreamer::EmitDebugLabel(MCSymbol *Symbol) {
-  EmitLabel(Symbol);
-}
-
 void MCELFStreamer::EmitAssemblerFlag(MCAssemblerFlag Flag) {
   // Let the target do whatever target specific stuff it needs to do.
   getAssembler().getBackend().handleAssemblerFlag(Flag);
@@ -538,7 +534,7 @@ void MCELFStreamer::Flush() {
 }
 
 void MCELFStreamer::FinishImpl() {
-  EmitFrames(nullptr, true);
+  EmitFrames(nullptr);
 
   Flush();
 

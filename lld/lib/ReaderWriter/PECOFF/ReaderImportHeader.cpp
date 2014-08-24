@@ -119,27 +119,24 @@
 //===----------------------------------------------------------------------===//
 
 #include "Atoms.h"
-
-#include "lld/Core/File.h"
 #include "lld/Core/Error.h"
+#include "lld/Core/File.h"
 #include "lld/Core/SharedLibraryAtom.h"
 #include "lld/ReaderWriter/PECOFFLinkingContext.h"
-
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Object/COFF.h"
-#include "llvm/Support/Casting.h"
 #include "llvm/Support/COFF.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Memory.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Support/system_error.h"
-
-#include <map>
-#include <vector>
 #include <cstring>
+#include <map>
+#include <system_error>
+#include <vector>
 
 using namespace lld;
 using namespace lld::pecoff;
@@ -174,7 +171,7 @@ public:
 
 class FileImportLibrary : public File {
 public:
-  FileImportLibrary(std::unique_ptr<MemoryBuffer> mb, error_code &ec)
+  FileImportLibrary(std::unique_ptr<MemoryBuffer> mb, std::error_code &ec)
       : File(mb->getBufferIdentifier(), kindSharedLibrary) {
     const char *buf = mb->getBufferStart();
     const char *end = mb->getBufferEnd();
@@ -211,7 +208,7 @@ public:
     if (type == llvm::COFF::IMPORT_CODE)
       addDefinedAtom(symbolName, dllName, dataAtom);
 
-    ec = error_code::success();
+    ec = std::error_code();
   }
 
   const atom_collection<DefinedAtom> &defined() const override {
@@ -299,42 +296,19 @@ public:
     return (magic == llvm::sys::fs::file_magic::coff_import_library);
   }
 
-  error_code
+  std::error_code
   parseFile(std::unique_ptr<MemoryBuffer> &mb, const class Registry &,
             std::vector<std::unique_ptr<File> > &result) const override {
-    error_code ec;
+    std::error_code ec;
     auto file = std::unique_ptr<File>(new FileImportLibrary(std::move(mb), ec));
     if (ec)
       return ec;
     result.push_back(std::move(file));
-    return error_code::success();
+    return std::error_code();
   }
 };
 
 } // end anonymous namespace
-
-namespace pecoff {
-
-error_code parseCOFFImportLibrary(const LinkingContext &targetInfo,
-                                  std::unique_ptr<MemoryBuffer> &mb,
-                                  std::vector<std::unique_ptr<File> > &result) {
-  // Check the file magic.
-  const char *buf = mb->getBufferStart();
-  const char *end = mb->getBufferEnd();
-  // Error if the file is too small or does not start with the magic.
-  if (end - buf < static_cast<ptrdiff_t>(sizeof(COFF::ImportHeader)) ||
-      memcmp(buf, "\0\0\xFF\xFF", 4))
-    return make_error_code(NativeReaderError::unknown_file_format);
-
-  error_code ec;
-  auto file = std::unique_ptr<File>(new FileImportLibrary(std::move(mb), ec));
-  if (ec)
-    return ec;
-  result.push_back(std::move(file));
-  return error_code::success();
-}
-
-} // end namespace pecoff
 
 void Registry::addSupportCOFFImportLibraries() {
   add(std::unique_ptr<Reader>(new COFFImportLibraryReader()));

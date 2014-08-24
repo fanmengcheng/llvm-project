@@ -20,7 +20,7 @@ using namespace llvm;
 
 #define DEBUG_TYPE "misched"
 
-/// Platform specific modifications to DAG.
+/// Platform-specific modifications to DAG.
 void VLIWMachineScheduler::postprocessDAG() {
   SUnit* LastSequentialCall = nullptr;
   // Currently we only catch the situation when compare gets scheduled
@@ -145,12 +145,12 @@ void VLIWMachineScheduler::schedule() {
         << "********** MI Converging Scheduling VLIW BB#" << BB->getNumber()
         << " " << BB->getName()
         << " in_func " << BB->getParent()->getFunction()->getName()
-        << " at loop depth "  << MLI.getLoopDepth(BB)
+        << " at loop depth "  << MLI->getLoopDepth(BB)
         << " \n");
 
   buildDAGWithRegPressure();
 
-  // Postprocess the DAG to add platform specific artificial dependencies.
+  // Postprocess the DAG to add platform-specific artificial dependencies.
   postprocessDAG();
 
   SmallVector<SUnit*, 8> TopRoots, BotRoots;
@@ -208,8 +208,12 @@ void ConvergingVLIWScheduler::initialize(ScheduleDAGMI *dag) {
   const TargetMachine &TM = DAG->MF.getTarget();
   delete Top.HazardRec;
   delete Bot.HazardRec;
-  Top.HazardRec = TM.getInstrInfo()->CreateTargetMIHazardRecognizer(Itin, DAG);
-  Bot.HazardRec = TM.getInstrInfo()->CreateTargetMIHazardRecognizer(Itin, DAG);
+  Top.HazardRec =
+      TM.getSubtargetImpl()->getInstrInfo()->CreateTargetMIHazardRecognizer(
+          Itin, DAG);
+  Bot.HazardRec =
+      TM.getSubtargetImpl()->getInstrInfo()->CreateTargetMIHazardRecognizer(
+          Itin, DAG);
 
   delete Top.ResourceModel;
   delete Bot.ResourceModel;

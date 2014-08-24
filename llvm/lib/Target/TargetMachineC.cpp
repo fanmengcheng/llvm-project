@@ -24,28 +24,12 @@
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/Target/TargetSubtargetInfo.h"
 #include <cassert>
 #include <cstdlib>
 #include <cstring>
 
 using namespace llvm;
-
-inline DataLayout *unwrap(LLVMTargetDataRef P) {
-  return reinterpret_cast<DataLayout*>(P);
-}
-
-inline LLVMTargetDataRef wrap(const DataLayout *P) {
-  return reinterpret_cast<LLVMTargetDataRef>(const_cast<DataLayout*>(P));
-}
-
-inline TargetLibraryInfo *unwrap(LLVMTargetLibraryInfoRef P) {
-  return reinterpret_cast<TargetLibraryInfo*>(P);
-}
-
-inline LLVMTargetLibraryInfoRef wrap(const TargetLibraryInfo *P) {
-  TargetLibraryInfo *X = const_cast<TargetLibraryInfo*>(P);
-  return reinterpret_cast<LLVMTargetLibraryInfoRef>(X);
-}
 
 inline TargetMachine *unwrap(LLVMTargetMachineRef P) {
   return reinterpret_cast<TargetMachine*>(P);
@@ -189,7 +173,7 @@ char* LLVMGetTargetMachineFeatureString(LLVMTargetMachineRef T) {
 }
 
 LLVMTargetDataRef LLVMGetTargetMachineData(LLVMTargetMachineRef T) {
-  return wrap(unwrap(T)->getDataLayout());
+  return wrap(unwrap(T)->getSubtargetImpl()->getDataLayout());
 }
 
 void LLVMSetTargetMachineAsmVerbosity(LLVMTargetMachineRef T,
@@ -206,7 +190,7 @@ static LLVMBool LLVMTargetMachineEmit(LLVMTargetMachineRef T, LLVMModuleRef M,
 
   std::string error;
 
-  const DataLayout* td = TM->getDataLayout();
+  const DataLayout *td = TM->getSubtargetImpl()->getDataLayout();
 
   if (!td) {
     error = "No DataLayout in TargetMachine";

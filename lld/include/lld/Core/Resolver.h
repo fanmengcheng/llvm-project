@@ -14,6 +14,7 @@
 #include "lld/Core/SharedLibraryFile.h"
 #include "lld/Core/SymbolTable.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 
 #include <set>
@@ -33,7 +34,7 @@ public:
 
   // InputFiles::Handler methods
   void doDefinedAtom(const DefinedAtom&);
-  void doUndefinedAtom(const UndefinedAtom&);
+  bool doUndefinedAtom(const UndefinedAtom &);
   void doSharedLibraryAtom(const SharedLibraryAtom &);
   void doAbsoluteAtom(const AbsoluteAtom &);
 
@@ -56,7 +57,7 @@ private:
   typedef std::function<void(StringRef, bool)> UndefCallback;
 
   /// \brief Add section group/.gnu.linkonce if it does not exist previously.
-  bool maybeAddSectionGroupOrGnuLinkOnce(const DefinedAtom &atom);
+  void maybeAddSectionGroupOrGnuLinkOnce(const DefinedAtom &atom);
 
   /// \brief The main function that iterates over the files to resolve
   bool resolveUndefines();
@@ -67,7 +68,7 @@ private:
   void checkDylibSymbolCollisions();
   void forEachUndefines(bool searchForOverrides, UndefCallback callback);
 
-  void markLive(const Atom &atom);
+  void markLive(const Atom *atom);
   void addAtoms(const std::vector<const DefinedAtom *>&);
 
   class MergedFile : public MutableFile {
@@ -104,7 +105,9 @@ private:
   std::vector<const Atom *>     _atoms;
   std::set<const Atom *>        _deadStripRoots;
   llvm::DenseSet<const Atom *>  _liveAtoms;
+  llvm::DenseSet<const Atom *>  _deadAtoms;
   std::unique_ptr<MergedFile>   _result;
+  llvm::DenseMap<const Atom *, llvm::DenseSet<const Atom *>> _reverseRef;
 };
 
 } // namespace lld

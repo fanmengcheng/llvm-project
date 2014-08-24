@@ -25,6 +25,7 @@ add_lldb_library(lldbCore
   EmulateInstruction.cpp
   Error.cpp
   Event.cpp
+  FastDemangle.cpp
   FileLineResolver.cpp
   FileSpecList.cpp
   History.cpp
@@ -52,6 +53,7 @@ add_lldb_library(lldbCore
   StreamGDBRemote.cpp
   StreamString.cpp
   StringList.cpp
+  StructuredData.cpp
   Timer.cpp
   UserID.cpp
   UserSettingsController.cpp

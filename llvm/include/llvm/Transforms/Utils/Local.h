@@ -82,7 +82,6 @@ bool RecursivelyDeleteTriviallyDeadInstructions(Value *V,
 bool RecursivelyDeleteDeadPHINode(PHINode *PN,
                                   const TargetLibraryInfo *TLI = nullptr);
 
-
 /// SimplifyInstructionsInBlock - Scan the specified basic block and try to
 /// simplify any instructions in it and recursively delete dead instructions.
 ///
@@ -109,14 +108,12 @@ bool SimplifyInstructionsInBlock(BasicBlock *BB, const DataLayout *TD = nullptr,
 void RemovePredecessorAndSimplify(BasicBlock *BB, BasicBlock *Pred,
                                   DataLayout *TD = nullptr);
 
-
 /// MergeBasicBlockIntoOnlyPred - BB is a block with one predecessor and its
 /// predecessor is known to have one successor (BB!).  Eliminate the edge
 /// between them, moving the instructions in the predecessor into BB.  This
 /// deletes the predecessor block.
 ///
 void MergeBasicBlockIntoOnlyPred(BasicBlock *BB, Pass *P = nullptr);
-
 
 /// TryToSimplifyUncondBranchFromEmptyBlock - BB is known to contain an
 /// unconditional branch, and contains no instructions other than PHI nodes,
@@ -151,7 +148,7 @@ bool FlattenCFG(BasicBlock *BB, AliasAnalysis *AA = nullptr);
 /// and if a predecessor branches to us and one of our successors, fold the
 /// setcc into the predecessor and use logical operations to pick the right
 /// destination.
-bool FoldBranchToCommonDest(BranchInst *BI);
+bool FoldBranchToCommonDest(BranchInst *BI, const DataLayout *DL = nullptr);
 
 /// DemoteRegToStack - This function takes a virtual register computed by an
 /// Instruction and replaces it with a slot in the stack frame, allocated via
@@ -277,6 +274,11 @@ bool replaceDbgDeclareForAlloca(AllocaInst *AI, Value *NewAllocaAddress,
 ///
 /// Returns true if any basic block was removed.
 bool removeUnreachableBlocks(Function &F);
+
+/// \brief Combine the metadata of two instructions so that K can replace J
+///
+/// Metadata not listed as known via KnownIDs is removed
+void combineMetadata(Instruction *K, const Instruction *J, ArrayRef<unsigned> KnownIDs);
 
 } // End llvm namespace
 

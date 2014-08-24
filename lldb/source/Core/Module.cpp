@@ -187,25 +187,55 @@ Module::Module (const ModuleSpec &module_spec) :
     ModuleSpec matching_module_spec;
     if (modules_specs.FindMatchingModuleSpec(module_spec, matching_module_spec) == 0)
         return;
-    m_mod_time = module_spec.GetFileSpec().GetModificationTime();
-    if (module_spec.GetArchitecture().IsValid())
-        m_arch = module_spec.GetArchitecture();
-    else
+    
+    if (module_spec.GetFileSpec())
+        m_mod_time = module_spec.GetFileSpec().GetModificationTime();
+    else if (matching_module_spec.GetFileSpec())
+        m_mod_time = matching_module_spec.GetFileSpec().GetModificationTime();
+    
+    // Copy the architecture from the actual spec if we got one back, else use the one that was specified
+    if (matching_module_spec.GetArchitecture().IsValid())
         m_arch = matching_module_spec.GetArchitecture();
-    m_mod_time = module_spec.GetFileSpec().GetModificationTime();
-    m_file = module_spec.GetFileSpec();
-    m_platform_file = module_spec.GetPlatformFileSpec();
-    m_symfile_spec = module_spec.GetSymbolFileSpec();
-    m_object_name = module_spec.GetObjectName();
-    m_object_offset = module_spec.GetObjectOffset();
-    m_object_mod_time = module_spec.GetObjectModificationTime();
+    else if (module_spec.GetArchitecture().IsValid())
+        m_arch = module_spec.GetArchitecture();
+    
+    // Copy the file spec over and use the specified one (if there was one) so we
+    // don't use a path that might have gotten resolved a path in 'matching_module_spec'
+    if (module_spec.GetFileSpec())
+        m_file = module_spec.GetFileSpec();
+    else if (matching_module_spec.GetFileSpec())
+        m_file = matching_module_spec.GetFileSpec();
+
+    // Copy the platform file spec over
+    if (module_spec.GetPlatformFileSpec())
+        m_platform_file = module_spec.GetPlatformFileSpec();
+    else if (matching_module_spec.GetPlatformFileSpec())
+        m_platform_file = matching_module_spec.GetPlatformFileSpec();
+    
+    // Copy the symbol file spec over
+    if (module_spec.GetSymbolFileSpec())
+        m_symfile_spec = module_spec.GetSymbolFileSpec();
+    else if (matching_module_spec.GetSymbolFileSpec())
+        m_symfile_spec = matching_module_spec.GetSymbolFileSpec();
+    
+    // Copy the object name over
+    if (matching_module_spec.GetObjectName())
+        m_object_name = matching_module_spec.GetObjectName();
+    else
+        m_object_name = module_spec.GetObjectName();
+    
+    // Always trust the object offset (file offset) and object modification
+    // time (for mod time in a BSD static archive) of from the matching
+    // module specification
+    m_object_offset = matching_module_spec.GetObjectOffset();
+    m_object_mod_time = matching_module_spec.GetObjectModificationTime();
     
 }
 
 Module::Module(const FileSpec& file_spec, 
                const ArchSpec& arch, 
                const ConstString *object_name, 
-               off_t object_offset,
+               lldb::offset_t object_offset,
                const TimeValue *object_mod_time_ptr) :
     m_mutex (Mutex::eMutexTypeRecursive),
     m_mod_time (file_spec.GetModificationTime()),
@@ -403,7 +433,7 @@ Module::GetClangASTContext ()
                 && object_arch.GetTriple().getOS() == llvm::Triple::UnknownOS)
             {
                 if (object_arch.GetTriple().getArch() == llvm::Triple::arm || 
-                    object_arch.GetTriple().getArch() == llvm::Triple::arm64 ||
+                    object_arch.GetTriple().getArch() == llvm::Triple::aarch64 ||
                     object_arch.GetTriple().getArch() == llvm::Triple::thumb)
                 {
                     object_arch.GetTriple().setOS(llvm::Triple::IOS);
@@ -973,7 +1003,7 @@ Module::FindTypes (const SymbolContext& sc,
         // Check if "name" starts with "::" which means the qualified type starts
         // from the root namespace and implies and exact match. The typenames we
         // get back from clang do not start with "::" so we need to strip this off
-        // in order to get the qualfied names to match
+        // in order to get the qualified names to match
 
         if (type_scope.size() >= 2 && type_scope[0] == ':' && type_scope[1] == ':')
         {
@@ -1486,7 +1516,10 @@ Module::LoadScriptingResourceInTarget (Target *target, Error& error, Stream* fee
         return false;
     }
     
-    LoadScriptFromSymFile shoud_load = target->TargetProperties::GetLoadScriptFromSymbolFile();
+    LoadScriptFromSymFile should_load = target->TargetProperties::GetLoadScriptFromSymbolFile();
+    
+    if (should_load == eLoadScriptFromSymFileFalse)
+        return false;
     
     Debugger &debugger = target->GetDebugger();
     const ScriptLanguage script_language = debugger.GetScriptLanguage();
@@ -1502,7 +1535,8 @@ Module::LoadScriptingResourceInTarget (Target *target, Error& error, Stream* fee
         }
 
         FileSpecList file_specs = platform_sp->LocateExecutableScriptingResources (target,
-                                                                                   *this);
+                                                                                   *this,
+                                                                                   feedback_stream);
         
         
         const uint32_t num_specs = file_specs.GetSize();
@@ -1516,9 +1550,7 @@ Module::LoadScriptingResourceInTarget (Target *target, Error& error, Stream* fee
                     FileSpec scripting_fspec (file_specs.GetFileSpecAtIndex(i));
                     if (scripting_fspec && scripting_fspec.Exists())
                     {
-                        if (shoud_load == eLoadScriptFromSymFileFalse)
-                            return false;
-                        if (shoud_load == eLoadScriptFromSymFileWarn)
+                        if (should_load == eLoadScriptFromSymFileWarn)
                         {
                             if (feedback_stream)
                                 feedback_stream->Printf("warning: '%s' contains a debug script. To run this script in "
@@ -1708,7 +1740,7 @@ Module::PrepareForFunctionNameLookup (const ConstString &name,
 
                 if (!cpp_method.GetQualifiers().empty())
                 {
-                    // There is a "const" or other qualifer following the end of the fucntion parens,
+                    // There is a "const" or other qualifier following the end of the function parens,
                     // this can't be a eFunctionNameTypeBase
                     lookup_name_type_mask &= ~(eFunctionNameTypeBase);
                     if (lookup_name_type_mask == eFunctionNameTypeNone)

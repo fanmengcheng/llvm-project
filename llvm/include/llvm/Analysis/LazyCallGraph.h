@@ -32,8 +32,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_ANALYSIS_LAZY_CALL_GRAPH
-#define LLVM_ANALYSIS_LAZY_CALL_GRAPH
+#ifndef LLVM_ANALYSIS_LAZYCALLGRAPH_H
+#define LLVM_ANALYSIS_LAZYCALLGRAPH_H
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/PointerUnion.h"
@@ -316,7 +316,7 @@ public:
     /// 2) This SCC will be the parent of any new SCCs. Thus, this SCC is
     ///    preserved as the root of any new SCC directed graph formed.
     /// 3) No SCC other than this SCC has its member set changed (this is
-    ///    inherent in the definiton of removing such an edge).
+    ///    inherent in the definition of removing such an edge).
     /// 4) All of the parent links of the SCC graph will be updated to reflect
     ///    the new SCC structure.
     /// 5) All SCCs formed out of this SCC, excluding this SCC, will be

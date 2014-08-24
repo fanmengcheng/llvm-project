@@ -1,6 +1,6 @@
 //===------------- Convert.cpp - Converting gimple to LLVM IR -------------===//
 //
-// Copyright (C) 2005 to 2013  Chris Lattner, Duncan Sands et al.
+// Copyright (C) 2005 to 2014  Chris Lattner, Duncan Sands et al.
 //
 // This file is part of DragonEgg.
 //
@@ -35,6 +35,7 @@
 #include "llvm/IR/CFG.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Target/TargetLowering.h"
+#include "llvm/Target/TargetSubtargetInfo.h"
 
 // System headers
 #include <gmp.h>
@@ -569,7 +570,9 @@ static void StoreRegisterToMemory(Value *V, MemRef Loc, tree type,
 /// TheTreeToLLVM - Keep track of the current function being compiled.
 TreeToLLVM *TheTreeToLLVM = 0;
 
-const DataLayout &getDataLayout() { return *TheTarget->getDataLayout(); }
+const DataLayout &getDataLayout() {
+  return *TheTarget->getSubtargetImpl()->getDataLayout();
+}
 
 /// EmitDebugInfo - Return true if debug info is to be emitted for current
 /// function.
@@ -4253,6 +4256,9 @@ TreeToLLVM::BuildCmpAndSwapAtomic(gimple stmt, unsigned Bits, bool isBool) {
       Builder.CreateAtomicCmpXchg(C[0], C[1], C[2],
                                   SequentiallyConsistent,
                                   SequentiallyConsistent);
+
+  // AtomicCmpXchg has the type {i1,iN}.
+  Result = Builder.CreateExtractValue(Result, 0);
 
   if (isBool)
     Result = Builder.CreateICmpEQ(Result, Old_Val);
@@ -8654,7 +8660,8 @@ bool TreeToLLVM::EmitBuiltinCall(gimple stmt, tree fndecl,
       // Give the backend a chance to upgrade the inline asm to LLVM code.  This
       // handles some common cases that LLVM has intrinsics for, e.g. x86 bswap ->
       // llvm.bswap.
-      if (const TargetLowering *TLI = TheTarget->getTargetLowering())
+      if (const TargetLowering *TLI =
+	  TheTarget->getSubtargetImpl()->getTargetLowering())
         TLI->ExpandInlineAsm(CV);
     }
 

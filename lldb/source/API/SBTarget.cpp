@@ -120,6 +120,18 @@ SBLaunchInfo::SetGroupID (uint32_t gid)
     m_opaque_sp->SetGroupID (gid);
 }
 
+SBFileSpec
+SBLaunchInfo::GetExecutableFile ()
+{
+    return SBFileSpec (m_opaque_sp->GetExecutableFile());
+}
+
+void
+SBLaunchInfo::SetExecutableFile (SBFileSpec exe_file, bool add_as_first_arg)
+{
+    m_opaque_sp->SetExecutableFile(exe_file.ref(), add_as_first_arg);
+}
+
 uint32_t
 SBLaunchInfo::GetNumArguments ()
 {
@@ -278,6 +290,18 @@ const char *
 SBLaunchInfo::GetLaunchEventData () const
 {
     return m_opaque_sp->GetLaunchEventData ();
+}
+
+void
+SBLaunchInfo::SetDetachOnError (bool enable)
+{
+    m_opaque_sp->SetDetachOnError (enable);
+}
+
+bool
+SBLaunchInfo::GetDetachOnError () const
+{
+    return m_opaque_sp->GetDetachOnError ();
 }
 
 SBAttachInfo::SBAttachInfo () :
@@ -747,27 +771,30 @@ SBTarget::Launch (SBLaunchInfo &sb_launch_info, SBError& error)
         Mutex::Locker api_locker (target_sp->GetAPIMutex());
         StateType state = eStateInvalid;
         {
-        ProcessSP process_sp = target_sp->GetProcessSP();
-        if (process_sp)
-        {
-            state = process_sp->GetState();
-
-            if (process_sp->IsAlive() && state != eStateConnected)
+            ProcessSP process_sp = target_sp->GetProcessSP();
+            if (process_sp)
             {
-                if (state == eStateAttaching)
-                    error.SetErrorString ("process attach is in progress");
-                else
-                    error.SetErrorString ("a process is already being debugged");
-                return sb_process;
+                state = process_sp->GetState();
+                
+                if (process_sp->IsAlive() && state != eStateConnected)
+                {
+                    if (state == eStateAttaching)
+                        error.SetErrorString ("process attach is in progress");
+                    else
+                        error.SetErrorString ("a process is already being debugged");
+                    return sb_process;
+                }
             }
-        }
         }
 
         lldb_private::ProcessLaunchInfo &launch_info = sb_launch_info.ref();
 
-        Module *exe_module = target_sp->GetExecutableModulePointer();
-        if (exe_module)
-            launch_info.SetExecutableFile(exe_module->GetPlatformFileSpec(), true);
+        if (!launch_info.GetExecutableFile())
+        {
+            Module *exe_module = target_sp->GetExecutableModulePointer();
+            if (exe_module)
+                launch_info.SetExecutableFile(exe_module->GetPlatformFileSpec(), true);
+        }
 
         const ArchSpec &arch_spec = target_sp->GetArchitecture();
         if (arch_spec.IsValid())
@@ -2424,10 +2451,6 @@ SBTarget::SetSectionLoadAddress (lldb::SBSection section,
                 else
                 {
                     ProcessSP process_sp (target_sp->GetProcessSP());
-                    uint32_t stop_id = 0;
-                    if (process_sp)
-                        stop_id = process_sp->GetStopID();
-
                     if (target_sp->SetSectionLoadAddress (section_sp, section_base_addr))
                     {
                         // Flush info in the process (stack frames, etc)
@@ -2460,10 +2483,6 @@ SBTarget::ClearSectionLoadAddress (lldb::SBSection section)
         else
         {
             ProcessSP process_sp (target_sp->GetProcessSP());
-            uint32_t stop_id = 0;
-            if (process_sp)
-                stop_id = process_sp->GetStopID();
-
             if (target_sp->SetSectionUnloaded (section.GetSP()))
             {
                 // Flush info in the process (stack frames, etc)
@@ -2539,9 +2558,6 @@ SBTarget::ClearModuleLoadAddress (lldb::SBModule module)
                 if (section_list)
                 {
                     ProcessSP process_sp (target_sp->GetProcessSP());
-                    uint32_t stop_id = 0;
-                    if (process_sp)
-                        stop_id = process_sp->GetStopID();
 
                     bool changed = false;
                     const size_t num_sections = section_list->GetSize();
@@ -2549,7 +2565,7 @@ SBTarget::ClearModuleLoadAddress (lldb::SBModule module)
                     {
                         SectionSP section_sp (section_list->GetSectionAtIndex(sect_idx));
                         if (section_sp)
-                            changed |= target_sp->SetSectionUnloaded (section_sp) > 0;
+                            changed |= target_sp->SetSectionUnloaded (section_sp);
                     }
                     if (changed)
                     {

@@ -8,9 +8,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "ArgumentCommentCheck.h"
-#include "../ClangTidy.h"
-#include "../ClangTidyModule.h"
-#include "../ClangTidyModuleRegistry.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/Lex/Lexer.h"
@@ -25,7 +22,15 @@ ArgumentCommentCheck::ArgumentCommentCheck()
     : IdentRE("^(/\\* *)([_A-Za-z][_A-Za-z0-9]*)( *= *\\*/)$") {}
 
 void ArgumentCommentCheck::registerMatchers(MatchFinder *Finder) {
-  Finder->addMatcher(callExpr(unless(operatorCallExpr())).bind("expr"), this);
+  Finder->addMatcher(
+      callExpr(unless(operatorCallExpr()),
+               // NewCallback's arguments relate to the pointed function, don't
+               // check them against NewCallback's parameter names.
+               // FIXME: Make this configurable.
+               unless(hasDeclaration(functionDecl(anyOf(
+                   hasName("NewCallback"), hasName("NewPermanentCallback"))))))
+          .bind("expr"),
+      this);
   Finder->addMatcher(constructExpr().bind("expr"), this);
 }
 
@@ -81,10 +86,10 @@ ArgumentCommentCheck::isLikelyTypo(llvm::ArrayRef<ParmVarDecl *> Params,
   if (ThisED >= UpperBound)
     return false;
 
-  for (const auto &Param : Params) {
-    if (&Param - Params.begin() == ArgIndex)
+  for (unsigned I = 0, E = Params.size(); I != E; ++I) {
+    if (I == ArgIndex)
       continue;
-    IdentifierInfo *II = Param->getIdentifier();
+    IdentifierInfo *II = Params[I]->getIdentifier();
     if (!II)
       continue;
 

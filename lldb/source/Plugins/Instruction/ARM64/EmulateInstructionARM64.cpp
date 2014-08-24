@@ -22,6 +22,7 @@
 #include "Plugins/Process/Utility/ARMUtils.h"
 #include "Utility/ARM64_DWARF_Registers.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/MathExtras.h" // for SignExtend32 template function
                                      // and CountTrailingZeros_32 function
 
@@ -164,7 +165,7 @@ EmulateInstructionARM64::CreateInstance (const ArchSpec &arch, InstructionType i
 {
     if (EmulateInstructionARM64::SupportsEmulatingInstructionsOfTypeStatic(inst_type))
     {
-        if (arch.GetTriple().getArch() == llvm::Triple::arm64)
+        if (arch.GetTriple().getArch() == llvm::Triple::aarch64)
         {
             std::auto_ptr<EmulateInstructionARM64> emulate_insn_ap (new EmulateInstructionARM64 (arch));
             if (emulate_insn_ap.get())
@@ -187,7 +188,7 @@ EmulateInstructionARM64::SetTargetTriple (const ArchSpec &arch)
 }
     
 bool
-EmulateInstructionARM64::GetRegisterInfo (uint32_t reg_kind, uint32_t reg_num, RegisterInfo &reg_info)
+EmulateInstructionARM64::GetRegisterInfo (RegisterKind reg_kind, uint32_t reg_num, RegisterInfo &reg_info)
 {
     if (reg_kind == eRegisterKindGeneric)
     {
@@ -254,7 +255,7 @@ EmulateInstructionARM64::GetOpcodeForInstruction (const uint32_t opcode)
         { 0xffc00000, 0xa9800000, No_VFP, &EmulateInstructionARM64::Emulate_ldstpair_pre, "STP  <Xt>, <Xt2>, [<Xn|SP>, #<imm>]!" },
 
     };
-    static const size_t k_num_arm_opcodes = sizeof(g_opcodes)/sizeof(EmulateInstructionARM64::Opcode);
+    static const size_t k_num_arm_opcodes = llvm::array_lengthof(g_opcodes);
                   
     for (size_t i=0; i<k_num_arm_opcodes; ++i)
     {
@@ -358,6 +359,8 @@ EmulateInstructionARM64::CreateFunctionEntryUnwind (UnwindPlan &unwind_plan)
     // All other registers are the same.
     
     unwind_plan.SetSourceName ("EmulateInstructionARM64");
+    unwind_plan.SetSourcedFromCompiler (eLazyBoolNo);
+    unwind_plan.SetUnwindPlanValidAtAllInstructions (eLazyBoolYes);
     return true;
 }
 
@@ -573,7 +576,7 @@ EmulateInstructionARM64::Emulate_ldstpair (const uint32_t opcode, AddrMode a_mod
     }
     
     idx = LSL(llvm::SignExtend64<7>(imm7), scale);
-    size = 1 << scale;
+    size = (integer)1 << scale;
     uint64_t datasize = size * 8;
     uint64_t address;
     uint64_t wb_address;

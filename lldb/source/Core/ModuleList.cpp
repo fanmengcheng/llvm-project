@@ -1003,6 +1003,7 @@ ModuleList::GetSharedModule
             file_spec.GetPath(path, sizeof(path));
             if (path[0] == '\0')
                 module_file_spec.GetPath(path, sizeof(path));
+            // How can this check ever be true? This branch it is false, and we haven't modified file_spec.
             if (file_spec.Exists())
             {
                 std::string uuid_str;
@@ -1132,9 +1133,10 @@ ModuleList::LoadScriptingResourcesInTarget (Target *target,
                                                    module->GetFileSpec().GetFileNameStrippingExtension().GetCString(),
                                                    error.AsCString());
                     errors.push_back(error);
+
+                    if (!continue_on_error)
+                        return false;
                 }
-                if (!continue_on_error)
-                    return false;
             }
         }
     }

@@ -22,6 +22,7 @@
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/RecordLayout.h"
 #include "clang/AST/Type.h"
+#include "clang/AST/VTableBuilder.h"
 
 #include "clang/Basic/Builtins.h"
 #include "clang/Basic/IdentifierTable.h"
@@ -1243,6 +1244,11 @@ ClangASTType::GetTypeName () const
     return ConstString(type_name);
 }
 
+ConstString
+ClangASTType::GetDisplayTypeName () const
+{
+    return GetTypeName();
+}
 
 uint32_t
 ClangASTType::GetTypeInfo (ClangASTType *pointee_or_element_clang_type) const
@@ -3063,7 +3069,6 @@ ClangASTType::GetNumPointeeChildren () const
 
 ClangASTType
 ClangASTType::GetChildClangTypeAtIndex (ExecutionContext *exe_ctx,
-                                        const char *parent_name,
                                         size_t idx,
                                         bool transparent_pointers,
                                         bool omit_empty_base_classes,
@@ -3074,7 +3079,8 @@ ClangASTType::GetChildClangTypeAtIndex (ExecutionContext *exe_ctx,
                                         uint32_t &child_bitfield_bit_size,
                                         uint32_t &child_bitfield_bit_offset,
                                         bool &child_is_base_class,
-                                        bool &child_is_deref_of_parent) const
+                                        bool &child_is_deref_of_parent,
+                                        ValueObject *valobj) const
 {
     if (!IsValid())
         return ClangASTType();
@@ -3141,7 +3147,74 @@ ClangASTType::GetChildClangTypeAtIndex (ExecutionContext *exe_ctx,
                             
                             
                             if (base_class->isVirtual())
-                                bit_offset = record_layout.getVBaseClassOffset(base_class_decl).getQuantity() * 8;
+                            {
+                                bool handled = false;
+                                if (valobj)
+                                {
+                                    Error err;
+                                    AddressType addr_type = eAddressTypeInvalid;
+                                    lldb::addr_t vtable_ptr_addr = valobj->GetCPPVTableAddress(addr_type);
+                                    
+                                    if (vtable_ptr_addr != LLDB_INVALID_ADDRESS && addr_type == eAddressTypeLoad)
+                                    {
+                                        
+                                        ExecutionContext exe_ctx (valobj->GetExecutionContextRef());
+                                        Process *process = exe_ctx.GetProcessPtr();
+                                        if (process)
+                                        {
+                                            clang::VTableContextBase *vtable_ctx = m_ast->getVTableContext();
+                                            if (vtable_ctx)
+                                            {
+                                                if (vtable_ctx->isMicrosoft())
+                                                {
+                                                    clang::MicrosoftVTableContext *msoft_vtable_ctx = static_cast<clang::MicrosoftVTableContext *>(vtable_ctx);
+                                                    
+                                                    if (vtable_ptr_addr)
+                                                    {
+                                                        const lldb::addr_t vbtable_ptr_addr = vtable_ptr_addr + record_layout.getVBPtrOffset().getQuantity();
+                                                        
+                                                        const lldb::addr_t vbtable_ptr = process->ReadPointerFromMemory(vbtable_ptr_addr, err);
+                                                        if (vbtable_ptr != LLDB_INVALID_ADDRESS)
+                                                        {
+                                                            // Get the index into the virtual base table. The index is the index in uint32_t from vbtable_ptr
+                                                            const unsigned vbtable_index = msoft_vtable_ctx->getVBTableIndex(cxx_record_decl, base_class_decl);
+                                                            const lldb::addr_t base_offset_addr = vbtable_ptr + vbtable_index * 4;
+                                                            const uint32_t base_offset = process->ReadUnsignedIntegerFromMemory(base_offset_addr, 4, UINT32_MAX, err);
+                                                            if (base_offset != UINT32_MAX)
+                                                            {
+                                                                handled = true;
+                                                                bit_offset = base_offset * 8;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                else
+                                                {
+                                                    clang::ItaniumVTableContext *itanium_vtable_ctx = static_cast<clang::ItaniumVTableContext *>(vtable_ctx);
+                                                    if (vtable_ptr_addr)
+                                                    {
+                                                        const lldb::addr_t vtable_ptr = process->ReadPointerFromMemory(vtable_ptr_addr, err);
+                                                        if (vtable_ptr != LLDB_INVALID_ADDRESS)
+                                                        {
+                                                            clang::CharUnits base_offset_offset = itanium_vtable_ctx->getVirtualBaseOffsetOffset(cxx_record_decl, base_class_decl);
+                                                            const lldb::addr_t base_offset_addr = vtable_ptr + base_offset_offset.getQuantity();
+                                                            const uint32_t base_offset = process->ReadUnsignedIntegerFromMemory(base_offset_addr, 4, UINT32_MAX, err);
+                                                            if (base_offset != UINT32_MAX)
+                                                            {
+                                                                handled = true;
+                                                                bit_offset = base_offset * 8;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                }
+                                if (!handled)
+                                    bit_offset = record_layout.getVBaseClassOffset(base_class_decl).getQuantity() * 8;
+                            }
                             else
                                 bit_offset = record_layout.getBaseClassOffset(base_class_decl).getQuantity() * 8;
                             
@@ -3221,9 +3294,9 @@ ClangASTType::GetChildClangTypeAtIndex (ExecutionContext *exe_ctx,
                                         
                                         child_name.assign(superclass_interface_decl->getNameAsString().c_str());
                                         
-                                        std::pair<uint64_t, unsigned> ivar_type_info = m_ast->getTypeInfo(ivar_qual_type.getTypePtr());
+                                        clang::TypeInfo ivar_type_info = m_ast->getTypeInfo(ivar_qual_type.getTypePtr());
                                         
-                                        child_byte_size = ivar_type_info.first / 8;
+                                        child_byte_size = ivar_type_info.Width / 8;
                                         child_byte_offset = 0;
                                         child_is_base_class = true;
                                         
@@ -3253,9 +3326,9 @@ ClangASTType::GetChildClangTypeAtIndex (ExecutionContext *exe_ctx,
                                     
                                     child_name.assign(ivar_decl->getNameAsString().c_str());
                                     
-                                    std::pair<uint64_t, unsigned> ivar_type_info = m_ast->getTypeInfo(ivar_qual_type.getTypePtr());
+                                    clang::TypeInfo  ivar_type_info = m_ast->getTypeInfo(ivar_qual_type.getTypePtr());
                                     
-                                    child_byte_size = ivar_type_info.first / 8;
+                                    child_byte_size = ivar_type_info.Width / 8;
                                     
                                     // Figure out the field offset within the current struct/union/class type
                                     // For ObjC objects, we can't trust the bit offset we get from the Clang AST, since
@@ -3316,7 +3389,6 @@ ClangASTType::GetChildClangTypeAtIndex (ExecutionContext *exe_ctx,
                     child_is_deref_of_parent = false;
                     bool tmp_child_is_deref_of_parent = false;
                     return pointee_clang_type.GetChildClangTypeAtIndex (exe_ctx,
-                                                                        parent_name,
                                                                         idx,
                                                                         transparent_pointers,
                                                                         omit_empty_base_classes,
@@ -3327,11 +3399,13 @@ ClangASTType::GetChildClangTypeAtIndex (ExecutionContext *exe_ctx,
                                                                         child_bitfield_bit_size,
                                                                         child_bitfield_bit_offset,
                                                                         child_is_base_class,
-                                                                        tmp_child_is_deref_of_parent);
+                                                                        tmp_child_is_deref_of_parent,
+                                                                        valobj);
                 }
                 else
                 {
                     child_is_deref_of_parent = true;
+                    const char *parent_name = valobj ? valobj->GetName().GetCString() : NULL;
                     if (parent_name)
                     {
                         child_name.assign(1, '*');
@@ -3406,7 +3480,6 @@ ClangASTType::GetChildClangTypeAtIndex (ExecutionContext *exe_ctx,
                     child_is_deref_of_parent = false;
                     bool tmp_child_is_deref_of_parent = false;
                     return pointee_clang_type.GetChildClangTypeAtIndex (exe_ctx,
-                                                                        parent_name,
                                                                         idx,
                                                                         transparent_pointers,
                                                                         omit_empty_base_classes,
@@ -3417,12 +3490,14 @@ ClangASTType::GetChildClangTypeAtIndex (ExecutionContext *exe_ctx,
                                                                         child_bitfield_bit_size,
                                                                         child_bitfield_bit_offset,
                                                                         child_is_base_class,
-                                                                        tmp_child_is_deref_of_parent);
+                                                                        tmp_child_is_deref_of_parent,
+                                                                        valobj);
                 }
                 else
                 {
                     child_is_deref_of_parent = true;
                     
+                    const char *parent_name = valobj ? valobj->GetName().GetCString() : NULL;
                     if (parent_name)
                     {
                         child_name.assign(1, '*');
@@ -3451,7 +3526,6 @@ ClangASTType::GetChildClangTypeAtIndex (ExecutionContext *exe_ctx,
                     child_is_deref_of_parent = false;
                     bool tmp_child_is_deref_of_parent = false;
                     return pointee_clang_type.GetChildClangTypeAtIndex (exe_ctx,
-                                                                        parent_name,
                                                                         idx,
                                                                         transparent_pointers,
                                                                         omit_empty_base_classes,
@@ -3462,10 +3536,12 @@ ClangASTType::GetChildClangTypeAtIndex (ExecutionContext *exe_ctx,
                                                                         child_bitfield_bit_size,
                                                                         child_bitfield_bit_offset,
                                                                         child_is_base_class,
-                                                                        tmp_child_is_deref_of_parent);
+                                                                        tmp_child_is_deref_of_parent,
+                                                                        valobj);
                 }
                 else
                 {
+                    const char *parent_name = valobj ? valobj->GetName().GetCString() : NULL;
                     if (parent_name)
                     {
                         child_name.assign(1, '&');
@@ -3487,7 +3563,6 @@ ClangASTType::GetChildClangTypeAtIndex (ExecutionContext *exe_ctx,
             {
                 ClangASTType typedefed_clang_type (m_ast, llvm::cast<clang::TypedefType>(parent_qual_type)->getDecl()->getUnderlyingType());
                 return typedefed_clang_type.GetChildClangTypeAtIndex (exe_ctx,
-                                                                      parent_name,
                                                                       idx,
                                                                       transparent_pointers,
                                                                       omit_empty_base_classes,
@@ -3498,7 +3573,8 @@ ClangASTType::GetChildClangTypeAtIndex (ExecutionContext *exe_ctx,
                                                                       child_bitfield_bit_size,
                                                                       child_bitfield_bit_offset,
                                                                       child_is_base_class,
-                                                                      child_is_deref_of_parent);
+                                                                      child_is_deref_of_parent,
+                                                                      valobj);
             }
             break;
             
@@ -3506,7 +3582,6 @@ ClangASTType::GetChildClangTypeAtIndex (ExecutionContext *exe_ctx,
             {
                 ClangASTType elaborated_clang_type (m_ast, llvm::cast<clang::ElaboratedType>(parent_qual_type)->getNamedType());
                 return elaborated_clang_type.GetChildClangTypeAtIndex (exe_ctx,
-                                                                       parent_name,
                                                                        idx,
                                                                        transparent_pointers,
                                                                        omit_empty_base_classes,
@@ -3517,14 +3592,14 @@ ClangASTType::GetChildClangTypeAtIndex (ExecutionContext *exe_ctx,
                                                                        child_bitfield_bit_size,
                                                                        child_bitfield_bit_offset,
                                                                        child_is_base_class,
-                                                                       child_is_deref_of_parent);
+                                                                       child_is_deref_of_parent,
+                                                                       valobj);
             }
             
         case clang::Type::Paren:
             {
                 ClangASTType paren_clang_type (m_ast, llvm::cast<clang::ParenType>(parent_qual_type)->desugar());
                 return paren_clang_type.GetChildClangTypeAtIndex (exe_ctx,
-                                                                  parent_name,
                                                                   idx,
                                                                   transparent_pointers,
                                                                   omit_empty_base_classes,
@@ -3535,7 +3610,8 @@ ClangASTType::GetChildClangTypeAtIndex (ExecutionContext *exe_ctx,
                                                                   child_bitfield_bit_size,
                                                                   child_bitfield_bit_offset,
                                                                   child_is_base_class,
-                                                                  child_is_deref_of_parent);
+                                                                  child_is_deref_of_parent,
+                                                                  valobj);
             }
             
             
@@ -4445,6 +4521,15 @@ IsOperator (const char *name, clang::OverloadedOperatorKind &op_kind)
     }
     
     return true;
+}
+
+clang::EnumDecl *
+ClangASTType::GetAsEnumDecl () const
+{
+    const clang::EnumType *enum_type = llvm::dyn_cast<clang::EnumType>(GetCanonicalQualType());
+    if (enum_type)
+        return enum_type->getDecl();
+    return NULL;
 }
 
 clang::RecordDecl *
@@ -5740,7 +5825,7 @@ ClangASTType::DumpValue (ExecutionContext *exe_ctx,
                     // Indent and print the base class type name
                     s->Printf("\n%*s%s ", depth + DEPTH_INCREMENT, "", base_class_type_name.c_str());
 
-                    std::pair<uint64_t, unsigned> base_class_type_info = m_ast->getTypeInfo(base_class_qual_type);
+                    clang::TypeInfo base_class_type_info = m_ast->getTypeInfo(base_class_qual_type);
 
                     // Dump the value of the member
                     ClangASTType base_clang_type(m_ast, base_class_qual_type);
@@ -5749,7 +5834,7 @@ ClangASTType::DumpValue (ExecutionContext *exe_ctx,
                                                base_clang_type.GetFormat(),         // The format with which to display the member
                                                data,                                // Data buffer containing all bytes for this type
                                                data_byte_offset + field_byte_offset,// Offset into "data" where to grab value from
-                                               base_class_type_info.first / 8,      // Size of this type in bytes
+                                               base_class_type_info.Width / 8,      // Size of this type in bytes
                                                0,                                   // Bitfield bit size
                                                0,                                   // Bitfield bit offset
                                                show_types,                          // Boolean indicating if we should show the variable types
@@ -5779,7 +5864,7 @@ ClangASTType::DumpValue (ExecutionContext *exe_ctx,
                 // Print the member type if requested
                 // Figure out the type byte size (field_type_info.first) and
                 // alignment (field_type_info.second) from the AST context.
-                std::pair<uint64_t, unsigned> field_type_info = m_ast->getTypeInfo(field_type);
+                clang::TypeInfo field_type_info = m_ast->getTypeInfo(field_type);
                 assert(field_idx < record_layout.getFieldCount());
                 // Figure out the field offset within the current struct/union/class type
                 field_bit_offset = record_layout.getFieldOffset (field_idx);
@@ -5808,7 +5893,7 @@ ClangASTType::DumpValue (ExecutionContext *exe_ctx,
                                             field_clang_type.GetFormat(),   // The format with which to display the member
                                             data,                           // Data buffer containing all bytes for this type
                                             data_byte_offset + field_byte_offset,// Offset into "data" where to grab value from
-                                            field_type_info.first / 8,      // Size of this type in bytes
+                                            field_type_info.Width / 8,      // Size of this type in bytes
                                             field_bitfield_bit_size,        // Bitfield bit size
                                             field_bitfield_bit_offset,      // Bitfield bit offset
                                             show_types,                     // Boolean indicating if we should show the variable types
@@ -5858,11 +5943,11 @@ ClangASTType::DumpValue (ExecutionContext *exe_ctx,
 
             const uint64_t element_count = array->getSize().getLimitedValue();
 
-            std::pair<uint64_t, unsigned> field_type_info = m_ast->getTypeInfo(element_qual_type);
+            clang::TypeInfo field_type_info = m_ast->getTypeInfo(element_qual_type);
 
             uint32_t element_idx = 0;
             uint32_t element_offset = 0;
-            uint64_t element_byte_size = field_type_info.first / 8;
+            uint64_t element_byte_size = field_type_info.Width / 8;
             uint32_t element_stride = element_byte_size;
 
             if (is_array_of_characters)
@@ -5921,8 +6006,8 @@ ClangASTType::DumpValue (ExecutionContext *exe_ctx,
             
             ClangASTType typedef_clang_type (m_ast, typedef_qual_type);
             lldb::Format typedef_format = typedef_clang_type.GetFormat();
-            std::pair<uint64_t, unsigned> typedef_type_info = m_ast->getTypeInfo(typedef_qual_type);
-            uint64_t typedef_byte_size = typedef_type_info.first / 8;
+            clang::TypeInfo typedef_type_info = m_ast->getTypeInfo(typedef_qual_type);
+            uint64_t typedef_byte_size = typedef_type_info.Width / 8;
 
             return typedef_clang_type.DumpValue (exe_ctx,
                                                  s,                  // Stream to dump to
@@ -5944,8 +6029,8 @@ ClangASTType::DumpValue (ExecutionContext *exe_ctx,
             clang::QualType elaborated_qual_type = llvm::cast<clang::ElaboratedType>(qual_type)->getNamedType();
             ClangASTType elaborated_clang_type (m_ast, elaborated_qual_type);
             lldb::Format elaborated_format = elaborated_clang_type.GetFormat();
-            std::pair<uint64_t, unsigned> elaborated_type_info = m_ast->getTypeInfo(elaborated_qual_type);
-            uint64_t elaborated_byte_size = elaborated_type_info.first / 8;
+            clang::TypeInfo elaborated_type_info = m_ast->getTypeInfo(elaborated_qual_type);
+            uint64_t elaborated_byte_size = elaborated_type_info.Width / 8;
 
             return elaborated_clang_type.DumpValue (exe_ctx,
                                                     s,                  // Stream to dump to
@@ -5968,8 +6053,8 @@ ClangASTType::DumpValue (ExecutionContext *exe_ctx,
             ClangASTType desugar_clang_type (m_ast, desugar_qual_type);
 
             lldb::Format desugar_format = desugar_clang_type.GetFormat();
-            std::pair<uint64_t, unsigned> desugar_type_info = m_ast->getTypeInfo(desugar_qual_type);
-            uint64_t desugar_byte_size = desugar_type_info.first / 8;
+            clang::TypeInfo desugar_type_info = m_ast->getTypeInfo(desugar_qual_type);
+            uint64_t desugar_byte_size = desugar_type_info.Width / 8;
             
             return desugar_clang_type.DumpValue (exe_ctx,
                                                  s,                  // Stream to dump to
@@ -6036,8 +6121,8 @@ ClangASTType::DumpTypeValue (Stream *s,
                 ClangASTType typedef_clang_type (m_ast, typedef_qual_type);
                 if (format == eFormatDefault)
                     format = typedef_clang_type.GetFormat();
-                std::pair<uint64_t, unsigned> typedef_type_info = m_ast->getTypeInfo(typedef_qual_type);
-                uint64_t typedef_byte_size = typedef_type_info.first / 8;
+                clang::TypeInfo typedef_type_info = m_ast->getTypeInfo(typedef_qual_type);
+                uint64_t typedef_byte_size = typedef_type_info.Width / 8;
 
                 return typedef_clang_type.DumpTypeValue (s,
                                                          format,                 // The format with which to display the element
@@ -6185,7 +6270,7 @@ ClangASTType::DumpSummary (ExecutionContext *exe_ctx,
             if (process)
             {
                 lldb::offset_t offset = data_byte_offset;
-                lldb::addr_t pointer_addresss = data.GetMaxU64(&offset, data_byte_size);
+                lldb::addr_t pointer_address = data.GetMaxU64(&offset, data_byte_size);
                 std::vector<uint8_t> buf;
                 if (length > 0)
                     buf.resize (length);
@@ -6197,7 +6282,7 @@ ClangASTType::DumpSummary (ExecutionContext *exe_ctx,
                 size_t bytes_read;
                 size_t total_cstr_len = 0;
                 Error error;
-                while ((bytes_read = process->ReadMemory (pointer_addresss, &buf.front(), buf.size(), error)) > 0)
+                while ((bytes_read = process->ReadMemory (pointer_address, &buf.front(), buf.size(), error)) > 0)
                 {
                     const size_t len = strlen((const char *)&buf.front());
                     if (len == 0)
@@ -6208,7 +6293,7 @@ ClangASTType::DumpSummary (ExecutionContext *exe_ctx,
                     total_cstr_len += len;
                     if (len < buf.size())
                         break;
-                    pointer_addresss += total_cstr_len;
+                    pointer_address += total_cstr_len;
                 }
                 if (total_cstr_len > 0)
                     s->PutChar ('"');

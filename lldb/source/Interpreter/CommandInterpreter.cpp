@@ -67,6 +67,8 @@
 
 #include "lldb/Utility/CleanUp.h"
 
+#include "llvm/ADT/STLExtras.h"
+
 using namespace lldb;
 using namespace lldb_private;
 
@@ -325,7 +327,7 @@ CommandInterpreter::Initialize ()
     if (cmd_obj_sp)
     {
         alias_arguments_vector_sp.reset (new OptionArgVector);
-#if defined (__arm__) || defined (__arm64__)
+#if defined (__arm__) || defined (__arm64__) || defined (__aarch64__)
         ProcessAliasOptionsArgs (cmd_obj_sp, "--", alias_arguments_vector_sp);
 #else
         ProcessAliasOptionsArgs (cmd_obj_sp, "--shell=" LLDB_DEFAULT_SHELL " --", alias_arguments_vector_sp);
@@ -415,9 +417,9 @@ CommandInterpreter::LoadCommandDictionary ()
                                       {"^(-.*)$", "breakpoint set %1"},
                                       {"^(.*[^[:space:]])`(.*[^[:space:]])[[:space:]]*$", "breakpoint set --name '%2' --shlib '%1'"},
                                       {"^\\&(.*[^[:space:]])[[:space:]]*$", "breakpoint set --name '%1' --skip-prologue=0"},
-                                      {"^(.*[^[:space:]])[[:space:]]*$", "breakpoint set --name '%1'"}};
+                                      {"^[\"']?(.*[^[:space:]\"'])[\"']?[[:space:]]*$", "breakpoint set --name '%1'"}};
     
-    size_t num_regexes = sizeof break_regexes/sizeof(char *[2]);
+    size_t num_regexes = llvm::array_lengthof(break_regexes);
         
     std::unique_ptr<CommandObjectRegexCommand>
     break_regex_cmd_ap(new CommandObjectRegexCommand (*this,
@@ -2379,7 +2381,9 @@ CommandInterpreter::SourceInitFile (bool in_cwd, CommandReturnObject &result)
         // "-" and the name of the program. If this file doesn't exist, we fall
         // back to just the "~/.lldbinit" file. We also obey any requests to not
         // load the init files.
-        const char *init_file_path = "~/.lldbinit";
+        FileSpec profilePath = Host::GetUserProfileFileSpec();
+        profilePath.AppendPathComponent(".lldbinit");
+        std::string init_file_path = profilePath.GetPath();
 
         if (m_skip_app_init_files == false)
         {
@@ -2389,7 +2393,7 @@ CommandInterpreter::SourceInitFile (bool in_cwd, CommandReturnObject &result)
             if (program_name)
             {
                 char program_init_file_name[PATH_MAX];
-                ::snprintf (program_init_file_name, sizeof(program_init_file_name), "%s-%s", init_file_path, program_name);
+                ::snprintf (program_init_file_name, sizeof(program_init_file_name), "%s-%s", init_file_path.c_str(), program_name);
                 init_file.SetFile (program_init_file_name, true);
                 if (!init_file.Exists())
                     init_file.Clear();
@@ -2397,7 +2401,7 @@ CommandInterpreter::SourceInitFile (bool in_cwd, CommandReturnObject &result)
         }
         
         if (!init_file && !m_skip_lldbinit_files)
-			init_file.SetFile (init_file_path, true);
+			init_file.SetFile (init_file_path.c_str(), false);
     }
 
     // If the file exists, tell HandleCommand to 'source' it; this will do the actual broadcasting
@@ -3136,18 +3140,23 @@ void
 CommandInterpreter::RunCommandInterpreter(bool auto_handle_events,
                                           bool spawn_thread)
 {
-    const bool multiple_lines = false; // Only get one line at a time
-    if (!m_command_io_handler_sp)
-        m_command_io_handler_sp.reset(new IOHandlerEditline (m_debugger,
-                                                             m_debugger.GetInputFile(),
-                                                             m_debugger.GetOutputFile(),
-                                                             m_debugger.GetErrorFile(),
-                                                             eHandleCommandFlagEchoCommand | eHandleCommandFlagPrintResult,
-                                                             "lldb",
-                                                             m_debugger.GetPrompt(),
-                                                             multiple_lines,
-                                                             0,            // Don't show line numbers
-                                                             *this));
+    // Only get one line at a time
+    const bool multiple_lines = false;
+    
+    // Always re-create the IOHandlerEditline in case the input
+    // changed. The old instance might have had a non-interactive
+    // input and now it does or vice versa.
+    m_command_io_handler_sp.reset(new IOHandlerEditline (m_debugger,
+                                                         m_debugger.GetInputFile(),
+                                                         m_debugger.GetOutputFile(),
+                                                         m_debugger.GetErrorFile(),
+                                                         eHandleCommandFlagEchoCommand | eHandleCommandFlagPrintResult,
+                                                         "lldb",
+                                                         m_debugger.GetPrompt(),
+                                                         multiple_lines,
+                                                         0,            // Don't show line numbers
+                                                         *this));
+
     m_debugger.PushIOHandler(m_command_io_handler_sp);
     
     if (auto_handle_events)

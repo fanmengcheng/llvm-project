@@ -88,7 +88,22 @@ public:
     SetTrapExceptions (bool trap_exceptions = true);
     
     void
+    SetLanguage (lldb::LanguageType language);
+
+    void
     SetCancelCallback (lldb::ExpressionCancelCallback callback, void *baton);
+
+    bool
+    GetGenerateDebugInfo ();
+    
+    void
+    SetGenerateDebugInfo (bool b = true);
+    
+    bool
+    GetSuppressPersistentResult ();
+    
+    void
+    SetSuppressPersistentResult (bool b = false);
 
 protected:
 

@@ -301,6 +301,14 @@ bool llvm::isInstructionTriviallyDead(Instruction *I,
     if (II->getIntrinsicID() == Intrinsic::lifetime_start ||
         II->getIntrinsicID() == Intrinsic::lifetime_end)
       return isa<UndefValue>(II->getArgOperand(1));
+
+    // Assumptions are dead if their condition is trivially true.
+    if (II->getIntrinsicID() == Intrinsic::assume) {
+      if (ConstantInt *Cond = dyn_cast<ConstantInt>(II->getArgOperand(0)))
+        return !Cond->isZero();
+
+      return false;
+    }
   }
 
   if (isAllocLikeFn(I, TLI)) return true;
@@ -508,6 +516,11 @@ void llvm::MergeBasicBlockIntoOnlyPred(BasicBlock *DestBB, Pass *P) {
   // Splice all the instructions from PredBB to DestBB.
   PredBB->getTerminator()->eraseFromParent();
   DestBB->getInstList().splice(DestBB->begin(), PredBB->getInstList());
+
+  // If the PredBB is the entry block of the function, move DestBB up to
+  // become the entry block after we erase PredBB.
+  if (PredBB == &DestBB->getParent()->getEntryBlock())
+    DestBB->moveAfter(PredBB);
 
   if (P) {
     if (DominatorTreeWrapperPass *DTWP =
@@ -896,24 +909,26 @@ static unsigned enforceKnownAlignment(Value *V, unsigned Align,
     return PrefAlign;
   }
 
-  if (GlobalValue *GV = dyn_cast<GlobalValue>(V)) {
+  if (auto *GO = dyn_cast<GlobalObject>(V)) {
     // If there is a large requested alignment and we can, bump up the alignment
     // of the global.
-    if (GV->isDeclaration()) return Align;
+    if (GO->isDeclaration())
+      return Align;
     // If the memory we set aside for the global may not be the memory used by
     // the final program then it is impossible for us to reliably enforce the
     // preferred alignment.
-    if (GV->isWeakForLinker()) return Align;
+    if (GO->isWeakForLinker())
+      return Align;
 
-    if (GV->getAlignment() >= PrefAlign)
-      return GV->getAlignment();
+    if (GO->getAlignment() >= PrefAlign)
+      return GO->getAlignment();
     // We can only increase the alignment of the global if it has no alignment
     // specified or if it is not assigned a section.  If it is assigned a
     // section, the global could be densely packed with other objects in the
     // section, increasing the alignment could cause padding issues.
-    if (!GV->hasSection() || GV->getAlignment() == 0)
-      GV->setAlignment(PrefAlign);
-    return GV->getAlignment();
+    if (!GO->hasSection() || GO->getAlignment() == 0)
+      GO->setAlignment(PrefAlign);
+    return GO->getAlignment();
   }
 
   return Align;
@@ -930,7 +945,7 @@ unsigned llvm::getOrEnforceKnownAlignment(Value *V, unsigned PrefAlign,
   unsigned BitWidth = DL ? DL->getPointerTypeSizeInBits(V->getType()) : 64;
 
   APInt KnownZero(BitWidth, 0), KnownOne(BitWidth, 0);
-  ComputeMaskedBits(V, KnownZero, KnownOne, DL);
+  computeKnownBits(V, KnownZero, KnownOne, DL);
   unsigned TrailZ = KnownZero.countTrailingOnes();
 
   // Avoid trouble with ridiculously large TrailZ values, such as
@@ -1163,7 +1178,7 @@ static void changeToCall(InvokeInst *II) {
 }
 
 static bool markAliveBlocks(BasicBlock *BB,
-                            SmallPtrSet<BasicBlock*, 128> &Reachable) {
+                            SmallPtrSetImpl<BasicBlock*> &Reachable) {
 
   SmallVector<BasicBlock*, 128> Worklist;
   Worklist.push_back(BB);
@@ -1176,6 +1191,26 @@ static bool markAliveBlocks(BasicBlock *BB,
     // instructions into LLVM unreachable insts.  The instruction combining pass
     // canonicalizes unreachable insts into stores to null or undef.
     for (BasicBlock::iterator BBI = BB->begin(), E = BB->end(); BBI != E;++BBI){
+      // Assumptions that are known to be false are equivalent to unreachable.
+      // Also, if the condition is undefined, then we make the choice most
+      // beneficial to the optimizer, and choose that to also be unreachable.
+      if (IntrinsicInst *II = dyn_cast<IntrinsicInst>(BBI))
+        if (II->getIntrinsicID() == Intrinsic::assume) {
+          bool MakeUnreachable = false;
+          if (isa<UndefValue>(II->getArgOperand(0)))
+            MakeUnreachable = true;
+          else if (ConstantInt *Cond =
+                   dyn_cast<ConstantInt>(II->getArgOperand(0)))
+            MakeUnreachable = Cond->isZero();
+
+          if (MakeUnreachable) { 
+            // Don't insert a call to llvm.trap right before the unreachable.
+            changeToUnreachable(BBI, false);
+            Changed = true;
+            break;
+          }
+        }
+
       if (CallInst *CI = dyn_cast<CallInst>(BBI)) {
         if (CI->doesNotReturn()) {
           // If we found a call to a no-return function, insert an unreachable
@@ -1269,4 +1304,40 @@ bool llvm::removeUnreachableBlocks(Function &F) {
       ++I;
 
   return true;
+}
+
+void llvm::combineMetadata(Instruction *K, const Instruction *J, ArrayRef<unsigned> KnownIDs) {
+  SmallVector<std::pair<unsigned, MDNode*>, 4> Metadata;
+  K->dropUnknownMetadata(KnownIDs);
+  K->getAllMetadataOtherThanDebugLoc(Metadata);
+  for (unsigned i = 0, n = Metadata.size(); i < n; ++i) {
+    unsigned Kind = Metadata[i].first;
+    MDNode *JMD = J->getMetadata(Kind);
+    MDNode *KMD = Metadata[i].second;
+
+    switch (Kind) {
+      default:
+        K->setMetadata(Kind, nullptr); // Remove unknown metadata
+        break;
+      case LLVMContext::MD_dbg:
+        llvm_unreachable("getAllMetadataOtherThanDebugLoc returned a MD_dbg");
+      case LLVMContext::MD_tbaa:
+        K->setMetadata(Kind, MDNode::getMostGenericTBAA(JMD, KMD));
+        break;
+      case LLVMContext::MD_alias_scope:
+      case LLVMContext::MD_noalias:
+        K->setMetadata(Kind, MDNode::intersect(JMD, KMD));
+        break;
+      case LLVMContext::MD_range:
+        K->setMetadata(Kind, MDNode::getMostGenericRange(JMD, KMD));
+        break;
+      case LLVMContext::MD_fpmath:
+        K->setMetadata(Kind, MDNode::getMostGenericFPMath(JMD, KMD));
+        break;
+      case LLVMContext::MD_invariant_load:
+        // Only set the !invariant.load if it is present in both instructions.
+        K->setMetadata(Kind, JMD);
+        break;
+    }
+  }
 }

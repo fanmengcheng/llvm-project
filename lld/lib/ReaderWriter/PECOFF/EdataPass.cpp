@@ -12,7 +12,7 @@
 
 #include "lld/Core/File.h"
 #include "lld/Core/Pass.h"
-#include "lld/ReaderWriter/Simple.h"
+#include "lld/Core/Simple.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Path.h"
 
@@ -76,7 +76,14 @@ static bool getExportedAtoms(PECOFFLinkingContext &ctx, MutableFile *file,
       return false;
     }
     const DefinedAtom *atom = it->second;
-    ret.push_back(TableEntry(desc.name, desc.ordinal, atom, desc.noname));
+
+    // One can export a symbol with a different name than the symbol
+    // name used in DLL. If such name is specified, use it in the
+    // .edata section.
+    StringRef exportName =
+        desc.externalName.empty() ? desc.name : desc.externalName;
+    ret.push_back(TableEntry(exportName, desc.ordinal, atom, desc.noname));
+
     if (desc.externalName.empty())
       desc.externalName = removeLeadingUnderscore(atom->name());
     exports.insert(desc);

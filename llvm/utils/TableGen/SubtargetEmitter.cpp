@@ -1195,9 +1195,14 @@ void SubtargetEmitter::EmitProcessorModels(raw_ostream &OS) {
     OS << "static const llvm::MCSchedModel " << PI->ModelName << "(\n";
     EmitProcessorProp(OS, PI->ModelDef, "IssueWidth", ',');
     EmitProcessorProp(OS, PI->ModelDef, "MicroOpBufferSize", ',');
+    EmitProcessorProp(OS, PI->ModelDef, "LoopMicroOpBufferSize", ',');
     EmitProcessorProp(OS, PI->ModelDef, "LoadLatency", ',');
     EmitProcessorProp(OS, PI->ModelDef, "HighLatency", ',');
     EmitProcessorProp(OS, PI->ModelDef, "MispredictPenalty", ',');
+
+    OS << "  " << (bool)(PI->ModelDef ?
+                         PI->ModelDef->getValueAsBit("PostRAScheduler") : 0)
+       << ", // " << "PostRAScheduler\n";
 
     OS << "  " << (bool)(PI->ModelDef ?
                          PI->ModelDef->getValueAsBit("CompleteModel") : 0)
@@ -1481,7 +1486,6 @@ void SubtargetEmitter::run(raw_ostream &OS) {
   OS << "#undef GET_SUBTARGETINFO_TARGET_DESC\n";
 
   OS << "#include \"llvm/Support/Debug.h\"\n";
-  OS << "#include \"llvm/Support/raw_ostream.h\"\n";
   ParseFeaturesFunction(OS, NumFeatures, NumProcs);
 
   OS << "#endif // GET_SUBTARGETINFO_TARGET_DESC\n\n";

@@ -26,6 +26,7 @@
 #include "lldb/Target/Process.h"
 #include "lldb/Target/RegisterContext.h"
 #include "lldb/Target/StopInfo.h"
+#include "lldb/Target/SystemRuntime.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Target/Thread.h"
 #include "lldb/Target/ThreadPlan.h"
@@ -98,7 +99,7 @@ public:
     virtual const Property *
     GetPropertyAtIndex (const ExecutionContext *exe_ctx, bool will_modify, uint32_t idx) const
     {
-        // When gettings the value for a key from the thread options, we will always
+        // When getting the value for a key from the thread options, we will always
         // try and grab the setting from the current thread if there is one. Else we just
         // use the one from this instance.
         if (exe_ctx)
@@ -291,7 +292,9 @@ Thread::Thread (Process &process, lldb::tid_t tid, bool use_invalid_index_id) :
     m_temporary_resume_state (eStateRunning),
     m_unwinder_ap (),
     m_destroy_called (false),
-    m_override_should_notify (eLazyBoolCalculate)
+    m_override_should_notify (eLazyBoolCalculate),
+    m_extended_info_fetched (false),
+    m_extended_info ()
 {
     Log *log(lldb_private::GetLogIfAllCategoriesSet (LIBLLDB_LOG_OBJECT));
     if (log)
@@ -417,7 +420,7 @@ Thread::GetStopInfo ()
     const uint32_t stop_id = process_sp ? process_sp->GetStopID() : UINT32_MAX;
     if (plan_sp && plan_sp->PlanSucceeded())
     {
-        return StopInfo::CreateStopReasonWithPlan (plan_sp, GetReturnValueObject());
+        return StopInfo::CreateStopReasonWithPlan (plan_sp, GetReturnValueObject(), GetExpressionVariable());
     }
     else
     {
@@ -497,7 +500,7 @@ Thread::SetStopInfo (const lldb::StopInfoSP &stop_info_sp)
         m_stop_info_stop_id = UINT32_MAX;
     Log *log(lldb_private::GetLogIfAllCategoriesSet (LIBLLDB_LOG_THREAD));
     if (log)
-        log->Printf("%p: tid = 0x%" PRIx64 ": stop info = %s (stop_id = %u)\n",
+        log->Printf("%p: tid = 0x%" PRIx64 ": stop info = %s (stop_id = %u)",
                     static_cast<void*>(this), GetID(),
                     stop_info_sp ? stop_info_sp->GetDescription() : "<NULL>",
                     m_stop_info_stop_id);
@@ -1181,6 +1184,22 @@ Thread::GetReturnValueObject ()
     return ValueObjectSP();
 }
 
+ClangExpressionVariableSP
+Thread::GetExpressionVariable ()
+{
+    if (!m_completed_plan_stack.empty())
+    {
+        for (int i = m_completed_plan_stack.size() - 1; i >= 0; i--)
+        {
+            ClangExpressionVariableSP expression_variable_sp;
+            expression_variable_sp = m_completed_plan_stack[i]->GetExpressionVariable();
+            if (expression_variable_sp)
+            return expression_variable_sp;
+        }
+    }
+    return ClangExpressionVariableSP();
+}
+
 bool
 Thread::IsThreadPlanDone (ThreadPlan *plan)
 {
@@ -1708,6 +1727,9 @@ Thread::ClearStackFrames ()
     if (m_curr_frames_sp && m_curr_frames_sp->GetAllFramesFetched())
         m_prev_frames_sp.swap (m_curr_frames_sp);
     m_curr_frames_sp.reset();
+
+    m_extended_info.reset();
+    m_extended_info_fetched = false;
 }
 
 lldb::StackFrameSP
@@ -1953,6 +1975,21 @@ Thread::GetThreadLocalData (const ModuleSP module)
         return LLDB_INVALID_ADDRESS;
 }
 
+bool
+Thread::SafeToCallFunctions ()
+{
+    Process *process = GetProcess().get();
+    if (process)
+    {
+        SystemRuntime *runtime = process->GetSystemRuntime ();
+        if (runtime)
+        {
+            return runtime->SafeToCallFunctionsOnThisThread (shared_from_this());
+        }
+    }
+    return true;
+}
+
 lldb::StackFrameSP
 Thread::GetStackFrameSPForStackFramePtr (StackFrame *stack_frame_ptr)
 {
@@ -2052,6 +2089,82 @@ Thread::GetStatus (Stream &strm, uint32_t start_frame, uint32_t num_frames, uint
     return num_frames_shown;
 }
 
+bool
+Thread::GetDescription (Stream &strm, lldb::DescriptionLevel level, bool print_json)
+{
+    DumpUsingSettingsFormat (strm, 0);
+    strm.Printf("\n");
+
+    StructuredData::ObjectSP thread_info = GetExtendedInfo();
+
+    if (thread_info && print_json)
+    {
+        thread_info->Dump (strm);
+        strm.Printf("\n");
+        return true;
+    }
+
+    if (thread_info)
+    {
+        StructuredData::ObjectSP activity = thread_info->GetObjectForDotSeparatedPath("activity");
+        StructuredData::ObjectSP breadcrumb = thread_info->GetObjectForDotSeparatedPath("breadcrumb");
+        StructuredData::ObjectSP messages = thread_info->GetObjectForDotSeparatedPath("trace_messages");
+
+        bool printed_activity = false;
+        if (activity && activity->GetType() == StructuredData::Type::eTypeDictionary)
+        {
+            StructuredData::Dictionary *activity_dict = activity->GetAsDictionary();
+            StructuredData::ObjectSP id = activity_dict->GetValueForKey("id");
+            StructuredData::ObjectSP name = activity_dict->GetValueForKey("name");
+            if (name && name->GetType() == StructuredData::Type::eTypeString
+                && id && id->GetType() == StructuredData::Type::eTypeInteger)
+            {
+                strm.Printf("  Activity '%s', 0x%" PRIx64 "\n", name->GetAsString()->GetValue().c_str(), id->GetAsInteger()->GetValue());
+            }
+            printed_activity = true;
+        }
+        bool printed_breadcrumb = false;
+        if (breadcrumb && breadcrumb->GetType() == StructuredData::Type::eTypeDictionary)
+        {
+            if (printed_activity)
+                strm.Printf ("\n");
+            StructuredData::Dictionary *breadcrumb_dict = breadcrumb->GetAsDictionary();
+            StructuredData::ObjectSP breadcrumb_text = breadcrumb_dict->GetValueForKey ("name");
+            if (breadcrumb_text && breadcrumb_text->GetType() == StructuredData::Type::eTypeString)
+            {
+                strm.Printf ("  Current Breadcrumb: %s\n", breadcrumb_text->GetAsString()->GetValue().c_str());
+            }
+            printed_breadcrumb = true;
+        }
+        if (messages && messages->GetType() == StructuredData::Type::eTypeArray)
+        {
+            if (printed_breadcrumb)
+                strm.Printf("\n");
+            StructuredData::Array *messages_array = messages->GetAsArray();
+            const size_t msg_count = messages_array->GetSize();
+            if (msg_count > 0)
+            {
+                strm.Printf ("  %zu trace messages:\n", msg_count);
+                for (size_t i = 0; i < msg_count; i++)
+                {
+                    StructuredData::ObjectSP message = messages_array->GetItemAtIndex(i);
+                    if (message && message->GetType() == StructuredData::Type::eTypeDictionary)
+                    {
+                        StructuredData::Dictionary *message_dict = message->GetAsDictionary();
+                        StructuredData::ObjectSP message_text = message_dict->GetValueForKey ("message");
+                        if (message_text && message_text->GetType() == StructuredData::Type::eTypeString)
+                        {
+                            strm.Printf ("    %s\n", message_text->GetAsString()->GetValue().c_str());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return true;
+}
+
 size_t
 Thread::GetStackFrameStatus (Stream& strm,
                              uint32_t first_frame,
@@ -2078,7 +2191,7 @@ Thread::GetUnwinder ()
             case llvm::Triple::x86_64:
             case llvm::Triple::x86:
             case llvm::Triple::arm:
-            case llvm::Triple::arm64:
+            case llvm::Triple::aarch64:
             case llvm::Triple::thumb:
             case llvm::Triple::mips64:
             case llvm::Triple::hexagon:

@@ -19,8 +19,8 @@
 #include "llvm/Support/Format.h"
 #include "llvm/Support/MemoryObject.h"
 #include "llvm/Support/Path.h"
-#include "llvm/Support/system_error.h"
 #include <algorithm>
+#include <system_error>
 using namespace llvm;
 
 //===----------------------------------------------------------------------===//
@@ -438,11 +438,15 @@ class LineConsumer {
   StringRef Remaining;
 public:
   LineConsumer(StringRef Filename) {
-    if (error_code EC = MemoryBuffer::getFileOrSTDIN(Filename, Buffer)) {
+    ErrorOr<std::unique_ptr<MemoryBuffer>> BufferOrErr =
+        MemoryBuffer::getFileOrSTDIN(Filename);
+    if (std::error_code EC = BufferOrErr.getError()) {
       errs() << Filename << ": " << EC.message() << "\n";
       Remaining = "";
-    } else
+    } else {
+      Buffer = std::move(BufferOrErr.get());
       Remaining = Buffer->getBuffer();
+    }
   }
   bool empty() { return Remaining.empty(); }
   void printNext(raw_ostream &OS, uint32_t LineNum) {
@@ -511,16 +515,14 @@ std::string FileInfo::getCoveragePath(StringRef Filename,
 std::unique_ptr<raw_ostream>
 FileInfo::openCoveragePath(StringRef CoveragePath) {
   if (Options.NoOutput)
-    return make_unique<raw_null_ostream>();
+    return llvm::make_unique<raw_null_ostream>();
 
   std::string ErrorInfo;
-  // FIXME: When using MSVS, we end up having both std::make_unique and
-  // llvm::make_unique which conflict.  Explicitly use the llvm:: version.
   auto OS = llvm::make_unique<raw_fd_ostream>(CoveragePath.str().c_str(),
                                               ErrorInfo, sys::fs::F_Text);
   if (!ErrorInfo.empty()) {
     errs() << ErrorInfo << "\n";
-    return make_unique<raw_null_ostream>();
+    return llvm::make_unique<raw_null_ostream>();
   }
   return std::move(OS);
 }

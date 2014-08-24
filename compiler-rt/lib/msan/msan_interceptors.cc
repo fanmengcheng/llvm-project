@@ -16,9 +16,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "msan.h"
+#include "msan_chained_origin_depot.h"
+#include "msan_origin.h"
 #include "msan_thread.h"
 #include "sanitizer_common/sanitizer_platform_limits_posix.h"
 #include "sanitizer_common/sanitizer_allocator.h"
+#include "sanitizer_common/sanitizer_allocator_interface.h"
 #include "sanitizer_common/sanitizer_allocator_internal.h"
 #include "sanitizer_common/sanitizer_atomic.h"
 #include "sanitizer_common/sanitizer_common.h"
@@ -26,6 +29,7 @@
 #include "sanitizer_common/sanitizer_stackdepot.h"
 #include "sanitizer_common/sanitizer_libc.h"
 #include "sanitizer_common/sanitizer_linux.h"
+#include "sanitizer_common/sanitizer_tls_get_addr.h"
 
 #include <stdarg.h>
 // ACHTUNG! No other system header includes in this file.
@@ -83,9 +87,6 @@ bool IsInInterceptorScope() {
   do {                                                     \
     if (!IsInInterceptorScope()) CHECK_UNPOISONED_0(x, n); \
   } while (0);
-
-static void *fast_memset(void *ptr, int c, SIZE_T n);
-static void *fast_memcpy(void *dst, const void *src, SIZE_T n);
 
 INTERCEPTOR(SIZE_T, fread, void *ptr, SIZE_T size, SIZE_T nmemb, void *file) {
   ENSURE_MSAN_INITED();
@@ -159,8 +160,20 @@ INTERCEPTOR(void *, memalign, SIZE_T boundary, SIZE_T size) {
   return ptr;
 }
 
-INTERCEPTOR(void *, __libc_memalign, uptr align, uptr s)
-    ALIAS(WRAPPER_NAME(memalign));
+INTERCEPTOR(void *, aligned_alloc, SIZE_T boundary, SIZE_T size) {
+  GET_MALLOC_STACK_TRACE;
+  CHECK_EQ(boundary & (boundary - 1), 0);
+  void *ptr = MsanReallocate(&stack, 0, size, boundary, false);
+  return ptr;
+}
+
+INTERCEPTOR(void *, __libc_memalign, SIZE_T boundary, SIZE_T size) {
+  GET_MALLOC_STACK_TRACE;
+  CHECK_EQ(boundary & (boundary - 1), 0);
+  void *ptr = MsanReallocate(&stack, 0, size, boundary, false);
+  DTLS_on_libc_memalign(ptr, size * boundary);
+  return ptr;
+}
 
 INTERCEPTOR(void *, valloc, SIZE_T size) {
   GET_MALLOC_STACK_TRACE;
@@ -193,7 +206,7 @@ INTERCEPTOR(void, cfree, void *ptr) {
 }
 
 INTERCEPTOR(uptr, malloc_usable_size, void *ptr) {
-  return __msan_get_allocated_size(ptr);
+  return __sanitizer_get_allocated_size(ptr);
 }
 
 // This function actually returns a struct by value, but we can't unpoison a
@@ -247,6 +260,7 @@ INTERCEPTOR(char *, strncpy, char *dest, const char *src, SIZE_T n) {  // NOLINT
     copy_size++;  // trailing \0
   char *res = REAL(strncpy)(dest, src, n);  // NOLINT
   CopyPoison(dest, src, copy_size, &stack);
+  __msan_unpoison(dest + copy_size, n - copy_size);
   return res;
 }
 
@@ -360,62 +374,36 @@ INTERCEPTOR(char *, strncat, char *dest, const char *src, SIZE_T n) {  // NOLINT
     INTERCEPTOR_STRTO_BODY(ret_type, func, nptr, endptr, base, loc);     \
   }
 
-INTERCEPTOR_STRTO(double, strtod)                           // NOLINT
-INTERCEPTOR_STRTO(float, strtof)                            // NOLINT
-INTERCEPTOR_STRTO(long double, strtold)                     // NOLINT
-INTERCEPTOR_STRTO_BASE(long, strtol)                        // NOLINT
-INTERCEPTOR_STRTO_BASE(long long, strtoll)                  // NOLINT
-INTERCEPTOR_STRTO_BASE(unsigned long, strtoul)              // NOLINT
-INTERCEPTOR_STRTO_BASE(unsigned long long, strtoull)        // NOLINT
-INTERCEPTOR_STRTO_LOC(double, strtod_l)                     // NOLINT
-INTERCEPTOR_STRTO_LOC(double, __strtod_l)                   // NOLINT
-INTERCEPTOR_STRTO_LOC(float, strtof_l)                      // NOLINT
-INTERCEPTOR_STRTO_LOC(float, __strtof_l)                    // NOLINT
-INTERCEPTOR_STRTO_LOC(long double, strtold_l)               // NOLINT
-INTERCEPTOR_STRTO_LOC(long double, __strtold_l)             // NOLINT
-INTERCEPTOR_STRTO_BASE_LOC(long, strtol_l)                  // NOLINT
-INTERCEPTOR_STRTO_BASE_LOC(long long, strtoll_l)            // NOLINT
-INTERCEPTOR_STRTO_BASE_LOC(unsigned long, strtoul_l)        // NOLINT
-INTERCEPTOR_STRTO_BASE_LOC(unsigned long long, strtoull_l)  // NOLINT
+INTERCEPTOR_STRTO(double, strtod)                                    // NOLINT
+INTERCEPTOR_STRTO(float, strtof)                                     // NOLINT
+INTERCEPTOR_STRTO(long double, strtold)                              // NOLINT
+INTERCEPTOR_STRTO_BASE(long, strtol)                                 // NOLINT
+INTERCEPTOR_STRTO_BASE(long long, strtoll)                           // NOLINT
+INTERCEPTOR_STRTO_BASE(unsigned long, strtoul)                       // NOLINT
+INTERCEPTOR_STRTO_BASE(unsigned long long, strtoull)                 // NOLINT
+INTERCEPTOR_STRTO_LOC(double, strtod_l)                              // NOLINT
+INTERCEPTOR_STRTO_LOC(double, __strtod_l)                            // NOLINT
+INTERCEPTOR_STRTO_LOC(double, __strtod_internal)                     // NOLINT
+INTERCEPTOR_STRTO_LOC(float, strtof_l)                               // NOLINT
+INTERCEPTOR_STRTO_LOC(float, __strtof_l)                             // NOLINT
+INTERCEPTOR_STRTO_LOC(float, __strtof_internal)                      // NOLINT
+INTERCEPTOR_STRTO_LOC(long double, strtold_l)                        // NOLINT
+INTERCEPTOR_STRTO_LOC(long double, __strtold_l)                      // NOLINT
+INTERCEPTOR_STRTO_LOC(long double, __strtold_internal)               // NOLINT
+INTERCEPTOR_STRTO_BASE_LOC(long, strtol_l)                           // NOLINT
+INTERCEPTOR_STRTO_BASE_LOC(long, __strtol_l)                         // NOLINT
+INTERCEPTOR_STRTO_BASE_LOC(long, __strtol_internal)                  // NOLINT
+INTERCEPTOR_STRTO_BASE_LOC(long long, strtoll_l)                     // NOLINT
+INTERCEPTOR_STRTO_BASE_LOC(long long, __strtoll_l)                   // NOLINT
+INTERCEPTOR_STRTO_BASE_LOC(long long, __strtoll_internal)            // NOLINT
+INTERCEPTOR_STRTO_BASE_LOC(unsigned long, strtoul_l)                 // NOLINT
+INTERCEPTOR_STRTO_BASE_LOC(unsigned long, __strtoul_l)               // NOLINT
+INTERCEPTOR_STRTO_BASE_LOC(unsigned long, __strtoul_internal)        // NOLINT
+INTERCEPTOR_STRTO_BASE_LOC(unsigned long long, strtoull_l)           // NOLINT
+INTERCEPTOR_STRTO_BASE_LOC(unsigned long long, __strtoull_l)         // NOLINT
+INTERCEPTOR_STRTO_BASE_LOC(unsigned long long, __strtoull_internal)  // NOLINT
 
-INTERCEPTOR(int, vasprintf, char **strp, const char *format, va_list ap) {
-  ENSURE_MSAN_INITED();
-  int res = REAL(vasprintf)(strp, format, ap);
-  if (res >= 0 && !__msan_has_dynamic_component()) {
-    __msan_unpoison(strp, sizeof(*strp));
-    __msan_unpoison(*strp, res + 1);
-  }
-  return res;
-}
-
-INTERCEPTOR(int, asprintf, char **strp, const char *format, ...) {  // NOLINT
-  ENSURE_MSAN_INITED();
-  va_list ap;
-  va_start(ap, format);
-  int res = vasprintf(strp, format, ap);  // NOLINT
-  va_end(ap);
-  return res;
-}
-
-INTERCEPTOR(int, vsnprintf, char *str, uptr size,
-            const char *format, va_list ap) {
-  ENSURE_MSAN_INITED();
-  int res = REAL(vsnprintf)(str, size, format, ap);
-  if (res >= 0 && !__msan_has_dynamic_component()) {
-    __msan_unpoison(str, res + 1);
-  }
-  return res;
-}
-
-INTERCEPTOR(int, vsprintf, char *str, const char *format, va_list ap) {
-  ENSURE_MSAN_INITED();
-  int res = REAL(vsprintf)(str, format, ap);
-  if (res >= 0 && !__msan_has_dynamic_component()) {
-    __msan_unpoison(str, res + 1);
-  }
-  return res;
-}
-
+// FIXME: support *wprintf in common format interceptors.
 INTERCEPTOR(int, vswprintf, void *str, uptr size, void *format, va_list ap) {
   ENSURE_MSAN_INITED();
   int res = REAL(vswprintf)(str, size, format, ap);
@@ -425,30 +413,29 @@ INTERCEPTOR(int, vswprintf, void *str, uptr size, void *format, va_list ap) {
   return res;
 }
 
-INTERCEPTOR(int, sprintf, char *str, const char *format, ...) {  // NOLINT
-  ENSURE_MSAN_INITED();
-  va_list ap;
-  va_start(ap, format);
-  int res = vsprintf(str, format, ap);  // NOLINT
-  va_end(ap);
-  return res;
-}
-
-INTERCEPTOR(int, snprintf, char *str, uptr size, const char *format, ...) {
-  ENSURE_MSAN_INITED();
-  va_list ap;
-  va_start(ap, format);
-  int res = vsnprintf(str, size, format, ap);
-  va_end(ap);
-  return res;
-}
-
 INTERCEPTOR(int, swprintf, void *str, uptr size, void *format, ...) {
   ENSURE_MSAN_INITED();
   va_list ap;
   va_start(ap, format);
   int res = vswprintf(str, size, format, ap);
   va_end(ap);
+  return res;
+}
+
+INTERCEPTOR(SIZE_T, strxfrm, char *dest, const char *src, SIZE_T n) {
+  ENSURE_MSAN_INITED();
+  CHECK_UNPOISONED(src, REAL(strlen)(src) + 1);
+  SIZE_T res = REAL(strxfrm)(dest, src, n);
+  if (res < n) __msan_unpoison(dest, res + 1);
+  return res;
+}
+
+INTERCEPTOR(SIZE_T, strxfrm_l, char *dest, const char *src, SIZE_T n,
+            void *loc) {
+  ENSURE_MSAN_INITED();
+  CHECK_UNPOISONED(src, REAL(strlen)(src) + 1);
+  SIZE_T res = REAL(strxfrm_l)(dest, src, n, loc);
+  if (res < n) __msan_unpoison(dest, res + 1);
   return res;
 }
 
@@ -548,7 +535,7 @@ INTERCEPTOR(wchar_t *, wmempcpy, wchar_t *dest, const wchar_t *src, SIZE_T n) {
 INTERCEPTOR(wchar_t *, wmemset, wchar_t *s, wchar_t c, SIZE_T n) {
   CHECK(MEM_IS_APP(s));
   ENSURE_MSAN_INITED();
-  wchar_t *res = (wchar_t *)fast_memset(s, c, n * sizeof(wchar_t));
+  wchar_t *res = (wchar_t *)REAL(memset)(s, c, n * sizeof(wchar_t));
   __msan_unpoison(s, n * sizeof(wchar_t));
   return res;
 }
@@ -590,6 +577,7 @@ INTERCEPTOR(char *, fcvt, double x, int a, int *b, int *c) {
   if (!__msan_has_dynamic_component()) {
     __msan_unpoison(b, sizeof(*b));
     __msan_unpoison(c, sizeof(*c));
+    if (res) __msan_unpoison(res, REAL(strlen)(res) + 1);
   }
   return res;
 }
@@ -855,9 +843,9 @@ void __msan_allocated_memory(const void* data, uptr size) {
     __msan_poison(data, size);
   if (__msan_get_track_origins()) {
     u32 stack_id = StackDepotPut(stack.trace, stack.size);
-    CHECK(stack_id);
-    CHECK_EQ((stack_id >> 31), 0);  // Higher bit is occupied by stack origins.
-    __msan_set_origin(data, size, stack_id);
+    u32 id;
+    ChainedOriginDepotPut(stack_id, Origin::kHeapRoot, &id);
+    __msan_set_origin(data, size, Origin(id, 1).raw_id());
   }
 }
 
@@ -922,25 +910,6 @@ INTERCEPTOR(char *, dlerror, int fake) {
   return res;
 }
 
-// dlopen() ultimately calls mmap() down inside the loader, which generally
-// doesn't participate in dynamic symbol resolution.  Therefore we won't
-// intercept its calls to mmap, and we have to hook it here.  The loader
-// initializes the module before returning, so without the dynamic component, we
-// won't be able to clear the shadow before the initializers.  Fixing this would
-// require putting our own initializer first to clear the shadow.
-INTERCEPTOR(void *, dlopen, const char *filename, int flag) {
-  ENSURE_MSAN_INITED();
-  EnterLoader();
-  link_map *map = (link_map *)REAL(dlopen)(filename, flag);
-  ExitLoader();
-  if (!__msan_has_dynamic_component() && map) {
-    // If msandr didn't clear the shadow before the initializers ran, we do it
-    // ourselves afterwards.
-    ForEachMappedRegion(map, __msan_unpoison);
-  }
-  return (void *)map;
-}
-
 typedef int (*dl_iterate_phdr_cb)(__sanitizer_dl_phdr_info *info, SIZE_T size,
                                   void *data);
 struct dl_iterate_phdr_data {
@@ -982,8 +951,14 @@ INTERCEPTOR(int, getrusage, int who, void *usage) {
 
 class SignalHandlerScope {
  public:
-  SignalHandlerScope() { GetCurrentThread()->EnterSignalHandler(); }
-  ~SignalHandlerScope() { GetCurrentThread()->LeaveSignalHandler(); }
+  SignalHandlerScope() {
+    if (MsanThread *t = GetCurrentThread())
+      t->EnterSignalHandler();
+  }
+  ~SignalHandlerScope() {
+    if (MsanThread *t = GetCurrentThread())
+      t->LeaveSignalHandler();
+  }
 };
 
 // sigactions_mu guarantees atomicity of sigaction() and signal() calls.
@@ -1030,7 +1005,7 @@ INTERCEPTOR(int, sigaction, int signo, const __sanitizer_sigaction *act,
     __sanitizer_sigaction new_act;
     __sanitizer_sigaction *pnew_act = act ? &new_act : 0;
     if (act) {
-      internal_memcpy(pnew_act, act, sizeof(__sanitizer_sigaction));
+      REAL(memcpy)(pnew_act, act, sizeof(__sanitizer_sigaction));
       uptr cb = (uptr)pnew_act->sigaction;
       uptr new_cb = (pnew_act->sa_flags & __sanitizer::sa_siginfo)
                         ? (uptr)SignalAction
@@ -1264,8 +1239,13 @@ int OnExit() {
   } while (false)  // FIXME
 #define COMMON_INTERCEPTOR_BLOCK_REAL(name) REAL(name)
 #define COMMON_INTERCEPTOR_ON_EXIT(ctx) OnExit()
-// FIXME: update Msan to use common printf interceptors
-#define SANITIZER_INTERCEPT_PRINTF 0
+#define COMMON_INTERCEPTOR_LIBRARY_LOADED(filename, map)                       \
+  if (!__msan_has_dynamic_component() && map) {                                \
+    /* If msandr didn't clear the shadow before the initializers ran, we do */ \
+    /* it ourselves afterwards. */                                             \
+    ForEachMappedRegion((link_map *)map, __msan_unpoison);                     \
+  }
+
 #include "sanitizer_common/sanitizer_common_interceptors.inc"
 
 #define COMMON_SYSCALL_PRE_READ_RANGE(p, s) CHECK_UNPOISONED(p, s)
@@ -1278,58 +1258,25 @@ int OnExit() {
 #define COMMON_SYSCALL_POST_WRITE_RANGE(p, s) __msan_unpoison(p, s)
 #include "sanitizer_common/sanitizer_common_syscalls.inc"
 
-// static
-void *fast_memset(void *ptr, int c, SIZE_T n) {
-  // hack until we have a really fast internal_memset
-  if (sizeof(uptr) == 8 &&
-      (n % 8) == 0 &&
-      ((uptr)ptr % 8) == 0 &&
-      (c == 0 || c == -1)) {
-    // Printf("memset %p %zd %x\n", ptr, n, c);
-    uptr to_store = c ? -1L : 0L;
-    uptr *p = (uptr*)ptr;
-    for (SIZE_T i = 0; i < n / 8; i++)
-      p[i] = to_store;
-    return ptr;
-  }
-  return internal_memset(ptr, c, n);
-}
-
-// static
-void *fast_memcpy(void *dst, const void *src, SIZE_T n) {
-  // Same hack as in fast_memset above.
-  if (sizeof(uptr) == 8 &&
-      (n % 8) == 0 &&
-      ((uptr)dst % 8) == 0 &&
-      ((uptr)src % 8) == 0) {
-    uptr *d = (uptr*)dst;
-    uptr *s = (uptr*)src;
-    for (SIZE_T i = 0; i < n / 8; i++)
-      d[i] = s[i];
-    return dst;
-  }
-  return internal_memcpy(dst, src, n);
-}
-
 static void PoisonShadow(uptr ptr, uptr size, u8 value) {
   uptr PageSize = GetPageSizeCached();
   uptr shadow_beg = MEM_TO_SHADOW(ptr);
   uptr shadow_end = MEM_TO_SHADOW(ptr + size);
   if (value ||
       shadow_end - shadow_beg < common_flags()->clear_shadow_mmap_threshold) {
-    fast_memset((void*)shadow_beg, value, shadow_end - shadow_beg);
+    REAL(memset)((void*)shadow_beg, value, shadow_end - shadow_beg);
   } else {
     uptr page_beg = RoundUpTo(shadow_beg, PageSize);
     uptr page_end = RoundDownTo(shadow_end, PageSize);
 
     if (page_beg >= page_end) {
-      fast_memset((void *)shadow_beg, 0, shadow_end - shadow_beg);
+      REAL(memset)((void *)shadow_beg, 0, shadow_end - shadow_beg);
     } else {
       if (page_beg != shadow_beg) {
-        fast_memset((void *)shadow_beg, 0, page_beg - shadow_beg);
+        REAL(memset)((void *)shadow_beg, 0, page_beg - shadow_beg);
       }
       if (page_end != shadow_end) {
-        fast_memset((void *)page_end, 0, shadow_end - page_end);
+        REAL(memset)((void *)page_end, 0, shadow_end - page_end);
       }
       MmapFixedNoReserve(page_beg, page_end - page_beg);
     }
@@ -1337,7 +1284,7 @@ static void PoisonShadow(uptr ptr, uptr size, u8 value) {
 }
 
 // These interface functions reside here so that they can use
-// fast_memset, etc.
+// REAL(memset), etc.
 void __msan_unpoison(const void *a, uptr size) {
   if (!MEM_IS_APP(a)) return;
   PoisonShadow((uptr)a, size, 0);
@@ -1356,7 +1303,7 @@ void __msan_poison_stack(void *a, uptr size) {
 }
 
 void __msan_clear_and_unpoison(void *a, uptr size) {
-  fast_memset(a, 0, size);
+  REAL(memset)(a, 0, size);
   PoisonShadow((uptr)a, size, 0);
 }
 
@@ -1365,7 +1312,7 @@ void *__msan_memcpy(void *dest, const void *src, SIZE_T n) {
   if (msan_init_is_running) return REAL(memcpy)(dest, src, n);
   ENSURE_MSAN_INITED();
   GET_STORE_STACK_TRACE;
-  void *res = fast_memcpy(dest, src, n);
+  void *res = REAL(memcpy)(dest, src, n);
   CopyPoison(dest, src, n, &stack);
   return res;
 }
@@ -1374,7 +1321,7 @@ void *__msan_memset(void *s, int c, SIZE_T n) {
   if (!msan_inited) return internal_memset(s, c, n);
   if (msan_init_is_running) return REAL(memset)(s, c, n);
   ENSURE_MSAN_INITED();
-  void *res = fast_memset(s, c, n);
+  void *res = REAL(memset)(s, c, n);
   __msan_unpoison(s, n);
   return res;
 }
@@ -1422,7 +1369,7 @@ void CopyOrigin(void *dst, const void *src, uptr size, StackTrace *stack) {
   uptr beg = d & ~3UL;
   // Copy left unaligned origin if that memory is poisoned.
   if (beg < d) {
-    u32 o = GetOriginIfPoisoned(beg, d - beg);
+    u32 o = GetOriginIfPoisoned((uptr)src, d - beg);
     if (o) {
       if (__msan_get_track_origins() > 1) o = ChainOrigin(o, stack);
       *(u32 *)MEM_TO_ORIGIN(beg) = o;
@@ -1430,15 +1377,17 @@ void CopyOrigin(void *dst, const void *src, uptr size, StackTrace *stack) {
     beg += 4;
   }
 
-  uptr end = (d + size + 3) & ~3UL;
+  uptr end = (d + size) & ~3UL;
+  // If both ends fall into the same 4-byte slot, we are done.
+  if (end < beg) return;
+
   // Copy right unaligned origin if that memory is poisoned.
-  if (end > d + size) {
-    u32 o = GetOriginIfPoisoned(d + size, end - d - size);
+  if (end < d + size) {
+    u32 o = GetOriginIfPoisoned((uptr)src + (end - d), (d + size) - end);
     if (o) {
       if (__msan_get_track_origins() > 1) o = ChainOrigin(o, stack);
-      *(u32 *)MEM_TO_ORIGIN(end - 4) = o;
+      *(u32 *)MEM_TO_ORIGIN(end) = o;
     }
-    end -= 4;
   }
 
   if (beg < end) {
@@ -1448,7 +1397,7 @@ void CopyOrigin(void *dst, const void *src, uptr size, StackTrace *stack) {
     if (__msan_get_track_origins() > 1) {
       u32 *src = (u32 *)MEM_TO_ORIGIN(s);
       u32 *src_s = (u32 *)MEM_TO_SHADOW(s);
-      u32 *src_end = src + (end - beg);
+      u32 *src_end = (u32 *)MEM_TO_ORIGIN(s + (end - beg));
       u32 *dst = (u32 *)MEM_TO_ORIGIN(beg);
       u32 src_o = 0;
       u32 dst_o = 0;
@@ -1461,7 +1410,7 @@ void CopyOrigin(void *dst, const void *src, uptr size, StackTrace *stack) {
         *dst = dst_o;
       }
     } else {
-      fast_memcpy((void *)MEM_TO_ORIGIN(beg), (void *)MEM_TO_ORIGIN(s),
+      REAL(memcpy)((void *)MEM_TO_ORIGIN(beg), (void *)MEM_TO_ORIGIN(s),
                   end - beg);
     }
   }
@@ -1471,15 +1420,15 @@ void MovePoison(void *dst, const void *src, uptr size, StackTrace *stack) {
   if (!MEM_IS_APP(dst)) return;
   if (!MEM_IS_APP(src)) return;
   if (src == dst) return;
-  internal_memmove((void *)MEM_TO_SHADOW((uptr)dst),
-                   (void *)MEM_TO_SHADOW((uptr)src), size);
+  REAL(memmove)((void *)MEM_TO_SHADOW((uptr)dst),
+                (void *)MEM_TO_SHADOW((uptr)src), size);
   CopyOrigin(dst, src, size, stack);
 }
 
 void CopyPoison(void *dst, const void *src, uptr size, StackTrace *stack) {
   if (!MEM_IS_APP(dst)) return;
   if (!MEM_IS_APP(src)) return;
-  fast_memcpy((void *)MEM_TO_SHADOW((uptr)dst),
+  REAL(memcpy)((void *)MEM_TO_SHADOW((uptr)dst),
               (void *)MEM_TO_SHADOW((uptr)src), size);
   CopyOrigin(dst, src, size, stack);
 }
@@ -1487,12 +1436,13 @@ void CopyPoison(void *dst, const void *src, uptr size, StackTrace *stack) {
 void InitializeInterceptors() {
   static int inited = 0;
   CHECK_EQ(inited, 0);
-  SANITIZER_COMMON_INTERCEPTORS_INIT;
+  InitializeCommonInterceptors();
 
   INTERCEPT_FUNCTION(mmap);
   INTERCEPT_FUNCTION(mmap64);
   INTERCEPT_FUNCTION(posix_memalign);
   INTERCEPT_FUNCTION(memalign);
+  INTERCEPT_FUNCTION(__libc_memalign);
   INTERCEPT_FUNCTION(valloc);
   INTERCEPT_FUNCTION(pvalloc);
   INTERCEPT_FUNCTION(malloc);
@@ -1529,31 +1479,38 @@ void InitializeInterceptors() {
   INTERCEPT_FUNCTION(gcvt);
   INTERCEPT_FUNCTION(strcat);  // NOLINT
   INTERCEPT_FUNCTION(strncat);  // NOLINT
+  INTERCEPT_FUNCTION(strtod);
+  INTERCEPT_FUNCTION(strtof);
+  INTERCEPT_FUNCTION(strtold);
   INTERCEPT_FUNCTION(strtol);
   INTERCEPT_FUNCTION(strtoll);
   INTERCEPT_FUNCTION(strtoul);
   INTERCEPT_FUNCTION(strtoull);
-  INTERCEPT_FUNCTION(strtod);
   INTERCEPT_FUNCTION(strtod_l);
   INTERCEPT_FUNCTION(__strtod_l);
-  INTERCEPT_FUNCTION(strtof);
+  INTERCEPT_FUNCTION(__strtod_internal);
   INTERCEPT_FUNCTION(strtof_l);
   INTERCEPT_FUNCTION(__strtof_l);
-  INTERCEPT_FUNCTION(strtold);
+  INTERCEPT_FUNCTION(__strtof_internal);
   INTERCEPT_FUNCTION(strtold_l);
   INTERCEPT_FUNCTION(__strtold_l);
+  INTERCEPT_FUNCTION(__strtold_internal);
   INTERCEPT_FUNCTION(strtol_l);
+  INTERCEPT_FUNCTION(__strtol_l);
+  INTERCEPT_FUNCTION(__strtol_internal);
   INTERCEPT_FUNCTION(strtoll_l);
+  INTERCEPT_FUNCTION(__strtoll_l);
+  INTERCEPT_FUNCTION(__strtoll_internal);
   INTERCEPT_FUNCTION(strtoul_l);
+  INTERCEPT_FUNCTION(__strtoul_l);
+  INTERCEPT_FUNCTION(__strtoul_internal);
   INTERCEPT_FUNCTION(strtoull_l);
-  INTERCEPT_FUNCTION(vasprintf);
-  INTERCEPT_FUNCTION(asprintf);
-  INTERCEPT_FUNCTION(vsprintf);
-  INTERCEPT_FUNCTION(vsnprintf);
+  INTERCEPT_FUNCTION(__strtoull_l);
+  INTERCEPT_FUNCTION(__strtoull_internal);
   INTERCEPT_FUNCTION(vswprintf);
-  INTERCEPT_FUNCTION(sprintf);  // NOLINT
-  INTERCEPT_FUNCTION(snprintf);
   INTERCEPT_FUNCTION(swprintf);
+  INTERCEPT_FUNCTION(strxfrm);
+  INTERCEPT_FUNCTION(strxfrm_l);
   INTERCEPT_FUNCTION(strftime);
   INTERCEPT_FUNCTION(strftime_l);
   INTERCEPT_FUNCTION(__strftime_l);
@@ -1595,7 +1552,6 @@ void InitializeInterceptors() {
   INTERCEPT_FUNCTION(recvfrom);
   INTERCEPT_FUNCTION(dladdr);
   INTERCEPT_FUNCTION(dlerror);
-  INTERCEPT_FUNCTION(dlopen);
   INTERCEPT_FUNCTION(dl_iterate_phdr);
   INTERCEPT_FUNCTION(getrusage);
   INTERCEPT_FUNCTION(sigaction);

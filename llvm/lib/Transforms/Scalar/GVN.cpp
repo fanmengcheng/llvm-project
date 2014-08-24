@@ -19,6 +19,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DepthFirstIterator.h"
 #include "llvm/ADT/Hashing.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Statistic.h"
@@ -44,6 +45,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Target/TargetLibraryInfo.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/SSAUpdater.h"
 #include <vector>
 using namespace llvm;
@@ -1463,6 +1465,13 @@ void GVN::AnalyzeLoadAvailability(LoadInst *LI, LoadDepVect &Deps,
       continue;
     }
 
+    // Loading from calloc (which zero initializes memory) -> zero
+    if (isCallocLikeFn(DepInst, TLI)) {
+      ValuesPerBlock.push_back(AvailableValueInBlock::get(
+          DepBB, Constant::getNullValue(LI->getType())));
+      continue;
+    }
+
     if (StoreInst *S = dyn_cast<StoreInst>(DepInst)) {
       // Reject loads and stores that are to the same address but are of
       // different types if we have to.
@@ -1539,7 +1548,7 @@ bool GVN::PerformLoadPRE(LoadInst *LI, AvailValInBlkVect &ValuesPerBlock,
 
   // Check to see how many predecessors have the loaded value fully
   // available.
-  DenseMap<BasicBlock*, Value*> PredLoads;
+  MapVector<BasicBlock *, Value *> PredLoads;
   DenseMap<BasicBlock*, char> FullyAvailableBlocks;
   for (unsigned i = 0, e = ValuesPerBlock.size(); i != e; ++i)
     FullyAvailableBlocks[ValuesPerBlock[i].BB] = true;
@@ -1553,7 +1562,6 @@ bool GVN::PerformLoadPRE(LoadInst *LI, AvailValInBlkVect &ValuesPerBlock,
     if (IsValueFullyAvailableInBlock(Pred, FullyAvailableBlocks, 0)) {
       continue;
     }
-    PredLoads[Pred] = nullptr;
 
     if (Pred->getTerminator()->getNumSuccessors() != 1) {
       if (isa<IndirectBrInst>(Pred->getTerminator())) {
@@ -1570,11 +1578,14 @@ bool GVN::PerformLoadPRE(LoadInst *LI, AvailValInBlkVect &ValuesPerBlock,
       }
 
       CriticalEdgePred.push_back(Pred);
+    } else {
+      // Only add the predecessors that will not be split for now.
+      PredLoads[Pred] = nullptr;
     }
   }
 
   // Decide whether PRE is profitable for this load.
-  unsigned NumUnavailablePreds = PredLoads.size();
+  unsigned NumUnavailablePreds = PredLoads.size() + CriticalEdgePred.size();
   assert(NumUnavailablePreds != 0 &&
          "Fully available value should already be eliminated!");
 
@@ -1586,11 +1597,9 @@ bool GVN::PerformLoadPRE(LoadInst *LI, AvailValInBlkVect &ValuesPerBlock,
       return false;
 
   // Split critical edges, and update the unavailable predecessors accordingly.
-  for (SmallVectorImpl<BasicBlock *>::iterator I = CriticalEdgePred.begin(),
-         E = CriticalEdgePred.end(); I != E; I++) {
-    BasicBlock *OrigPred = *I;
+  for (BasicBlock *OrigPred : CriticalEdgePred) {
     BasicBlock *NewPred = splitCriticalEdges(OrigPred, LoadBB);
-    PredLoads.erase(OrigPred);
+    assert(!PredLoads.count(OrigPred) && "Split edges shouldn't be in map!");
     PredLoads[NewPred] = nullptr;
     DEBUG(dbgs() << "Split critical edge " << OrigPred->getName() << "->"
                  << LoadBB->getName() << '\n');
@@ -1599,9 +1608,8 @@ bool GVN::PerformLoadPRE(LoadInst *LI, AvailValInBlkVect &ValuesPerBlock,
   // Check if the load can safely be moved to all the unavailable predecessors.
   bool CanDoPRE = true;
   SmallVector<Instruction*, 8> NewInsts;
-  for (DenseMap<BasicBlock*, Value*>::iterator I = PredLoads.begin(),
-         E = PredLoads.end(); I != E; ++I) {
-    BasicBlock *UnavailablePred = I->first;
+  for (auto &PredLoad : PredLoads) {
+    BasicBlock *UnavailablePred = PredLoad.first;
 
     // Do PHI translation to get its value in the predecessor if necessary.  The
     // returned pointer (if non-null) is guaranteed to dominate UnavailablePred.
@@ -1623,7 +1631,7 @@ bool GVN::PerformLoadPRE(LoadInst *LI, AvailValInBlkVect &ValuesPerBlock,
       break;
     }
 
-    I->second = LoadPtr;
+    PredLoad.second = LoadPtr;
   }
 
   if (!CanDoPRE) {
@@ -1632,8 +1640,8 @@ bool GVN::PerformLoadPRE(LoadInst *LI, AvailValInBlkVect &ValuesPerBlock,
       if (MD) MD->removeInstruction(I);
       I->eraseFromParent();
     }
-    // HINT:Don't revert the edge-splitting as following transformation may 
-    // also need to split these critial edges.
+    // HINT: Don't revert the edge-splitting as following transformation may
+    // also need to split these critical edges.
     return !CriticalEdgePred.empty();
   }
 
@@ -1654,18 +1662,19 @@ bool GVN::PerformLoadPRE(LoadInst *LI, AvailValInBlkVect &ValuesPerBlock,
     VN.lookup_or_add(NewInsts[i]);
   }
 
-  for (DenseMap<BasicBlock*, Value*>::iterator I = PredLoads.begin(),
-         E = PredLoads.end(); I != E; ++I) {
-    BasicBlock *UnavailablePred = I->first;
-    Value *LoadPtr = I->second;
+  for (const auto &PredLoad : PredLoads) {
+    BasicBlock *UnavailablePred = PredLoad.first;
+    Value *LoadPtr = PredLoad.second;
 
     Instruction *NewLoad = new LoadInst(LoadPtr, LI->getName()+".pre", false,
                                         LI->getAlignment(),
                                         UnavailablePred->getTerminator());
 
-    // Transfer the old load's TBAA tag to the new load.
-    if (MDNode *Tag = LI->getMetadata(LLVMContext::MD_tbaa))
-      NewLoad->setMetadata(LLVMContext::MD_tbaa, Tag);
+    // Transfer the old load's AA tags to the new load.
+    AAMDNodes Tags;
+    LI->getAAMetadata(Tags);
+    if (Tags)
+      NewLoad->setAAMetadata(Tags);
 
     // Transfer DebugLoc.
     NewLoad->setDebugLoc(LI->getDebugLoc());
@@ -1768,32 +1777,24 @@ static void patchReplacementInstruction(Instruction *I, Value *Repl) {
       ReplOp->setHasNoUnsignedWrap(false);
   }
   if (Instruction *ReplInst = dyn_cast<Instruction>(Repl)) {
-    SmallVector<std::pair<unsigned, MDNode*>, 4> Metadata;
-    ReplInst->getAllMetadataOtherThanDebugLoc(Metadata);
-    for (int i = 0, n = Metadata.size(); i < n; ++i) {
-      unsigned Kind = Metadata[i].first;
-      MDNode *IMD = I->getMetadata(Kind);
-      MDNode *ReplMD = Metadata[i].second;
-      switch(Kind) {
-      default:
-        ReplInst->setMetadata(Kind, nullptr); // Remove unknown metadata
-        break;
-      case LLVMContext::MD_dbg:
-        llvm_unreachable("getAllMetadataOtherThanDebugLoc returned a MD_dbg");
-      case LLVMContext::MD_tbaa:
-        ReplInst->setMetadata(Kind, MDNode::getMostGenericTBAA(IMD, ReplMD));
-        break;
-      case LLVMContext::MD_range:
-        ReplInst->setMetadata(Kind, MDNode::getMostGenericRange(IMD, ReplMD));
-        break;
-      case LLVMContext::MD_prof:
-        llvm_unreachable("MD_prof in a non-terminator instruction");
-        break;
-      case LLVMContext::MD_fpmath:
-        ReplInst->setMetadata(Kind, MDNode::getMostGenericFPMath(IMD, ReplMD));
-        break;
-      }
-    }
+    // FIXME: If both the original and replacement value are part of the
+    // same control-flow region (meaning that the execution of one
+    // guarentees the executation of the other), then we can combine the
+    // noalias scopes here and do better than the general conservative
+    // answer used in combineMetadata().
+
+    // In general, GVN unifies expressions over different control-flow
+    // regions, and so we need a conservative combination of the noalias
+    // scopes.
+    unsigned KnownIDs[] = {
+      LLVMContext::MD_tbaa,
+      LLVMContext::MD_alias_scope,
+      LLVMContext::MD_noalias,
+      LLVMContext::MD_range,
+      LLVMContext::MD_fpmath,
+      LLVMContext::MD_invariant_load,
+    };
+    combineMetadata(ReplInst, I, KnownIDs);
   }
 }
 
@@ -1987,6 +1988,15 @@ bool GVN::processLoad(LoadInst *L) {
       ++NumGVNLoad;
       return true;
     }
+  }
+
+  // If this load follows a calloc (which zero initializes memory),
+  // then the loaded value is zero
+  if (isCallocLikeFn(DepInst, TLI)) {
+    L->replaceAllUsesWith(Constant::getNullValue(L->getType()));
+    markInstructionForDeletion(L);
+    ++NumGVNLoad;
+    return true;
   }
 
   return false;
@@ -2783,7 +2793,7 @@ bool GVN::processFoldableCondBr(BranchInst *BI) {
   return true;
 }
 
-// performPRE() will trigger assert if it come across an instruciton without
+// performPRE() will trigger assert if it comes across an instruction without
 // associated val-num. As it normally has far more live instructions than dead
 // instructions, it makes more sense just to "fabricate" a val-number for the
 // dead code than checking if instruction involved is dead or not.

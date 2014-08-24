@@ -17,6 +17,8 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Triple.h"
 #include "llvm/Object/Binary.h"
+#include "llvm/Object/Archive.h"
+#include "llvm/Object/MachO.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/MachO.h"
 
@@ -51,8 +53,14 @@ public:
 
     ObjectForArch getNext() const { return ObjectForArch(Parent, Index + 1); }
     uint32_t getCPUType() const { return Header.cputype; }
+    std::string getArchTypeName() const {
+      Triple T = MachOObjectFile::getArch(Header.cputype, Header.cpusubtype);
+      return T.getArchName();
+    }
 
-    error_code getAsObjectFile(std::unique_ptr<ObjectFile> &Result) const;
+    ErrorOr<std::unique_ptr<ObjectFile>> getAsObjectFile() const;
+
+    std::error_code getAsArchive(std::unique_ptr<Archive> &Result) const;
   };
 
   class object_iterator {
@@ -76,8 +84,8 @@ public:
     }
   };
 
-  MachOUniversalBinary(MemoryBuffer *Source, error_code &ec);
-  static ErrorOr<MachOUniversalBinary*> create(MemoryBuffer *Source);
+  MachOUniversalBinary(MemoryBufferRef Souce, std::error_code &EC);
+  static ErrorOr<MachOUniversalBinary *> create(MemoryBufferRef Source);
 
   object_iterator begin_objects() const {
     return ObjectForArch(this, 0);
@@ -93,8 +101,8 @@ public:
     return V->isMachOUniversalBinary();
   }
 
-  error_code getObjectForArch(Triple::ArchType Arch,
-                              std::unique_ptr<ObjectFile> &Result) const;
+  ErrorOr<std::unique_ptr<ObjectFile>>
+  getObjectForArch(Triple::ArchType Arch) const;
 };
 
 }

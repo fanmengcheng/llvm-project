@@ -15,7 +15,7 @@ class ExprCommandWithTimeoutsTestCase(TestBase):
         # Call super's setUp().
         TestBase.setUp(self)
 
-        self.main_source = "wait-a-while.c"
+        self.main_source = "wait-a-while.cpp"
         self.main_source_spec = lldb.SBFileSpec (self.main_source)
 
 
@@ -27,6 +27,7 @@ class ExprCommandWithTimeoutsTestCase(TestBase):
         self.call_function()
 
     @expectedFailureFreeBSD("llvm.org/pr19605") # fails on buildbot
+    @expectedFailureLinux("llvm.org/pr20275") # fails intermittently on Linux
     @dwarf_test
     def test_with_dwarf(self):
         """Test calling std::String member function."""

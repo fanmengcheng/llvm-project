@@ -97,6 +97,21 @@ static bool MultiplyOverflows(ConstantInt *C1, ConstantInt *C2, bool sign) {
   return MulExt.slt(Min) || MulExt.sgt(Max);
 }
 
+/// \brief True if C2 is a multiple of C1. Quotient contains C2/C1.
+static bool IsMultiple(const APInt &C1, const APInt &C2, APInt &Quotient,
+                       bool IsSigned) {
+  assert(C1.getBitWidth() == C2.getBitWidth() &&
+         "Inconsistent width of constants!");
+
+  APInt Remainder(C1.getBitWidth(), /*Val=*/0ULL, IsSigned);
+  if (IsSigned)
+    APInt::sdivrem(C1, C2, Quotient, Remainder);
+  else
+    APInt::udivrem(C1, C2, Quotient, Remainder);
+
+  return Remainder.isMinValue();
+}
+
 /// \brief A helper routine of InstCombiner::visitMul().
 ///
 /// If C is a vector of known powers of 2, then this function returns
@@ -119,6 +134,9 @@ static Constant *getLogBase2Vector(ConstantDataVector *CV) {
 Instruction *InstCombiner::visitMul(BinaryOperator &I) {
   bool Changed = SimplifyAssociativeOrCommutative(I);
   Value *Op0 = I.getOperand(0), *Op1 = I.getOperand(1);
+
+  if (Value *V = SimplifyVectorOp(I))
+    return ReplaceInstUsesWith(I, V);
 
   if (Value *V = SimplifyMulInst(Op0, Op1, DL))
     return ReplaceInstUsesWith(I, V);
@@ -200,8 +218,11 @@ Instruction *InstCombiner::visitMul(BinaryOperator &I) {
       Value *X;
       Constant *C1;
       if (match(Op0, m_OneUse(m_Add(m_Value(X), m_Constant(C1))))) {
-        Value *Add = Builder->CreateMul(X, Op1);
-        return BinaryOperator::CreateAdd(Add, Builder->CreateMul(C1, Op1));
+        Value *Mul = Builder->CreateMul(C1, Op1);
+        // Only go forward with the transform if C1*CI simplifies to a tidier
+        // constant.
+        if (!match(Mul, m_Mul(m_Value(), m_Value())))
+          return BinaryOperator::CreateAdd(Builder->CreateMul(X, Op1), Mul);
       }
     }
   }
@@ -428,6 +449,9 @@ Instruction *InstCombiner::visitFMul(BinaryOperator &I) {
   bool Changed = SimplifyAssociativeOrCommutative(I);
   Value *Op0 = I.getOperand(0), *Op1 = I.getOperand(1);
 
+  if (Value *V = SimplifyVectorOp(I))
+    return ReplaceInstUsesWith(I, V);
+
   if (isa<Constant>(Op0))
     std::swap(Op0, Op1);
 
@@ -587,36 +611,6 @@ Instruction *InstCombiner::visitFMul(BinaryOperator &I) {
       }
     }
 
-    // B * (uitofp i1 C) -> select C, B, 0
-    if (I.hasNoNaNs() && I.hasNoInfs() && I.hasNoSignedZeros()) {
-      Value *LHS = Op0, *RHS = Op1;
-      Value *B, *C;
-      if (!match(RHS, m_UIToFP(m_Value(C))))
-        std::swap(LHS, RHS);
-
-      if (match(RHS, m_UIToFP(m_Value(C))) &&
-          C->getType()->getScalarType()->isIntegerTy(1)) {
-        B = LHS;
-        Value *Zero = ConstantFP::getNegativeZero(B->getType());
-        return SelectInst::Create(C, B, Zero);
-      }
-    }
-
-    // A * (1 - uitofp i1 C) -> select C, 0, A
-    if (I.hasNoNaNs() && I.hasNoInfs() && I.hasNoSignedZeros()) {
-      Value *LHS = Op0, *RHS = Op1;
-      Value *A, *C;
-      if (!match(RHS, m_FSub(m_FPOne(), m_UIToFP(m_Value(C)))))
-        std::swap(LHS, RHS);
-
-      if (match(RHS, m_FSub(m_FPOne(), m_UIToFP(m_Value(C)))) &&
-          C->getType()->getScalarType()->isIntegerTy(1)) {
-        A = LHS;
-        Value *Zero = ConstantFP::getNegativeZero(A->getType());
-        return SelectInst::Create(C, Zero, A);
-      }
-    }
-
     if (!isa<Constant>(Op1))
       std::swap(Opnd0, Opnd1);
     else
@@ -716,16 +710,74 @@ Instruction *InstCombiner::commonIDivTransforms(BinaryOperator &I) {
     return &I;
 
   if (ConstantInt *RHS = dyn_cast<ConstantInt>(Op1)) {
-    // (X / C1) / C2  -> X / (C1*C2)
-    if (Instruction *LHS = dyn_cast<Instruction>(Op0))
+    if (Instruction *LHS = dyn_cast<Instruction>(Op0)) {
+      // (X / C1) / C2  -> X / (C1*C2)
       if (Instruction::BinaryOps(LHS->getOpcode()) == I.getOpcode())
         if (ConstantInt *LHSRHS = dyn_cast<ConstantInt>(LHS->getOperand(1))) {
           if (MultiplyOverflows(RHS, LHSRHS,
-                                I.getOpcode()==Instruction::SDiv))
+                                I.getOpcode() == Instruction::SDiv))
             return ReplaceInstUsesWith(I, Constant::getNullValue(I.getType()));
           return BinaryOperator::Create(I.getOpcode(), LHS->getOperand(0),
                                         ConstantExpr::getMul(RHS, LHSRHS));
         }
+
+      Value *X;
+      const APInt *C1, *C2;
+      if (match(RHS, m_APInt(C2))) {
+        bool IsSigned = I.getOpcode() == Instruction::SDiv;
+        if ((IsSigned && match(LHS, m_NSWMul(m_Value(X), m_APInt(C1)))) ||
+            (!IsSigned && match(LHS, m_NUWMul(m_Value(X), m_APInt(C1))))) {
+          APInt Quotient(C1->getBitWidth(), /*Val=*/0ULL, IsSigned);
+
+          // (X * C1) / C2 -> X / (C2 / C1) if C2 is a multiple of C1.
+          if (IsMultiple(*C2, *C1, Quotient, IsSigned)) {
+            BinaryOperator *BO = BinaryOperator::Create(
+                I.getOpcode(), X, ConstantInt::get(X->getType(), Quotient));
+            BO->setIsExact(I.isExact());
+            return BO;
+          }
+
+          // (X * C1) / C2 -> X * (C1 / C2) if C1 is a multiple of C2.
+          if (IsMultiple(*C1, *C2, Quotient, IsSigned)) {
+            BinaryOperator *BO = BinaryOperator::Create(
+                Instruction::Mul, X, ConstantInt::get(X->getType(), Quotient));
+            BO->setHasNoUnsignedWrap(
+                !IsSigned &&
+                cast<OverflowingBinaryOperator>(LHS)->hasNoUnsignedWrap());
+            BO->setHasNoSignedWrap(
+                cast<OverflowingBinaryOperator>(LHS)->hasNoSignedWrap());
+            return BO;
+          }
+        }
+
+        if ((IsSigned && match(LHS, m_NSWShl(m_Value(X), m_APInt(C1)))) ||
+            (!IsSigned && match(LHS, m_NUWShl(m_Value(X), m_APInt(C1))))) {
+          APInt Quotient(C1->getBitWidth(), /*Val=*/0ULL, IsSigned);
+          APInt C1Shifted = APInt::getOneBitSet(
+              C1->getBitWidth(), static_cast<unsigned>(C1->getLimitedValue()));
+
+          // (X << C1) / C2 -> X / (C2 >> C1) if C2 is a multiple of C1.
+          if (IsMultiple(*C2, C1Shifted, Quotient, IsSigned)) {
+            BinaryOperator *BO = BinaryOperator::Create(
+                I.getOpcode(), X, ConstantInt::get(X->getType(), Quotient));
+            BO->setIsExact(I.isExact());
+            return BO;
+          }
+
+          // (X << C1) / C2 -> X * (C2 >> C1) if C1 is a multiple of C2.
+          if (IsMultiple(C1Shifted, *C2, Quotient, IsSigned)) {
+            BinaryOperator *BO = BinaryOperator::Create(
+                Instruction::Mul, X, ConstantInt::get(X->getType(), Quotient));
+            BO->setHasNoUnsignedWrap(
+                !IsSigned &&
+                cast<OverflowingBinaryOperator>(LHS)->hasNoUnsignedWrap());
+            BO->setHasNoSignedWrap(
+                cast<OverflowingBinaryOperator>(LHS)->hasNoSignedWrap());
+            return BO;
+          }
+        }
+      }
+    }
 
     if (!RHS->isZero()) { // avoid X udiv 0
       if (SelectInst *SI = dyn_cast<SelectInst>(Op0))
@@ -734,6 +786,25 @@ Instruction *InstCombiner::commonIDivTransforms(BinaryOperator &I) {
       if (isa<PHINode>(Op0))
         if (Instruction *NV = FoldOpIntoPhi(I))
           return NV;
+    }
+  }
+
+  if (ConstantInt *One = dyn_cast<ConstantInt>(Op0)) {
+    if (One->isOne() && !I.getType()->isIntegerTy(1)) {
+      bool isSigned = I.getOpcode() == Instruction::SDiv;
+      if (isSigned) {
+        // If Op1 is 0 then it's undefined behaviour, if Op1 is 1 then the
+        // result is one, if Op1 is -1 then the result is minus one, otherwise
+        // it's zero.
+        Value *Inc = Builder->CreateAdd(Op1, One);
+        Value *Cmp = Builder->CreateICmpULT(
+                         Inc, ConstantInt::get(I.getType(), 3));
+        return SelectInst::Create(Cmp, Op1, ConstantInt::get(I.getType(), 0));
+      } else {
+        // If Op1 is 0 then it's undefined behaviour. If Op1 is 1 then the
+        // result is one, otherwise it's zero.
+        return new ZExtInst(Builder->CreateICmpEQ(Op1, One), I.getType());
+      }
     }
   }
 
@@ -878,6 +949,9 @@ static size_t visitUDivOperand(Value *Op0, Value *Op1, const BinaryOperator &I,
 Instruction *InstCombiner::visitUDiv(BinaryOperator &I) {
   Value *Op0 = I.getOperand(0), *Op1 = I.getOperand(1);
 
+  if (Value *V = SimplifyVectorOp(I))
+    return ReplaceInstUsesWith(I, V);
+
   if (Value *V = SimplifyUDivInst(Op0, Op1, DL))
     return ReplaceInstUsesWith(I, V);
 
@@ -937,6 +1011,9 @@ Instruction *InstCombiner::visitUDiv(BinaryOperator &I) {
 Instruction *InstCombiner::visitSDiv(BinaryOperator &I) {
   Value *Op0 = I.getOperand(0), *Op1 = I.getOperand(1);
 
+  if (Value *V = SimplifyVectorOp(I))
+    return ReplaceInstUsesWith(I, V);
+
   if (Value *V = SimplifySDivInst(Op0, Op1, DL))
     return ReplaceInstUsesWith(I, V);
 
@@ -959,6 +1036,10 @@ Instruction *InstCombiner::visitSDiv(BinaryOperator &I) {
   }
 
   if (Constant *RHS = dyn_cast<Constant>(Op1)) {
+    // X/INT_MIN -> X == INT_MIN
+    if (RHS->isMinSignedValue())
+      return new ZExtInst(Builder->CreateICmpEQ(Op0, Op1), I.getType());
+
     // -X/C  -->  X/-C  provided the negation doesn't overflow.
     if (SubOperator *Sub = dyn_cast<SubOperator>(Op0))
       if (match(Sub->getOperand(0), m_Zero()) && Sub->hasNoSignedWrap())
@@ -1022,6 +1103,9 @@ static Instruction *CvtFDivConstToReciprocal(Value *Dividend,
 
 Instruction *InstCombiner::visitFDiv(BinaryOperator &I) {
   Value *Op0 = I.getOperand(0), *Op1 = I.getOperand(1);
+
+  if (Value *V = SimplifyVectorOp(I))
+    return ReplaceInstUsesWith(I, V);
 
   if (Value *V = SimplifyFDivInst(Op0, Op1, DL))
     return ReplaceInstUsesWith(I, V);
@@ -1185,6 +1269,9 @@ Instruction *InstCombiner::commonIRemTransforms(BinaryOperator &I) {
 Instruction *InstCombiner::visitURem(BinaryOperator &I) {
   Value *Op0 = I.getOperand(0), *Op1 = I.getOperand(1);
 
+  if (Value *V = SimplifyVectorOp(I))
+    return ReplaceInstUsesWith(I, V);
+
   if (Value *V = SimplifyURemInst(Op0, Op1, DL))
     return ReplaceInstUsesWith(I, V);
 
@@ -1216,6 +1303,9 @@ Instruction *InstCombiner::visitURem(BinaryOperator &I) {
 
 Instruction *InstCombiner::visitSRem(BinaryOperator &I) {
   Value *Op0 = I.getOperand(0), *Op1 = I.getOperand(1);
+
+  if (Value *V = SimplifyVectorOp(I))
+    return ReplaceInstUsesWith(I, V);
 
   if (Value *V = SimplifySRemInst(Op0, Op1, DL))
     return ReplaceInstUsesWith(I, V);
@@ -1287,6 +1377,9 @@ Instruction *InstCombiner::visitSRem(BinaryOperator &I) {
 
 Instruction *InstCombiner::visitFRem(BinaryOperator &I) {
   Value *Op0 = I.getOperand(0), *Op1 = I.getOperand(1);
+
+  if (Value *V = SimplifyVectorOp(I))
+    return ReplaceInstUsesWith(I, V);
 
   if (Value *V = SimplifyFRemInst(Op0, Op1, DL))
     return ReplaceInstUsesWith(I, V);

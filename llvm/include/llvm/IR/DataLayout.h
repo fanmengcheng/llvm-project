@@ -27,6 +27,9 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/DataTypes.h"
 
+// this needs to be outside of the namespace, to avoid conflict with llvm-c decl
+typedef struct LLVMOpaqueTargetData *LLVMTargetDataRef;
+
 namespace llvm {
 
 class Value;
@@ -411,8 +414,8 @@ public:
     return (LargestSize == 0) ? nullptr : Type::getIntNTy(C, LargestSize);
   }
 
-  /// getLargestLegalIntType - Return the size of largest legal integer type
-  /// size, or 0 if none are set.
+  /// getLargestLegalIntTypeSize - Return the size of largest legal integer
+  /// type size, or 0 if none are set.
   unsigned getLargestLegalIntTypeSize() const;
 
   /// getIndexedOffset - return the offset from the beginning of the type for
@@ -444,6 +447,14 @@ public:
     return (Val + (Alignment-1)) & ~UIntTy(Alignment-1);
   }
 };
+
+inline DataLayout *unwrap(LLVMTargetDataRef P) {
+   return reinterpret_cast<DataLayout*>(P);
+}
+
+inline LLVMTargetDataRef wrap(const DataLayout *P) {
+   return reinterpret_cast<LLVMTargetDataRef>(const_cast<DataLayout*>(P));
+}
 
 class DataLayoutPass : public ImmutablePass {
   DataLayout DL;

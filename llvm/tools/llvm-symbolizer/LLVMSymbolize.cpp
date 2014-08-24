@@ -19,6 +19,7 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Compression.h"
 #include "llvm/Support/DataExtractor.h"
+#include "llvm/Support/Errc.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
@@ -28,20 +29,18 @@
 namespace llvm {
 namespace symbolize {
 
-static bool error(error_code ec) {
+static bool error(std::error_code ec) {
   if (!ec)
     return false;
   errs() << "LLVMSymbolizer: error reading file: " << ec.message() << ".\n";
   return true;
 }
 
-static uint32_t
-getDILineInfoSpecifierFlags(const LLVMSymbolizer::Options &Opts) {
-  uint32_t Flags = llvm::DILineInfoSpecifier::FileLineInfo |
-                   llvm::DILineInfoSpecifier::AbsoluteFilePath;
-  if (Opts.PrintFunctions)
-    Flags |= llvm::DILineInfoSpecifier::FunctionName;
-  return Flags;
+static DILineInfoSpecifier
+getDILineInfoSpecifier(const LLVMSymbolizer::Options &Opts) {
+  return DILineInfoSpecifier(
+      DILineInfoSpecifier::FileLineInfoKind::AbsoluteFilePath,
+      Opts.PrintFunctions);
 }
 
 ModuleInfo::ModuleInfo(ObjectFile *Obj, DIContext *DICtx)
@@ -115,10 +114,10 @@ DILineInfo ModuleInfo::symbolizeCode(
   DILineInfo LineInfo;
   if (DebugInfoContext) {
     LineInfo = DebugInfoContext->getLineInfoForAddress(
-        ModuleOffset, getDILineInfoSpecifierFlags(Opts));
+        ModuleOffset, getDILineInfoSpecifier(Opts));
   }
   // Override function name from symbol table if necessary.
-  if (Opts.PrintFunctions && Opts.UseSymbolTable) {
+  if (Opts.PrintFunctions != FunctionNameKind::None && Opts.UseSymbolTable) {
     std::string FunctionName;
     uint64_t Start, Size;
     if (getNameFromSymbolTable(SymbolRef::ST_Function, ModuleOffset,
@@ -134,14 +133,14 @@ DIInliningInfo ModuleInfo::symbolizeInlinedCode(
   DIInliningInfo InlinedContext;
   if (DebugInfoContext) {
     InlinedContext = DebugInfoContext->getInliningInfoForAddress(
-        ModuleOffset, getDILineInfoSpecifierFlags(Opts));
+        ModuleOffset, getDILineInfoSpecifier(Opts));
   }
   // Make sure there is at least one frame in context.
   if (InlinedContext.getNumberOfFrames() == 0) {
     InlinedContext.addFrame(DILineInfo());
   }
   // Override the function name in lower frame with name from symbol table.
-  if (Opts.PrintFunctions && Opts.UseSymbolTable) {
+  if (Opts.PrintFunctions != FunctionNameKind::None && Opts.UseSymbolTable) {
     DIInliningInfo PatchedInlinedContext;
     for (uint32_t i = 0, n = InlinedContext.getNumberOfFrames(); i < n; i++) {
       DILineInfo LineInfo = InlinedContext.getFrame(i);
@@ -221,10 +220,11 @@ static std::string getDarwinDWARFResourceForPath(const std::string &Path) {
 }
 
 static bool checkFileCRC(StringRef Path, uint32_t CRCHash) {
-  std::unique_ptr<MemoryBuffer> MB;
-  if (MemoryBuffer::getFileOrSTDIN(Path, MB))
+  ErrorOr<std::unique_ptr<MemoryBuffer>> MB =
+      MemoryBuffer::getFileOrSTDIN(Path);
+  if (!MB)
     return false;
-  return !zlib::isAvailable() || CRCHash == zlib::crc32(MB->getBuffer());
+  return !zlib::isAvailable() || CRCHash == zlib::crc32(MB.get()->getBuffer());
 }
 
 static bool findDebugBinary(const std::string &OrigPath,
@@ -300,22 +300,23 @@ LLVMSymbolizer::getOrCreateBinary(const std::string &Path) {
     return I->second;
   Binary *Bin = nullptr;
   Binary *DbgBin = nullptr;
-  ErrorOr<Binary *> BinaryOrErr = createBinary(Path);
+  ErrorOr<OwningBinary<Binary>> BinaryOrErr = createBinary(Path);
   if (!error(BinaryOrErr.getError())) {
-    std::unique_ptr<Binary> ParsedBinary(BinaryOrErr.get());
+    OwningBinary<Binary> &ParsedBinary = BinaryOrErr.get();
     // Check if it's a universal binary.
-    Bin = ParsedBinary.get();
-    ParsedBinariesAndObjects.push_back(std::move(ParsedBinary));
+    Bin = ParsedBinary.getBinary().get();
+    addOwningBinary(std::move(ParsedBinary));
     if (Bin->isMachO() || Bin->isMachOUniversalBinary()) {
       // On Darwin we may find DWARF in separate object file in
       // resource directory.
       const std::string &ResourcePath =
           getDarwinDWARFResourceForPath(Path);
       BinaryOrErr = createBinary(ResourcePath);
-      error_code EC = BinaryOrErr.getError();
+      std::error_code EC = BinaryOrErr.getError();
       if (EC != errc::no_such_file_or_directory && !error(EC)) {
-        DbgBin = BinaryOrErr.get();
-        ParsedBinariesAndObjects.push_back(std::unique_ptr<Binary>(DbgBin));
+        OwningBinary<Binary> B = std::move(BinaryOrErr.get());
+        DbgBin = B.getBinary().get();
+        addOwningBinary(std::move(B));
       }
     }
     // Try to locate the debug binary using .gnu_debuglink section.
@@ -327,8 +328,9 @@ LLVMSymbolizer::getOrCreateBinary(const std::string &Path) {
           findDebugBinary(Path, DebuglinkName, CRCHash, DebugBinaryPath)) {
         BinaryOrErr = createBinary(DebugBinaryPath);
         if (!error(BinaryOrErr.getError())) {
-          DbgBin = BinaryOrErr.get();
-          ParsedBinariesAndObjects.push_back(std::unique_ptr<Binary>(DbgBin));
+          OwningBinary<Binary> B = std::move(BinaryOrErr.get());
+          DbgBin = B.getBinary().get();
+          addOwningBinary(std::move(B));
         }
       }
     }
@@ -350,10 +352,11 @@ LLVMSymbolizer::getObjectFileFromBinary(Binary *Bin, const std::string &ArchName
         std::make_pair(UB, ArchName));
     if (I != ObjectFileForArch.end())
       return I->second;
-    std::unique_ptr<ObjectFile> ParsedObj;
-    if (!UB->getObjectForArch(Triple(ArchName).getArch(), ParsedObj)) {
-      Res = ParsedObj.get();
-      ParsedBinariesAndObjects.push_back(std::move(ParsedObj));
+    ErrorOr<std::unique_ptr<ObjectFile>> ParsedObj =
+        UB->getObjectForArch(Triple(ArchName).getArch());
+    if (ParsedObj) {
+      Res = ParsedObj.get().get();
+      ParsedBinariesAndObjects.push_back(std::move(ParsedObj.get()));
     }
     ObjectFileForArch[std::make_pair(UB, ArchName)] = Res;
   } else if (Bin->isObject()) {
@@ -387,7 +390,7 @@ LLVMSymbolizer::getOrCreateModuleInfo(const std::string &ModuleName) {
     Modules.insert(make_pair(ModuleName, (ModuleInfo *)nullptr));
     return nullptr;
   }
-  DIContext *Context = DIContext::getDWARFContext(DbgObj);
+  DIContext *Context = DIContext::getDWARFContext(*DbgObj);
   assert(Context);
   ModuleInfo *Info = new ModuleInfo(Obj, Context);
   Modules.insert(make_pair(ModuleName, Info));
@@ -399,7 +402,7 @@ std::string LLVMSymbolizer::printDILineInfo(DILineInfo LineInfo) const {
   // cannot fetch. We replace it to "??" to make our output closer to addr2line.
   static const std::string kDILineInfoBadString = "<invalid>";
   std::stringstream Result;
-  if (Opts.PrintFunctions) {
+  if (Opts.PrintFunctions != FunctionNameKind::None) {
     std::string FunctionName = LineInfo.FunctionName;
     if (FunctionName == kDILineInfoBadString)
       FunctionName = kBadString;

@@ -35,9 +35,11 @@ USEDLIBS = lldbAPI.a \
 	lldbPluginABIMacOSX_arm64.a \
 	lldbPluginABIMacOSX_i386.a \
 	lldbPluginABISysV_x86_64.a \
+	lldbPluginABISysV_hexagon.a \
 	lldbPluginDisassemblerLLVM.a \
 	lldbPluginDynamicLoaderStatic.a \
 	lldbPluginDynamicLoaderPOSIX.a \
+	lldbPluginDynamicLoaderHexagon.a \
 	lldbPluginEmulateInstructionARM.a \
 	lldbPluginEmulateInstructionARM64.a \
 	lldbPluginLanguageRuntimeCPlusPlusItaniumABI.a \
@@ -76,13 +78,14 @@ USEDLIBS = lldbAPI.a \
 	lldbPluginPlatformLinux.a \
 	lldbPluginPlatformWindows.a \
 	lldbPluginPlatformFreeBSD.a \
-	lldbPluginPlatformPOSIX.a
+	lldbPluginPlatformPOSIX.a \
+	lldbPluginPlatformKalimba.a
 
 # Because GCC requires RTTI enabled for lldbCore (see source/Core/Makefile) it is
 # necessary to also link the clang rewriter libraries so vtable references can
 # be resolved correctly, if we are building with GCC.
 ifeq (g++,$(shell basename $(CXX) | cut -c 1-4))
-  USEDLIBS += clangRewriteCore.a \
+  USEDLIBS += clangRewrite.a \
               clangRewriteFrontend.a
 endif
 
@@ -94,6 +97,7 @@ LINK_COMPONENTS := $(TARGETS_TO_BUILD) asmparser bitreader bitwriter codegen \
 
 ifeq ($(HOST_OS),Darwin)
   USEDLIBS += lldbHostMacOSX.a \
+              lldbHostPosix.a \
               lldbPluginDynamicLoaderMacOSX.a \
               lldbPluginDynamicLoaderDarwinKernel.a \
               lldbPluginObjectContainerUniversalMachO.a \
@@ -101,11 +105,14 @@ ifeq ($(HOST_OS),Darwin)
               lldbPluginSymbolVendorMacOSX.a \
               lldbPluginProcessDarwin.a \
               lldbPluginProcessMachCore.a \
-              lldbPluginSystemRuntimeMacOSX.a
+              lldbPluginSystemRuntimeMacOSX.a \
+              lldbPluginProcessElfCore.a \
+              lldbPluginJITLoaderGDB.a
 endif
 
 ifeq ($(HOST_OS),Linux)
   USEDLIBS += lldbHostLinux.a \
+              lldbHostPosix.a \
               lldbPluginProcessLinux.a \
               lldbPluginProcessPOSIX.a \
               lldbPluginDynamicLoaderMacOSX.a \
@@ -121,6 +128,7 @@ endif
 
 ifneq (,$(filter $(HOST_OS), FreeBSD GNU/kFreeBSD))
   USEDLIBS += lldbHostFreeBSD.a \
+              lldbHostPosix.a \
               lldbPluginProcessPOSIX.a \
               lldbPluginProcessFreeBSD.a \
               lldbPluginProcessElfCore.a \

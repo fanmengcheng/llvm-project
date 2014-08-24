@@ -144,7 +144,7 @@ Instruction *InstCombiner::scalarizePHI(ExtractElementInst &EI, PHINode *PN) {
     // If the operand is the PHI induction variable:
     if (PHIInVal == PHIUser) {
       // Scalarize the binary operation. Its first operand is the
-      // scalar PHI and the second operand is extracted from the other
+      // scalar PHI, and the second operand is extracted from the other
       // vector operand.
       BinaryOperator *B0 = cast<BinaryOperator>(PHIUser);
       unsigned opId = (B0->getOperand(0) == PN) ? 1 : 0;
@@ -361,7 +361,7 @@ static bool CollectSingleShuffleElements(Value *V, Value *LHS, Value *RHS,
     unsigned InsertedIdx = cast<ConstantInt>(IdxOp)->getZExtValue();
 
     if (isa<UndefValue>(ScalarOp)) {  // inserting undef into vector.
-      // Okay, we can handle this if the vector we are insertinting into is
+      // We can handle this if the vector we are inserting into is
       // transitively ok.
       if (CollectSingleShuffleElements(VecOp, LHS, RHS, Mask)) {
         // If so, update the mask to reflect the inserted undef.
@@ -376,7 +376,7 @@ static bool CollectSingleShuffleElements(Value *V, Value *LHS, Value *RHS,
 
         // This must be extracting from either LHS or RHS.
         if (EI->getOperand(0) == LHS || EI->getOperand(0) == RHS) {
-          // Okay, we can handle this if the vector we are insertinting into is
+          // We can handle this if the vector we are inserting into is
           // transitively ok.
           if (CollectSingleShuffleElements(VecOp, LHS, RHS, Mask)) {
             // If so, update the mask to reflect the inserted value.
@@ -403,7 +403,7 @@ static bool CollectSingleShuffleElements(Value *V, Value *LHS, Value *RHS,
 
 /// We are building a shuffle to create V, which is a sequence of insertelement,
 /// extractelement pairs. If PermittedRHS is set, then we must either use it or
-/// not rely on the second vector source. Return an std::pair containing the
+/// not rely on the second vector source. Return a std::pair containing the
 /// left and right vectors of the proposed shuffle (or 0), and set the Mask
 /// parameter as required.
 ///
@@ -488,6 +488,41 @@ static ShuffleOps CollectShuffleElements(Value *V,
   for (unsigned i = 0; i != NumElts; ++i)
     Mask.push_back(ConstantInt::get(Type::getInt32Ty(V->getContext()), i));
   return std::make_pair(V, nullptr);
+}
+
+/// Try to find redundant insertvalue instructions, like the following ones:
+///  %0 = insertvalue { i8, i32 } undef, i8 %x, 0
+///  %1 = insertvalue { i8, i32 } %0,    i8 %y, 0
+/// Here the second instruction inserts values at the same indices, as the
+/// first one, making the first one redundant.
+/// It should be transformed to:
+///  %0 = insertvalue { i8, i32 } undef, i8 %y, 0
+Instruction *InstCombiner::visitInsertValueInst(InsertValueInst &I) {
+  bool IsRedundant = false;
+  ArrayRef<unsigned int> FirstIndices = I.getIndices();
+
+  // If there is a chain of insertvalue instructions (each of them except the
+  // last one has only one use and it's another insertvalue insn from this
+  // chain), check if any of the 'children' uses the same indices as the first
+  // instruction. In this case, the first one is redundant.
+  Value *V = &I;
+  unsigned Depth = 0;
+  while (V->hasOneUse() && Depth < 10) {
+    User *U = V->user_back();
+    auto UserInsInst = dyn_cast<InsertValueInst>(U);
+    if (!UserInsInst || U->getOperand(0) != V)
+      break;
+    if (UserInsInst->getIndices() == FirstIndices) {
+      IsRedundant = true;
+      break;
+    }
+    V = UserInsInst;
+    Depth++;
+  }
+
+  if (IsRedundant)
+    return ReplaceInstUsesWith(I, I.getOperand(0));
+  return nullptr;
 }
 
 Instruction *InstCombiner::visitInsertElementInst(InsertElementInst &IE) {
@@ -804,6 +839,20 @@ InstCombiner::EvaluateInDifferentElementOrder(Value *V, ArrayRef<int> Mask) {
   llvm_unreachable("failed to reorder elements of vector instruction!");
 }
 
+static void RecognizeIdentityMask(const SmallVectorImpl<int> &Mask,
+                                  bool &isLHSID, bool &isRHSID) {
+  isLHSID = isRHSID = true;
+
+  for (unsigned i = 0, e = Mask.size(); i != e; ++i) {
+    if (Mask[i] < 0) continue;  // Ignore undef values.
+    // Is this an identity shuffle of the LHS value?
+    isLHSID &= (Mask[i] == (int)i);
+
+    // Is this an identity shuffle of the RHS value?
+    isRHSID &= (Mask[i]-e == i);
+  }
+}
+
 Instruction *InstCombiner::visitShuffleVectorInst(ShuffleVectorInst &SVI) {
   Value *LHS = SVI.getOperand(0);
   Value *RHS = SVI.getOperand(1);
@@ -867,16 +916,8 @@ Instruction *InstCombiner::visitShuffleVectorInst(ShuffleVectorInst &SVI) {
 
   if (VWidth == LHSWidth) {
     // Analyze the shuffle, are the LHS or RHS and identity shuffles?
-    bool isLHSID = true, isRHSID = true;
-
-    for (unsigned i = 0, e = Mask.size(); i != e; ++i) {
-      if (Mask[i] < 0) continue;  // Ignore undef values.
-      // Is this an identity shuffle of the LHS value?
-      isLHSID &= (Mask[i] == (int)i);
-
-      // Is this an identity shuffle of the RHS value?
-      isRHSID &= (Mask[i]-e == i);
-    }
+    bool isLHSID, isRHSID;
+    RecognizeIdentityMask(Mask, isLHSID, isRHSID);
 
     // Eliminate identity shuffles.
     if (isLHSID) return ReplaceInstUsesWith(SVI, LHS);
@@ -1070,6 +1111,13 @@ Instruction *InstCombiner::visitShuffleVectorInst(ShuffleVectorInst &SVI) {
       newRHS = UndefValue::get(newLHS->getType());
     return new ShuffleVectorInst(newLHS, newRHS, ConstantVector::get(Elts));
   }
+
+  // If the result mask is an identity, replace uses of this instruction with
+  // corresponding argument.
+  bool isLHSID, isRHSID;
+  RecognizeIdentityMask(newMask, isLHSID, isRHSID);
+  if (isLHSID && VWidth == LHSOp0Width) return ReplaceInstUsesWith(SVI, newLHS);
+  if (isRHSID && VWidth == RHSOp0Width) return ReplaceInstUsesWith(SVI, newRHS);
 
   return MadeChange ? &SVI : nullptr;
 }

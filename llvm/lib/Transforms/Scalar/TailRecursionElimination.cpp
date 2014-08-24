@@ -64,6 +64,7 @@
 #include "llvm/IR/CallSite.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
@@ -136,18 +137,20 @@ void TailCallElim::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<TargetTransformInfo>();
 }
 
-/// CanTRE - Scan the specified basic block for alloca instructions.
-/// If it contains any that are variable-sized or not in the entry block,
-/// returns false.
-static bool CanTRE(AllocaInst *AI) {
-  // Because of PR962, we don't TRE allocas outside the entry block.
+/// \brief Scan the specified function for alloca instructions.
+/// If it contains any dynamic allocas, returns false.
+static bool CanTRE(Function &F) {
+  // Because of PR962, we don't TRE dynamic allocas.
+  for (auto &BB : F) {
+    for (auto &I : BB) {
+      if (AllocaInst *AI = dyn_cast<AllocaInst>(&I)) {
+        if (!AI->isStaticAlloca())
+          return false;
+      }
+    }
+  }
 
-  // If this alloca is in the body of the function, or if it is a variable
-  // sized allocation, we cannot tail call eliminate calls marked 'tail'
-  // with this mechanism.
-  BasicBlock *BB = AI->getParent();
-  return BB == &BB->getParent()->getEntryBlock() &&
-         isa<ConstantInt>(AI->getArraySize());
+  return true;
 }
 
 bool TailCallElim::runOnFunction(Function &F) {
@@ -224,12 +227,10 @@ struct AllocaDerivedValueTracker {
   }
 
   void callUsesLocalStack(CallSite CS, bool IsNocapture) {
-    // Add it to the list of alloca users. If it's already there, skip further
-    // processing.
-    if (!AllocaUsers.insert(CS.getInstruction()))
-      return;
+    // Add it to the list of alloca users.
+    AllocaUsers.insert(CS.getInstruction());
 
-    // If it's nocapture then it can't capture the alloca.
+    // If it's nocapture then it can't capture this alloca.
     if (IsNocapture)
       return;
 
@@ -316,9 +317,9 @@ bool TailCallElim::markTails(Function &F, bool &AllCallsAreTailCalls) {
           break;
         }
         if (SafeToTail) {
-          F.getContext().emitOptimizationRemark(
-              "tailcallelim", F, CI->getDebugLoc(),
-              "found readnone tail call candidate");
+          emitOptimizationRemark(
+              F.getContext(), "tailcallelim", F, CI->getDebugLoc(),
+              "marked this readnone call a tail call candidate");
           CI->setTailCall();
           Modified = true;
           continue;
@@ -363,8 +364,9 @@ bool TailCallElim::markTails(Function &F, bool &AllCallsAreTailCalls) {
     if (Visited[CI->getParent()] != ESCAPED) {
       // If the escape point was part way through the block, calls after the
       // escape point wouldn't have been put into DeferredTails.
-      F.getContext().emitOptimizationRemark(
-          "tailcallelim", F, CI->getDebugLoc(), "found tail call candidate");
+      emitOptimizationRemark(F.getContext(), "tailcallelim", F,
+                             CI->getDebugLoc(),
+                             "marked this call a tail call candidate");
       CI->setTailCall();
       Modified = true;
     } else {
@@ -390,16 +392,7 @@ bool TailCallElim::runTRE(Function &F) {
   // marked with the 'tail' attribute, because doing so would cause the stack
   // size to increase (real TRE would deallocate variable sized allocas, TRE
   // doesn't).
-  bool CanTRETailMarkedCall = true;
-
-  // Find dynamic allocas.
-  for (Function::iterator BB = F.begin(), EE = F.end(); BB != EE; ++BB) {
-    for (BasicBlock::iterator I = BB->begin(), E = BB->end(); I != E; ++I) {
-      if (AllocaInst *AI = dyn_cast<AllocaInst>(I)) {
-        CanTRETailMarkedCall &= CanTRE(AI);
-      }
-    }
-  }
+  bool CanTRETailMarkedCall = CanTRE(F);
 
   // Change any tail recursive calls to loops.
   //
@@ -684,9 +677,8 @@ bool TailCallElim::EliminateRecursiveTailCall(CallInst *CI, ReturnInst *Ret,
   BasicBlock *BB = Ret->getParent();
   Function *F = BB->getParent();
 
-  F->getContext().emitOptimizationRemark(
-      "tailcallelim", *F, CI->getDebugLoc(),
-      "transforming tail recursion to loop");
+  emitOptimizationRemark(F->getContext(), "tailcallelim", *F, CI->getDebugLoc(),
+                         "transforming tail recursion to loop");
 
   // OK! We can transform this tail call.  If this is the first one found,
   // create the new entry block, allowing us to branch back to the old entry.

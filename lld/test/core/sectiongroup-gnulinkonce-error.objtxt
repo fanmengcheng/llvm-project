@@ -1,7 +1,7 @@
 # RUN: not lld -core %s 2>&1 | FileCheck %s
 
 #
-# Test that section groups/gnu linkonce sections are parsed and a merge error 
+# Test that section groups/gnu linkonce sections are parsed and a merge error
 # is displayed at the time of symbol resolution.
 #
 
@@ -10,27 +10,15 @@ defined-atoms:
   - name:            f1
     scope:           global
     type:            code
-    references:
-      - kind:            group-parent
-        target:          g1
   - name:            f2
     scope:           global
     type:            code
-    references:
-      - kind:            group-parent
-        target:          g1
   - name:            g1
     scope:           global
     type:            code
-    references:
-      - kind:            group-parent
-        target:          g1
   - name:            d1
     scope:           global
     type:            data
-    references:
-      - kind:            group-parent
-        target:          g1
   - name:            g1
     scope:           global
     type:            group-comdat
@@ -48,27 +36,15 @@ defined-atoms:
   - name:            f1
     scope:           global
     type:            code
-    references:
-      - kind:            group-parent
-        target:          g1
   - name:            f2
     scope:           global
     type:            code
-    references:
-      - kind:            group-parent
-        target:          g1
   - name:            g1
     scope:           global
     type:            code
-    references:
-      - kind:            group-parent
-        target:          g1
   - name:            d1
     scope:           global
     type:            data
-    references:
-      - kind:            group-parent
-        target:          g1
   - name:            g1
     scope:           global
     type:            gnu-linkonce

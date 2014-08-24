@@ -20,22 +20,33 @@
 using namespace llvm;
 
 cl::opt<MCTargetOptions::AsmInstrumentation> AsmInstrumentation(
-    "asm-instrumentation",
-    cl::desc("Instrumentation of inline assembly and "
-             "assembly source files"),
+    "asm-instrumentation", cl::desc("Instrumentation of inline assembly and "
+                                    "assembly source files"),
     cl::init(MCTargetOptions::AsmInstrumentationNone),
-    cl::values(clEnumValN(MCTargetOptions::AsmInstrumentationNone,
-                          "none",
+    cl::values(clEnumValN(MCTargetOptions::AsmInstrumentationNone, "none",
                           "no instrumentation at all"),
-               clEnumValN(MCTargetOptions::AsmInstrumentationAddress,
-                          "address",
+               clEnumValN(MCTargetOptions::AsmInstrumentationAddress, "address",
                           "instrument instructions with memory arguments"),
                clEnumValEnd));
+
+cl::opt<bool> RelaxAll("mc-relax-all",
+                       cl::desc("When used with filetype=obj, "
+                                "relax all fixups in the emitted object file"));
+
+cl::opt<int> DwarfVersion("dwarf-version", cl::desc("Dwarf version"),
+                          cl::init(0));
+
+cl::opt<bool> ShowMCInst("asm-show-inst",
+                         cl::desc("Emit internal instruction representation to "
+                                  "assembly file"));
 
 static inline MCTargetOptions InitMCTargetOptionsFromFlags() {
   MCTargetOptions Options;
   Options.SanitizeAddress =
       (AsmInstrumentation == MCTargetOptions::AsmInstrumentationAddress);
+  Options.MCRelaxAll = RelaxAll;
+  Options.DwarfVersion = DwarfVersion;
+  Options.ShowMCInst = ShowMCInst;
   return Options;
 }
 

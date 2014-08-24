@@ -247,9 +247,10 @@ void VZeroUpperInserter::processBasicBlock(MachineBasicBlock &MBB) {
 /// runOnMachineFunction - Loop over all of the basic blocks, inserting
 /// vzero upper instructions before function calls.
 bool VZeroUpperInserter::runOnMachineFunction(MachineFunction &MF) {
-  if (MF.getTarget().getSubtarget<X86Subtarget>().hasAVX512())
+  const X86Subtarget &ST = MF.getTarget().getSubtarget<X86Subtarget>();
+  if (!ST.hasAVX() || ST.hasAVX512())
     return false;
-  TII = MF.getTarget().getInstrInfo();
+  TII = MF.getSubtarget().getInstrInfo();
   MachineRegisterInfo &MRI = MF.getRegInfo();
   EverMadeChange = false;
 

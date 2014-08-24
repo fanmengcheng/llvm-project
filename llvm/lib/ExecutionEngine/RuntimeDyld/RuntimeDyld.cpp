@@ -14,6 +14,7 @@
 #include "llvm/ExecutionEngine/RuntimeDyld.h"
 #include "JITRegistrar.h"
 #include "ObjectImageCommon.h"
+#include "RuntimeDyldCheckerImpl.h"
 #include "RuntimeDyldELF.h"
 #include "RuntimeDyldImpl.h"
 #include "RuntimeDyldMachO.h"
@@ -73,9 +74,9 @@ void RuntimeDyldImpl::mapSectionAddress(const void *LocalAddress,
   llvm_unreachable("Attempting to remap address of unknown section!");
 }
 
-static error_code getOffset(const SymbolRef &Sym, uint64_t &Result) {
+static std::error_code getOffset(const SymbolRef &Sym, uint64_t &Result) {
   uint64_t Address;
-  if (error_code EC = Sym.getAddress(Address))
+  if (std::error_code EC = Sym.getAddress(Address))
     return EC;
 
   if (Address == UnknownAddressOrSize) {
@@ -85,7 +86,7 @@ static error_code getOffset(const SymbolRef &Sym, uint64_t &Result) {
 
   const ObjectFile *Obj = Sym.getObject();
   section_iterator SecI(Obj->section_begin());
-  if (error_code EC = Sym.getSection(SecI))
+  if (std::error_code EC = Sym.getSection(SecI))
     return EC;
 
  if (SecI == Obj->section_end()) {
@@ -94,7 +95,7 @@ static error_code getOffset(const SymbolRef &Sym, uint64_t &Result) {
  }
 
   uint64_t SectionAddress;
-  if (error_code EC = SecI->getAddress(SectionAddress))
+  if (std::error_code EC = SecI->getAddress(SectionAddress))
     return EC;
 
   Result = Address - SectionAddress;
@@ -144,12 +145,14 @@ ObjectImage *RuntimeDyldImpl::loadObject(ObjectImage *InputObject) {
     bool IsCommon = Flags & SymbolRef::SF_Common;
     if (IsCommon) {
       // Add the common symbols to a list.  We'll allocate them all below.
-      uint32_t Align;
-      Check(I->getAlignment(Align));
-      uint64_t Size = 0;
-      Check(I->getSize(Size));
-      CommonSize += Size + Align;
-      CommonSymbols[*I] = CommonSymbolInfo(Size, Align);
+      if (!GlobalSymbolTable.count(Name)) {
+        uint32_t Align;
+        Check(I->getAlignment(Align));
+        uint64_t Size = 0;
+        Check(I->getSize(Size));
+        CommonSize += Size + Align;
+        CommonSymbols[*I] = CommonSymbolInfo(Size, Align);
+      }
     } else {
       if (SymType == object::SymbolRef::ST_Function ||
           SymType == object::SymbolRef::ST_Data ||
@@ -177,7 +180,7 @@ ObjectImage *RuntimeDyldImpl::loadObject(ObjectImage *InputObject) {
 
   // Allocate common symbols
   if (CommonSize != 0)
-    emitCommonSymbols(*Obj, CommonSymbols, CommonSize, LocalSymbols);
+    emitCommonSymbols(*Obj, CommonSymbols, CommonSize, GlobalSymbolTable);
 
   // Parse and process relocations
   DEBUG(dbgs() << "Parse relocations:\n");
@@ -202,10 +205,15 @@ ObjectImage *RuntimeDyldImpl::loadObject(ObjectImage *InputObject) {
     for (; I != E;)
       I = processRelocationRef(SectionID, I, *Obj, LocalSections, LocalSymbols,
                                Stubs);
+
+    // If there is an attached checker, notify it about the stubs for this
+    // section so that they can be verified.
+    if (Checker)
+      Checker->registerStubMap(Obj->getImageName(), SectionID, Stubs);
   }
 
   // Give the subclasses a chance to tie-up any loose ends.
-  finalizeLoad(LocalSections);
+  finalizeLoad(*Obj, LocalSections);
 
   return Obj.release();
 }
@@ -515,9 +523,9 @@ void RuntimeDyldImpl::addRelocationForSymbol(const RelocationEntry &RE,
   }
 }
 
-uint8_t *RuntimeDyldImpl::createStubFunction(uint8_t *Addr) {
-  if (Arch == Triple::aarch64 || Arch == Triple::aarch64_be ||
-      Arch == Triple::arm64 || Arch == Triple::arm64_be) {
+uint8_t *RuntimeDyldImpl::createStubFunction(uint8_t *Addr,
+                                             unsigned AbiVariant) {
+  if (Arch == Triple::aarch64 || Arch == Triple::aarch64_be) {
     // This stub has to be able to access the full address space,
     // since symbol lookup won't necessarily find a handy, in-range,
     // PLT stub for functions which could be anywhere.
@@ -559,22 +567,31 @@ uint8_t *RuntimeDyldImpl::createStubFunction(uint8_t *Addr) {
     *StubAddr = NopInstr;
     return Addr;
   } else if (Arch == Triple::ppc64 || Arch == Triple::ppc64le) {
-    // PowerPC64 stub: the address points to a function descriptor
-    // instead of the function itself. Load the function address
-    // on r11 and sets it to control register. Also loads the function
-    // TOC in r2 and environment pointer to r11.
+    // Depending on which version of the ELF ABI is in use, we need to
+    // generate one of two variants of the stub.  They both start with
+    // the same sequence to load the target address into r12.
     writeInt32BE(Addr,    0x3D800000); // lis   r12, highest(addr)
     writeInt32BE(Addr+4,  0x618C0000); // ori   r12, higher(addr)
     writeInt32BE(Addr+8,  0x798C07C6); // sldi  r12, r12, 32
     writeInt32BE(Addr+12, 0x658C0000); // oris  r12, r12, h(addr)
     writeInt32BE(Addr+16, 0x618C0000); // ori   r12, r12, l(addr)
-    writeInt32BE(Addr+20, 0xF8410028); // std   r2,  40(r1)
-    writeInt32BE(Addr+24, 0xE96C0000); // ld    r11, 0(r12)
-    writeInt32BE(Addr+28, 0xE84C0008); // ld    r2,  0(r12)
-    writeInt32BE(Addr+32, 0x7D6903A6); // mtctr r11
-    writeInt32BE(Addr+36, 0xE96C0010); // ld    r11, 16(r2)
-    writeInt32BE(Addr+40, 0x4E800420); // bctr
-
+    if (AbiVariant == 2) {
+      // PowerPC64 stub ELFv2 ABI: The address points to the function itself.
+      // The address is already in r12 as required by the ABI.  Branch to it.
+      writeInt32BE(Addr+20, 0xF8410018); // std   r2,  24(r1)
+      writeInt32BE(Addr+24, 0x7D8903A6); // mtctr r12
+      writeInt32BE(Addr+28, 0x4E800420); // bctr
+    } else {
+      // PowerPC64 stub ELFv1 ABI: The address points to a function descriptor.
+      // Load the function address on r11 and sets it to control register. Also
+      // loads the function TOC in r2 and environment pointer to r11.
+      writeInt32BE(Addr+20, 0xF8410028); // std   r2,  40(r1)
+      writeInt32BE(Addr+24, 0xE96C0000); // ld    r11, 0(r12)
+      writeInt32BE(Addr+28, 0xE84C0008); // ld    r2,  0(r12)
+      writeInt32BE(Addr+32, 0x7D6903A6); // mtctr r11
+      writeInt32BE(Addr+36, 0xE96C0010); // ld    r11, 16(r2)
+      writeInt32BE(Addr+40, 0x4E800420); // bctr
+    }
     return Addr;
   } else if (Arch == Triple::systemz) {
     writeInt16BE(Addr,    0xC418);     // lgrl %r1,.+8
@@ -587,6 +604,8 @@ uint8_t *RuntimeDyldImpl::createStubFunction(uint8_t *Addr) {
     *Addr      = 0xFF; // jmp
     *(Addr+1)  = 0x25; // rip
     // 32-bit PC-relative address of the GOT entry will be stored at Addr+2
+  } else if (Arch == Triple::x86) {
+    *Addr      = 0xE9; // 32-bit pc-relative jump.
   }
   return Addr;
 }
@@ -681,21 +700,26 @@ RuntimeDyld::RuntimeDyld(RTDyldMemoryManager *mm) {
   Dyld = nullptr;
   MM = mm;
   ProcessAllSections = false;
+  Checker = nullptr;
 }
 
 RuntimeDyld::~RuntimeDyld() { delete Dyld; }
 
 static std::unique_ptr<RuntimeDyldELF>
-createRuntimeDyldELF(RTDyldMemoryManager *MM, bool ProcessAllSections) {
+createRuntimeDyldELF(RTDyldMemoryManager *MM, bool ProcessAllSections,
+                     RuntimeDyldCheckerImpl *Checker) {
   std::unique_ptr<RuntimeDyldELF> Dyld(new RuntimeDyldELF(MM));
   Dyld->setProcessAllSections(ProcessAllSections);
+  Dyld->setRuntimeDyldChecker(Checker);
   return Dyld;
 }
 
 static std::unique_ptr<RuntimeDyldMachO>
-createRuntimeDyldMachO(RTDyldMemoryManager *MM, bool ProcessAllSections) {
-  std::unique_ptr<RuntimeDyldMachO> Dyld(new RuntimeDyldMachO(MM));
+createRuntimeDyldMachO(Triple::ArchType Arch, RTDyldMemoryManager *MM,
+                       bool ProcessAllSections, RuntimeDyldCheckerImpl *Checker) {
+  std::unique_ptr<RuntimeDyldMachO> Dyld(RuntimeDyldMachO::create(Arch, MM));
   Dyld->setProcessAllSections(ProcessAllSections);
+  Dyld->setRuntimeDyldChecker(Checker);
   return Dyld;
 }
 
@@ -707,11 +731,13 @@ ObjectImage *RuntimeDyld::loadObject(std::unique_ptr<ObjectFile> InputObject) {
   if (InputObject->isELF()) {
     InputImage.reset(RuntimeDyldELF::createObjectImageFromFile(std::move(InputObject)));
     if (!Dyld)
-      Dyld = createRuntimeDyldELF(MM, ProcessAllSections).release();
+      Dyld = createRuntimeDyldELF(MM, ProcessAllSections, Checker).release();
   } else if (InputObject->isMachO()) {
     InputImage.reset(RuntimeDyldMachO::createObjectImageFromFile(std::move(InputObject)));
     if (!Dyld)
-      Dyld = createRuntimeDyldMachO(MM, ProcessAllSections).release();
+      Dyld = createRuntimeDyldMachO(
+                           static_cast<Triple::ArchType>(InputImage->getArch()),
+                           MM, ProcessAllSections, Checker).release();
   } else
     report_fatal_error("Incompatible object format!");
 
@@ -733,7 +759,7 @@ ObjectImage *RuntimeDyld::loadObject(ObjectBuffer *InputBuffer) {
   case sys::fs::file_magic::elf_core:
     InputImage.reset(RuntimeDyldELF::createObjectImage(InputBuffer));
     if (!Dyld)
-      Dyld = createRuntimeDyldELF(MM, ProcessAllSections).release();
+      Dyld = createRuntimeDyldELF(MM, ProcessAllSections, Checker).release();
     break;
   case sys::fs::file_magic::macho_object:
   case sys::fs::file_magic::macho_executable:
@@ -747,7 +773,9 @@ ObjectImage *RuntimeDyld::loadObject(ObjectBuffer *InputBuffer) {
   case sys::fs::file_magic::macho_dsym_companion:
     InputImage.reset(RuntimeDyldMachO::createObjectImage(InputBuffer));
     if (!Dyld)
-      Dyld = createRuntimeDyldMachO(MM, ProcessAllSections).release();
+      Dyld = createRuntimeDyldMachO(
+                           static_cast<Triple::ArchType>(InputImage->getArch()),
+                           MM, ProcessAllSections, Checker).release();
     break;
   case sys::fs::file_magic::unknown:
   case sys::fs::file_magic::bitcode:

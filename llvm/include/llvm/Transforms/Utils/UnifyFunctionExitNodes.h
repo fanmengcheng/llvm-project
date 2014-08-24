@@ -15,8 +15,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_TRANSFORMS_UNIFYFUNCTIONEXITNODES_H
-#define LLVM_TRANSFORMS_UNIFYFUNCTIONEXITNODES_H
+#ifndef LLVM_TRANSFORMS_UTILS_UNIFYFUNCTIONEXITNODES_H
+#define LLVM_TRANSFORMS_UTILS_UNIFYFUNCTIONEXITNODES_H
 
 #include "llvm/Pass.h"
 
@@ -24,6 +24,7 @@ namespace llvm {
 
 struct UnifyFunctionExitNodes : public FunctionPass {
   BasicBlock *ReturnBlock, *UnwindBlock, *UnreachableBlock;
+
 public:
   static char ID; // Pass identification, replacement for typeid
   UnifyFunctionExitNodes() : FunctionPass(ID),

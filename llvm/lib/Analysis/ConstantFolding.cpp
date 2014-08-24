@@ -21,6 +21,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/Config/config.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -31,11 +32,15 @@
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/FEnv.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Target/TargetLibraryInfo.h"
 #include <cerrno>
 #include <cmath>
+
+#ifdef HAVE_FENV_H
+#include <fenv.h>
+#endif
+
 using namespace llvm;
 
 //===----------------------------------------------------------------------===//
@@ -235,7 +240,8 @@ static bool IsConstantOffsetFromGlobal(Constant *C, GlobalValue *&GV,
 
   // Look through ptr->int and ptr->ptr casts.
   if (CE->getOpcode() == Instruction::PtrToInt ||
-      CE->getOpcode() == Instruction::BitCast)
+      CE->getOpcode() == Instruction::BitCast ||
+      CE->getOpcode() == Instruction::AddrSpaceCast)
     return IsConstantOffsetFromGlobal(CE->getOperand(0), GV, Offset, TD);
 
   // i32* getelementptr ([5 x i32]* @a, i32 0, i32 5)
@@ -466,6 +472,52 @@ static Constant *FoldReinterpretLoadFromConstPtr(Constant *C,
   return ConstantInt::get(IntType->getContext(), ResultVal);
 }
 
+static Constant *ConstantFoldLoadThroughBitcast(ConstantExpr *CE,
+                                                const DataLayout *DL) {
+  if (!DL)
+    return nullptr;
+  auto *DestPtrTy = dyn_cast<PointerType>(CE->getType());
+  if (!DestPtrTy)
+    return nullptr;
+  Type *DestTy = DestPtrTy->getElementType();
+
+  Constant *C = ConstantFoldLoadFromConstPtr(CE->getOperand(0), DL);
+  if (!C)
+    return nullptr;
+
+  do {
+    Type *SrcTy = C->getType();
+
+    // If the type sizes are the same and a cast is legal, just directly
+    // cast the constant.
+    if (DL->getTypeSizeInBits(DestTy) == DL->getTypeSizeInBits(SrcTy)) {
+      Instruction::CastOps Cast = Instruction::BitCast;
+      // If we are going from a pointer to int or vice versa, we spell the cast
+      // differently.
+      if (SrcTy->isIntegerTy() && DestTy->isPointerTy())
+        Cast = Instruction::IntToPtr;
+      else if (SrcTy->isPointerTy() && DestTy->isIntegerTy())
+        Cast = Instruction::PtrToInt;
+
+      if (CastInst::castIsValid(Cast, C, DestTy))
+        return ConstantExpr::getCast(Cast, C, DestTy);
+    }
+
+    // If this isn't an aggregate type, there is nothing we can do to drill down
+    // and find a bitcastable constant.
+    if (!SrcTy->isAggregateType())
+      return nullptr;
+
+    // We're simulating a load through a pointer that was bitcast to point to
+    // a different type, so we can try to walk down through the initial
+    // elements of an aggregate to see if some part of th e aggregate is
+    // castable to implement the "load" semantic model.
+    C = C->getAggregateElement(0u);
+  } while (C);
+
+  return nullptr;
+}
+
 /// ConstantFoldLoadFromConstPtr - Return the value that a load from C would
 /// produce if it is constant and determinable.  If this is not determinable,
 /// return null.
@@ -490,6 +542,10 @@ Constant *llvm::ConstantFoldLoadFromConstPtr(Constant *C,
       }
     }
   }
+
+  if (CE->getOpcode() == Instruction::BitCast)
+    if (Constant *LoadedC = ConstantFoldLoadThroughBitcast(CE, TD))
+      return LoadedC;
 
   // Instead of loading constant c string, use corresponding integer value
   // directly if string length is small enough.
@@ -571,8 +627,8 @@ static Constant *SymbolicallyEvaluateBinop(unsigned Opc, Constant *Op0,
     unsigned BitWidth = DL->getTypeSizeInBits(Op0->getType()->getScalarType());
     APInt KnownZero0(BitWidth, 0), KnownOne0(BitWidth, 0);
     APInt KnownZero1(BitWidth, 0), KnownOne1(BitWidth, 0);
-    ComputeMaskedBits(Op0, KnownZero0, KnownOne0, DL);
-    ComputeMaskedBits(Op1, KnownZero1, KnownOne1, DL);
+    computeKnownBits(Op0, KnownZero0, KnownOne0, DL);
+    computeKnownBits(Op1, KnownZero1, KnownOne1, DL);
     if ((KnownOne1 | KnownZero0).isAllOnesValue()) {
       // All the bits of Op0 that the 'and' could be masking are already zero.
       return Op0;
@@ -656,7 +712,7 @@ static Constant *CastGEPIndices(ArrayRef<Constant *> Ops,
 static Constant* StripPtrCastKeepAS(Constant* Ptr) {
   assert(Ptr->getType()->isPointerTy() && "Not a pointer type");
   PointerType *OldPtrTy = cast<PointerType>(Ptr->getType());
-  Ptr = cast<Constant>(Ptr->stripPointerCasts());
+  Ptr = Ptr->stripPointerCasts();
   PointerType *NewPtrTy = cast<PointerType>(Ptr->getType());
 
   // Preserve the address space number of the pointer.
@@ -911,7 +967,7 @@ Constant *llvm::ConstantFoldInstruction(Instruction *I,
 static Constant *
 ConstantFoldConstantExpressionImpl(const ConstantExpr *CE, const DataLayout *TD,
                                    const TargetLibraryInfo *TLI,
-                                   SmallPtrSet<ConstantExpr *, 4> &FoldedOps) {
+                                   SmallPtrSetImpl<ConstantExpr *> &FoldedOps) {
   SmallVector<Constant *, 8> Ops;
   for (User::const_op_iterator i = CE->op_begin(), e = CE->op_end(); i != e;
        ++i) {
@@ -1264,12 +1320,34 @@ static Constant *GetConstantFoldFPValue(double V, Type *Ty) {
 
 }
 
+namespace {
+/// llvm_fenv_clearexcept - Clear the floating-point exception state.
+static inline void llvm_fenv_clearexcept() {
+#if defined(HAVE_FENV_H) && HAVE_DECL_FE_ALL_EXCEPT
+  feclearexcept(FE_ALL_EXCEPT);
+#endif
+  errno = 0;
+}
+
+/// llvm_fenv_testexcept - Test if a floating-point exception was raised.
+static inline bool llvm_fenv_testexcept() {
+  int errno_val = errno;
+  if (errno_val == ERANGE || errno_val == EDOM)
+    return true;
+#if defined(HAVE_FENV_H) && HAVE_DECL_FE_ALL_EXCEPT && HAVE_DECL_FE_INEXACT
+  if (fetestexcept(FE_ALL_EXCEPT & ~FE_INEXACT))
+    return true;
+#endif
+  return false;
+}
+} // End namespace
+
 static Constant *ConstantFoldFP(double (*NativeFP)(double), double V,
                                 Type *Ty) {
-  sys::llvm_fenv_clearexcept();
+  llvm_fenv_clearexcept();
   V = NativeFP(V);
-  if (sys::llvm_fenv_testexcept()) {
-    sys::llvm_fenv_clearexcept();
+  if (llvm_fenv_testexcept()) {
+    llvm_fenv_clearexcept();
     return nullptr;
   }
 
@@ -1278,10 +1356,10 @@ static Constant *ConstantFoldFP(double (*NativeFP)(double), double V,
 
 static Constant *ConstantFoldBinaryFP(double (*NativeFP)(double, double),
                                       double V, double W, Type *Ty) {
-  sys::llvm_fenv_clearexcept();
+  llvm_fenv_clearexcept();
   V = NativeFP(V, W);
-  if (sys::llvm_fenv_testexcept()) {
-    sys::llvm_fenv_clearexcept();
+  if (llvm_fenv_testexcept()) {
+    llvm_fenv_clearexcept();
     return nullptr;
   }
 

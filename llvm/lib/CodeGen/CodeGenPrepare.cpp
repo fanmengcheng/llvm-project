@@ -151,19 +151,8 @@ typedef DenseMap<Instruction *, Type *> InstrToOrigTy;
 }
 
 char CodeGenPrepare::ID = 0;
-static void *initializeCodeGenPreparePassOnce(PassRegistry &Registry) {
-  initializeTargetLibraryInfoPass(Registry);
-  PassInfo *PI = new PassInfo(
-      "Optimize for code generation", "codegenprepare", &CodeGenPrepare::ID,
-      PassInfo::NormalCtor_t(callDefaultCtor<CodeGenPrepare>), false, false,
-      PassInfo::TargetMachineCtor_t(callTargetMachineCtor<CodeGenPrepare>));
-  Registry.registerPass(*PI, true);
-  return PI;
-}
-
-void llvm::initializeCodeGenPreparePass(PassRegistry &Registry) {
-  CALL_ONCE_INITIALIZATION(initializeCodeGenPreparePassOnce)
-}
+INITIALIZE_TM_PASS(CodeGenPrepare, "codegenprepare",
+                   "Optimize for code generation", false, false)
 
 FunctionPass *llvm::createCodeGenPreparePass(const TargetMachine *TM) {
   return new CodeGenPrepare(TM);
@@ -179,7 +168,8 @@ bool CodeGenPrepare::runOnFunction(Function &F) {
   PromotedInsts.clear();
 
   ModifiedDT = false;
-  if (TM) TLI = TM->getTargetLowering();
+  if (TM)
+    TLI = TM->getSubtargetImpl()->getTargetLowering();
   TLInfo = &getAnalysis<TargetLibraryInfo>();
   DominatorTreeWrapperPass *DTWP =
       getAnalysisIfAvailable<DominatorTreeWrapperPass>();
@@ -673,10 +663,13 @@ SinkShiftAndTruncate(BinaryOperator *ShiftI, Instruction *User, ConstantInt *CI,
     if (!ISDOpcode)
       continue;
 
-    // If the use is actually a legal node, there will not be an implicit
-    // truncate.
+    // If the use is actually a legal node, there will not be an
+    // implicit truncate.
+    // FIXME: always querying the result type is just an
+    // approximation; some nodes' legality is determined by the
+    // operand or other means. There's no good way to find out though.
     if (TLI.isOperationLegalOrCustom(ISDOpcode,
-                                     EVT::getEVT(TruncUser->getType())))
+                                     EVT::getEVT(TruncUser->getType(), true)))
       continue;
 
     // Don't bother for PHI nodes.
@@ -1078,8 +1071,11 @@ void ExtAddrMode::print(raw_ostream &OS) const {
     NeedPlus = true;
   }
 
-  if (BaseOffs)
-    OS << (NeedPlus ? " + " : "") << BaseOffs, NeedPlus = true;
+  if (BaseOffs) {
+    OS << (NeedPlus ? " + " : "")
+       << BaseOffs;
+    NeedPlus = true;
+  }
 
   if (BaseReg) {
     OS << (NeedPlus ? " + " : "")
@@ -1640,6 +1636,7 @@ bool AddressingModeMatcher::MatchScaledValue(Value *ScaleReg, int64_t Scale,
 static bool MightBeFoldableInst(Instruction *I) {
   switch (I->getOpcode()) {
   case Instruction::BitCast:
+  case Instruction::AddrSpaceCast:
     // Don't touch identity bitcasts.
     if (I->getType() == I->getOperand(0)->getType())
       return false;
@@ -1994,6 +1991,7 @@ bool AddressingModeMatcher::MatchOperationAddr(User *AddrInst, unsigned Opcode,
       return MatchAddr(AddrInst->getOperand(0), Depth);
     return false;
   case Instruction::BitCast:
+  case Instruction::AddrSpaceCast:
     // BitCast is always a noop, and we can handle it as long as it is
     // int->int or pointer->pointer (we don't want int<->fp or something).
     if ((AddrInst->getOperand(0)->getType()->isPointerTy() ||
@@ -2042,7 +2040,8 @@ bool AddressingModeMatcher::MatchOperationAddr(User *AddrInst, unsigned Opcode,
   case Instruction::Shl: {
     // Can only handle X*C and X << C.
     ConstantInt *RHS = dyn_cast<ConstantInt>(AddrInst->getOperand(1));
-    if (!RHS) return false;
+    if (!RHS)
+      return false;
     int64_t Scale = RHS->getSExtValue();
     if (Opcode == Instruction::Shl)
       Scale = 1LL << Scale;
@@ -2136,8 +2135,11 @@ bool AddressingModeMatcher::MatchOperationAddr(User *AddrInst, unsigned Opcode,
     return true;
   }
   case Instruction::SExt: {
+    Instruction *SExt = dyn_cast<Instruction>(AddrInst);
+    if (!SExt)
+      return false;
+
     // Try to move this sext out of the way of the addressing mode.
-    Instruction *SExt = cast<Instruction>(AddrInst);
     // Ask for a method for doing so.
     TypePromotionHelper::Action TPH = TypePromotionHelper::getAction(
         SExt, InsertedTruncs, TLI, PromotedInsts);
@@ -2295,7 +2297,7 @@ static bool IsOperandAMemoryOperand(CallInst *CI, InlineAsm *IA, Value *OpVal,
 /// Add the ultimately found memory instructions to MemoryUses.
 static bool FindAllMemoryUses(Instruction *I,
                 SmallVectorImpl<std::pair<Instruction*,unsigned> > &MemoryUses,
-                              SmallPtrSet<Instruction*, 16> &ConsideredInsts,
+                              SmallPtrSetImpl<Instruction*> &ConsideredInsts,
                               const TargetLowering &TLI) {
   // If we already considered this instruction, we're done.
   if (!ConsideredInsts.insert(I))
@@ -2599,7 +2601,7 @@ bool CodeGenPrepare::OptimizeMemoryInst(Instruction *MemoryInst, Value *Addr,
   Value *&SunkAddr = SunkAddrs[Addr];
   if (SunkAddr) {
     DEBUG(dbgs() << "CGP: Reusing nonlocal addrmode: " << AddrMode << " for "
-                 << *MemoryInst);
+                 << *MemoryInst << "\n");
     if (SunkAddr->getType() != Addr->getType())
       SunkAddr = Builder.CreateBitCast(SunkAddr, Addr->getType());
   } else if (AddrSinkUsingGEPs || (!AddrSinkUsingGEPs.getNumOccurrences() &&
@@ -2607,7 +2609,7 @@ bool CodeGenPrepare::OptimizeMemoryInst(Instruction *MemoryInst, Value *Addr,
     // By default, we use the GEP-based method when AA is used later. This
     // prevents new inttoptr/ptrtoint pairs from degrading AA capabilities.
     DEBUG(dbgs() << "CGP: SINKING nonlocal addrmode: " << AddrMode << " for "
-                 << *MemoryInst);
+                 << *MemoryInst << "\n");
     Type *IntPtrTy = TLI->getDataLayout()->getIntPtrType(Addr->getType());
     Value *ResultPtr = nullptr, *ResultIndex = nullptr;
 
@@ -2725,7 +2727,7 @@ bool CodeGenPrepare::OptimizeMemoryInst(Instruction *MemoryInst, Value *Addr,
     }
   } else {
     DEBUG(dbgs() << "CGP: SINKING nonlocal addrmode: " << AddrMode << " for "
-                 << *MemoryInst);
+                 << *MemoryInst << "\n");
     Type *IntPtrTy = TLI->getDataLayout()->getIntPtrType(Addr->getType());
     Value *Result = nullptr;
 
@@ -2759,7 +2761,7 @@ bool CodeGenPrepare::OptimizeMemoryInst(Instruction *MemoryInst, Value *Addr,
         // the original IR value was tossed in favor of a constant back when
         // the AddrMode was created we need to bail out gracefully if widths
         // do not match instead of extending it.
-        Instruction *I = dyn_cast<Instruction>(Result);
+        Instruction *I = dyn_cast_or_null<Instruction>(Result);
         if (I && (Result != AddrMode.BaseReg))
           I->eraseFromParent();
         return false;

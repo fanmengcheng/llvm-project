@@ -296,7 +296,7 @@ class RegisterContextPOSIX_x86
 public:
     RegisterContextPOSIX_x86 (lldb_private::Thread &thread,
                             uint32_t concrete_frame_idx,
-                            RegisterInfoInterface *register_info);
+                            lldb_private::RegisterInfoInterface *register_info);
 
     ~RegisterContextPOSIX_x86();
 
@@ -331,7 +331,7 @@ public:
     GetRegisterName(unsigned reg);
 
     uint32_t
-    ConvertRegisterKindToRegisterNumber(uint32_t kind, uint32_t num);
+    ConvertRegisterKindToRegisterNumber(lldb::RegisterKind kind, uint32_t num);
 
     //---------------------------------------------------------------------------
     // Note: prefer kernel definitions over user-land
@@ -428,7 +428,7 @@ protected:
     FPR      m_fpr;                                            // floating-point registers including extended register sets.
     IOVEC    m_iovec;                                          // wrapper for xsave.
     YMM      m_ymm_set;                                        // copy of ymmh and xmm register halves.
-    std::unique_ptr<RegisterInfoInterface> m_register_info_ap; // Register Info Interface (FreeBSD or Linux)
+    std::unique_ptr<lldb_private::RegisterInfoInterface> m_register_info_ap; // Register Info Interface (FreeBSD or Linux)
 
     // Determines if an extended register set is supported on the processor running the inferior process.
     virtual bool

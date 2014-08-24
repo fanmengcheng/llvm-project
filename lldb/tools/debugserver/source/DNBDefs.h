@@ -23,7 +23,7 @@
 //----------------------------------------------------------------------
 // Define nub_addr_t and the invalid address value from the architecture
 //----------------------------------------------------------------------
-#if defined (__x86_64__) || defined (__ppc64__) || defined (__arm64__)
+#if defined (__x86_64__) || defined (__ppc64__) || defined (__arm64__) || defined (__aarch64__)
 
 //----------------------------------------------------------------------
 // 64 bit address architectures
@@ -355,6 +355,8 @@ enum DNBProfileDataScanType
     eProfileMemory              = (1 << 6), // By default, excludes eProfileMemoryDirtyPage.
     eProfileMemoryDirtyPage     = (1 << 7), // Assume eProfileMemory, get Dirty Page size as well.
     eProfileMemoryAnonymous     = (1 << 8), // Assume eProfileMemory, get Anonymous memory as well.
+    
+    eProfileEnergy              = (1 << 9),
     
     eProfileAll                 = 0xffffffff
 };

@@ -21,19 +21,16 @@
 
 namespace llvm {
 
-class BasicBlock;
-class DebugLoc;
-class DiagnosticInfo;
-class Function;
-class Instruction;
 class LLVMContextImpl;
-class Module;
-class Pass;
-struct PassRunListener;
-template <typename T> class SmallVectorImpl;
-class SMDiagnostic;
 class StringRef;
 class Twine;
+class Instruction;
+class Module;
+class SMDiagnostic;
+class DiagnosticInfo;
+template <typename T> class SmallVectorImpl;
+class Function;
+class DebugLoc;
 
 /// This is an important class for using LLVM in a threaded context.  It
 /// (opaquely) owns and manages the core "global" data of LLVM's core
@@ -55,7 +52,9 @@ public:
     MD_fpmath = 3,  // "fpmath"
     MD_range = 4, // "range"
     MD_tbaa_struct = 5, // "tbaa.struct"
-    MD_invariant_load = 6 // "invariant.load"
+    MD_invariant_load = 6, // "invariant.load"
+    MD_alias_scope = 7, // "alias.scope"
+    MD_noalias = 8 // "noalias"
   };
 
   /// getMDKindID - Return a unique non-zero ID for the specified metadata kind.
@@ -74,6 +73,10 @@ public:
   /// \see LLVMContext::setDiagnosticHandler.
   /// \see LLVMContext::diagnose.
   typedef void (*DiagnosticHandlerTy)(const DiagnosticInfo &DI, void *Context);
+
+  /// Defines the type of a yield callback.
+  /// \see LLVMContext::setYieldCallback.
+  typedef void (*YieldCallbackTy)(LLVMContext *Context, void *OpaqueHandle);
 
   /// setInlineAsmDiagnosticHandler - This method sets a handler that is invoked
   /// when problems with inline asm are detected by the backend.  The first
@@ -111,15 +114,43 @@ public:
   /// setDiagnosticContext.
   void *getDiagnosticContext() const;
 
-  /// diagnose - Report a message to the currently installed diagnostic handler.
+  /// \brief Report a message to the currently installed diagnostic handler.
+  ///
   /// This function returns, in particular in the case of error reporting
-  /// (DI.Severity == RS_Error), so the caller should leave the compilation
+  /// (DI.Severity == \a DS_Error), so the caller should leave the compilation
   /// process in a self-consistent state, even though the generated code
   /// need not be correct.
-  /// The diagnostic message will be implicitly prefixed with a severity
-  /// keyword according to \p DI.getSeverity(), i.e., "error: "
-  /// for RS_Error, "warning: " for RS_Warning, and "note: " for RS_Note.
+  ///
+  /// The diagnostic message will be implicitly prefixed with a severity keyword
+  /// according to \p DI.getSeverity(), i.e., "error: " for \a DS_Error,
+  /// "warning: " for \a DS_Warning, and "note: " for \a DS_Note.
   void diagnose(const DiagnosticInfo &DI);
+
+  /// \brief Registers a yield callback with the given context.
+  ///
+  /// The yield callback function may be called by LLVM to transfer control back
+  /// to the client that invoked the LLVM compilation. This can be used to yield
+  /// control of the thread, or perform periodic work needed by the client.
+  /// There is no guaranteed frequency at which callbacks must occur; in fact,
+  /// the client is not guaranteed to ever receive this callback. It is at the
+  /// sole discretion of LLVM to do so and only if it can guarantee that
+  /// suspending the thread won't block any forward progress in other LLVM
+  /// contexts in the same process.
+  ///
+  /// At a suspend point, the state of the current LLVM context is intentionally
+  /// undefined. No assumptions about it can or should be made. Only LLVM
+  /// context API calls that explicitly state that they can be used during a
+  /// yield callback are allowed to be used. Any other API calls into the
+  /// context are not supported until the yield callback function returns
+  /// control to LLVM. Other LLVM contexts are unaffected by this restriction.
+  void setYieldCallback(YieldCallbackTy Callback, void *OpaqueHandle);
+
+  /// \brief Calls the yield callback (if applicable).
+  ///
+  /// This transfers control of the current thread back to the client, which may
+  /// suspend the current thread. Only call this method when LLVM doesn't hold
+  /// any global mutex or cannot block the execution in another LLVM context.
+  void yield();
 
   /// emitError - Emit an error message to the currently installed error handler
   /// with optional location information.  This function returns, so code should
@@ -130,25 +161,6 @@ public:
   void emitError(const Instruction *I, const Twine &ErrorStr);
   void emitError(const Twine &ErrorStr);
 
-  /// emitOptimizationRemark - Emit an optimization remark message. \p PassName
-  /// is the name of the pass emitting the message. If -Rpass= is given
-  /// and \p PassName matches the regular expression in -Rpass, then the
-  /// remark will be emitted. \p Fn is the function triggering the remark,
-  /// \p DLoc is the debug location where the diagnostic is generated.
-  /// \p Msg is the message string to use.
-  void emitOptimizationRemark(const char *PassName, const Function &Fn,
-                              const DebugLoc &DLoc, const Twine &Msg);
-
-  /// \brief Notify that we finished running a pass.
-  void notifyPassRun(Pass *P, Module *M, Function *F = nullptr,
-                     BasicBlock *BB = nullptr);
-  /// \brief Register the given PassRunListener to receive notifyPassRun()
-  /// callbacks whenever a pass ran. The context will take ownership of the
-  /// listener and free it when the context is destroyed.
-  void addRunListener(PassRunListener *L);
-  /// \brief Unregister a PassRunListener so that it no longer receives
-  /// notifyPassRun() callbacks. Remove and free the listener from the context.
-  void removeRunListener(PassRunListener *L);
 private:
   LLVMContext(LLVMContext&) LLVM_DELETED_FUNCTION;
   void operator=(LLVMContext&) LLVM_DELETED_FUNCTION;
