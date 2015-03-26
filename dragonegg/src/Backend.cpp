@@ -675,13 +675,13 @@ static void InitializeBackend(void) {
 /// InitializeOutputStreams - Initialize the assembly code output streams.
 static void InitializeOutputStreams(bool Binary) {
   assert(!OutStream && "Output stream already initialized!");
-  std::string Error;
+  std::error_code EC;
 
-  OutStream = new raw_fd_ostream(llvm_asm_file_name, Error,
+  OutStream = new raw_fd_ostream(llvm_asm_file_name, EC,
                                  Binary ? sys::fs::F_None : sys::fs::F_Text);
 
-  if (!Error.empty())
-    report_fatal_error(Error);
+  if (EC)
+    report_fatal_error(EC.message());
 
   FormattedOutStream.setStream(*OutStream,
                                formatted_raw_ostream::PRESERVE_STREAM);
@@ -694,7 +694,7 @@ static void createPerFunctionOptimizationPasses() {
   // Create and set up the per-function pass manager.
   // FIXME: Move the code generator to be function-at-a-time.
   PerFunctionPasses = new FunctionPassManager(TheModule);
-  PerFunctionPasses->add(new DataLayoutPass(TheModule));
+  PerFunctionPasses->add(new DataLayoutPass());
   TheTarget->addAnalysisPasses(*PerFunctionPasses);
 
 #ifndef NDEBUG
@@ -740,7 +740,7 @@ static void createPerModuleOptimizationPasses() {
     return;
 
   PerModulePasses = new PassManager();
-  PerModulePasses->add(new DataLayoutPass(TheModule));
+  PerModulePasses->add(new DataLayoutPass());
   TheTarget->addAnalysisPasses(*PerModulePasses);
 
   Pass *InliningPass;
@@ -784,8 +784,7 @@ static void createPerModuleOptimizationPasses() {
     // this for fast -O0 compiles!
     if (PerModulePasses || 1) {
       PassManager *PM = CodeGenPasses = new PassManager();
-      PM->add(
-          new DataLayoutPass(*TheTarget->getSubtargetImpl()->getDataLayout()));
+      PM->add(new DataLayoutPass());
       TheTarget->addAnalysisPasses(*PM);
 
 // Request that addPassesToEmitFile run the Verifier after running
@@ -1743,8 +1742,7 @@ static struct rtl_opt_pass pass_rtl_emit_function = { {
   PROP_ssa | PROP_gimple_leh | PROP_cfg, /* properties_required */
   0,                                     /* properties_provided */
   PROP_ssa | PROP_trees,                 /* properties_destroyed */
-  TODO_verify_ssa | TODO_verify_flow | TODO_verify_stmts, /* todo_flags_start */
-  TODO_ggc_collect /* todo_flags_finish */
+  TODO_verify_ssa | TODO_verify_flow | TODO_verify_stmts
 } };
 
 /// emit_file_scope_asms - Output any file-scope assembly.
