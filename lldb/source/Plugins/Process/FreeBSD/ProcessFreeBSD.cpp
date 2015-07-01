@@ -11,6 +11,8 @@
 #include <errno.h>
 
 // C++ Includes
+#include <mutex>
+
 // Other libraries and framework includes
 #include "lldb/Core/PluginManager.h"
 #include "lldb/Core/State.h"
@@ -22,11 +24,22 @@
 #include "ProcessFreeBSD.h"
 #include "ProcessPOSIXLog.h"
 #include "Plugins/Process/Utility/InferiorCallPOSIX.h"
+#include "Plugins/Process/Utility/FreeBSDSignals.h"
 #include "ProcessMonitor.h"
 #include "FreeBSDThread.h"
 
 using namespace lldb;
 using namespace lldb_private;
+
+namespace
+{
+    UnixSignalsSP&
+    GetFreeBSDSignals ()
+    {
+        static UnixSignalsSP s_freebsd_signals_sp (new FreeBSDSignals ());
+        return s_freebsd_signals_sp;
+    }
+}
 
 //------------------------------------------------------------------------------
 // Static functions.
@@ -45,23 +58,14 @@ ProcessFreeBSD::CreateInstance(Target& target,
 void
 ProcessFreeBSD::Initialize()
 {
-    static bool g_initialized = false;
+    static std::once_flag g_once_flag;
 
-    if (!g_initialized)
-    {
+    std::call_once(g_once_flag, []() {
         PluginManager::RegisterPlugin(GetPluginNameStatic(),
                                       GetPluginDescriptionStatic(),
                                       CreateInstance);
-        Log::Callbacks log_callbacks = {
-            ProcessPOSIXLog::DisableLog,
-            ProcessPOSIXLog::EnableLog,
-            ProcessPOSIXLog::ListLogCategories
-        };
-
-        Log::RegisterLogChannel (ProcessFreeBSD::GetPluginNameStatic(), log_callbacks);
-        ProcessPOSIXLog::RegisterPluginName(GetPluginNameStatic());
-        g_initialized = true;
-    }
+        ProcessPOSIXLog::Initialize(GetPluginNameStatic());
+    });
 }
 
 lldb_private::ConstString
@@ -113,7 +117,7 @@ ProcessFreeBSD::EnablePluginLogging(Stream *strm, Args &command)
 // Constructors and destructors.
 
 ProcessFreeBSD::ProcessFreeBSD(Target& target, Listener &listener)
-    : ProcessPOSIX(target, listener),
+    : ProcessPOSIX(target, listener, GetFreeBSDSignals ()),
       m_resume_signo(0)
 {
 }
@@ -247,8 +251,7 @@ ProcessFreeBSD::SendMessage(const ProcessMessage &message)
 
     case ProcessMessage::eLimboMessage:
     case ProcessMessage::eExitMessage:
-        m_exit_status = message.GetExitStatus();
-        SetExitStatus(m_exit_status, NULL);
+        SetExitStatus(message.GetExitStatus(), NULL);
         break;
 
     case ProcessMessage::eSignalMessage:
@@ -271,4 +274,3 @@ ProcessFreeBSD::SendMessage(const ProcessMessage &message)
 
     m_message_queue.push(message);
 }
-

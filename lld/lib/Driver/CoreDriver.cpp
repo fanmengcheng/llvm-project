@@ -7,11 +7,9 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "lld/Core/Reader.h"
 #include "lld/Driver/Driver.h"
-#include "lld/Driver/CoreInputGraph.h"
 #include "lld/ReaderWriter/CoreLinkingContext.h"
-#include "lld/ReaderWriter/Reader.h"
-
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Triple.h"
@@ -23,8 +21,8 @@
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/PrettyStackTrace.h"
-#include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/Signals.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace lld;
 
@@ -75,38 +73,34 @@ static const Registry::KindStrings coreKindStrings[] = {
   LLD_KIND_STRING_END
 };
 
-bool CoreDriver::link(int argc, const char *argv[], raw_ostream &diagnostics) {
+bool CoreDriver::link(llvm::ArrayRef<const char *> args,
+                      raw_ostream &diagnostics) {
   CoreLinkingContext ctx;
-  if (!parse(argc, argv, ctx))
-    return false;
 
   // Register possible input file parsers.
-  ctx.registry().addSupportNativeObjects();
   ctx.registry().addSupportYamlFiles();
-
   ctx.registry().addKindTable(Reference::KindNamespace::testing,
                               Reference::KindArch::all, coreKindStrings);
 
+  if (!parse(args, ctx))
+    return false;
   return Driver::link(ctx);
 }
 
-bool CoreDriver::parse(int argc, const char *argv[], CoreLinkingContext &ctx,
-                       raw_ostream &diagnostics) {
+bool CoreDriver::parse(llvm::ArrayRef<const char *> args,
+                       CoreLinkingContext &ctx, raw_ostream &diagnostics) {
   // Parse command line options using CoreOptions.td
-  std::unique_ptr<llvm::opt::InputArgList> parsedArgs;
   CoreOptTable table;
   unsigned missingIndex;
   unsigned missingCount;
-  parsedArgs.reset(
-      table.ParseArgs(&argv[1], &argv[argc], missingIndex, missingCount));
+  llvm::opt::InputArgList parsedArgs =
+      table.ParseArgs(args.slice(1), missingIndex, missingCount);
   if (missingCount) {
     diagnostics << "error: missing arg value for '"
-                << parsedArgs->getArgString(missingIndex) << "' expected "
+                << parsedArgs.getArgString(missingIndex) << "' expected "
                 << missingCount << " argument(s).\n";
     return false;
   }
-
-  std::unique_ptr<InputGraph> inputGraph(new InputGraph());
 
   // Set default options
   ctx.setOutputPath("-");
@@ -116,8 +110,8 @@ bool CoreDriver::parse(int argc, const char *argv[], CoreLinkingContext &ctx,
   ctx.setAllowRemainingUndefines(true);
   ctx.setSearchArchivesToOverrideTentativeDefinitions(false);
 
-  // Process all the arguments and create Input Elements
-  for (auto inputArg : *parsedArgs) {
+  // Process all the arguments and create input files.
+  for (auto inputArg : parsedArgs) {
     switch (inputArg->getOption().getID()) {
     case OPT_mllvm:
       ctx.appendLLVMOption(inputArg->getValue());
@@ -152,22 +146,23 @@ bool CoreDriver::parse(int argc, const char *argv[], CoreLinkingContext &ctx,
       ctx.addPassNamed(inputArg->getValue());
       break;
 
-    case OPT_INPUT:
-      inputGraph->addInputElement(std::unique_ptr<InputElement>(
-          new CoreFileNode(ctx, inputArg->getValue())));
+    case OPT_INPUT: {
+      std::vector<std::unique_ptr<File>> files
+        = loadFile(ctx, inputArg->getValue(), false);
+      for (std::unique_ptr<File> &file : files)
+        ctx.getNodes().push_back(llvm::make_unique<FileNode>(std::move(file)));
       break;
+    }
 
     default:
       break;
     }
   }
 
-  if (!inputGraph->size()) {
+  if (ctx.getNodes().empty()) {
     diagnostics << "No input files\n";
     return false;
   }
-
-  ctx.setInputGraph(std::move(inputGraph));
 
   // Validate the combination of options used.
   return ctx.validate(diagnostics);

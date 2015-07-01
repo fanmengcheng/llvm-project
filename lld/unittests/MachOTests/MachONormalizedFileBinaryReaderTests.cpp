@@ -8,10 +8,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "gtest/gtest.h"
-
-#include "llvm/Support/MachO.h"
 #include "../../lib/ReaderWriter/MachO/MachONormalizedFile.h"
-
+#include "llvm/Support/MachO.h"
 #include <assert.h>
 #include <vector>
 
@@ -33,9 +31,17 @@ fromBinary(const uint8_t bytes[], unsigned length, StringRef archStr) {
   return std::move(*r);
 }
 
+// The Mach-O object reader uses functions such as read32 or read64
+// which don't allow unaligned access. Our in-memory object file
+// needs to be aligned to a larger boundary than uint8_t's.
+#if _MSC_VER
+#define FILEBYTES __declspec(align(64)) const uint8_t fileBytes[]
+#else
+#define FILEBYTES const uint8_t fileBytes[] __attribute__((aligned(64)))
+#endif
 
 TEST(BinaryReaderTest, empty_obj_x86_64) {
-  const uint8_t fileBytes[] = {
+  FILEBYTES = {
       0xcf, 0xfa, 0xed, 0xfe, 0x07, 0x00, 0x00, 0x01,
       0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
       0x01, 0x00, 0x00, 0x00, 0x98, 0x00, 0x00, 0x00,
@@ -71,7 +77,7 @@ TEST(BinaryReaderTest, empty_obj_x86_64) {
 
 
 TEST(BinaryReaderTest, empty_obj_x86) {
-  const uint8_t fileBytes[] = {
+  FILEBYTES = {
       0xce, 0xfa, 0xed, 0xfe, 0x07, 0x00, 0x00, 0x00,
       0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
       0x01, 0x00, 0x00, 0x00, 0x7c, 0x00, 0x00, 0x00,
@@ -103,7 +109,7 @@ TEST(BinaryReaderTest, empty_obj_x86) {
 
 
 TEST(BinaryReaderTest, empty_obj_ppc) {
-  const uint8_t fileBytes[] = {
+  FILEBYTES = {
       0xfe, 0xed, 0xfa, 0xce, 0x00, 0x00, 0x00, 0x12,
       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
       0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x7c,
@@ -135,7 +141,7 @@ TEST(BinaryReaderTest, empty_obj_ppc) {
 
 
 TEST(BinaryReaderTest, empty_obj_armv7) {
-  const uint8_t fileBytes[] = {
+  FILEBYTES = {
       0xce, 0xfa, 0xed, 0xfe, 0x0c, 0x00, 0x00, 0x00,
       0x09, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
       0x01, 0x00, 0x00, 0x00, 0x7c, 0x00, 0x00, 0x00,
@@ -166,7 +172,7 @@ TEST(BinaryReaderTest, empty_obj_armv7) {
 }
 
 TEST(BinaryReaderTest, empty_obj_x86_64_arm7) {
-  const uint8_t fileBytes[] = {
+  FILEBYTES = {
 #include "empty_obj_x86_armv7.txt"
   };
   std::unique_ptr<NormalizedFile> f =
@@ -189,7 +195,7 @@ TEST(BinaryReaderTest, empty_obj_x86_64_arm7) {
 }
 
 TEST(BinaryReaderTest, hello_obj_x86_64) {
-  const uint8_t fileBytes[] = {
+  FILEBYTES = {
     0xCF, 0xFA, 0xED, 0xFE, 0x07, 0x00, 0x00, 0x01,
     0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
     0x03, 0x00, 0x00, 0x00, 0x50, 0x01, 0x00, 0x00,
@@ -267,7 +273,7 @@ TEST(BinaryReaderTest, hello_obj_x86_64) {
   EXPECT_EQ(text.type, S_REGULAR);
   EXPECT_EQ(text.attributes,SectionAttr(S_ATTR_PURE_INSTRUCTIONS
                                       | S_ATTR_SOME_INSTRUCTIONS));
-  EXPECT_EQ(text.alignment, 4U);
+  EXPECT_EQ((uint16_t)text.alignment, 16U);
   EXPECT_EQ(text.address, Hex64(0x0));
   EXPECT_EQ(text.content.size(), 45UL);
   EXPECT_EQ((int)(text.content[0]), 0x55);
@@ -292,7 +298,7 @@ TEST(BinaryReaderTest, hello_obj_x86_64) {
   EXPECT_TRUE(cstring.sectionName.equals("__cstring"));
   EXPECT_EQ(cstring.type, S_CSTRING_LITERALS);
   EXPECT_EQ(cstring.attributes, SectionAttr(0));
-  EXPECT_EQ(cstring.alignment, 0U);
+  EXPECT_EQ((uint16_t)cstring.alignment, 1U);
   EXPECT_EQ(cstring.address, Hex64(0x02D));
   EXPECT_EQ(cstring.content.size(), 7UL);
   EXPECT_EQ((int)(cstring.content[0]), 0x68);
@@ -322,7 +328,7 @@ TEST(BinaryReaderTest, hello_obj_x86_64) {
 
 
 TEST(BinaryReaderTest, hello_obj_x86) {
-  const uint8_t fileBytes[] = {
+  FILEBYTES = {
     0xCE, 0xFA, 0xED, 0xFE, 0x07, 0x00, 0x00, 0x00,
     0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
     0x03, 0x00, 0x00, 0x00, 0x28, 0x01, 0x00, 0x00,
@@ -393,7 +399,7 @@ TEST(BinaryReaderTest, hello_obj_x86) {
   EXPECT_EQ(text.type, S_REGULAR);
   EXPECT_EQ(text.attributes,SectionAttr(S_ATTR_PURE_INSTRUCTIONS
                                       | S_ATTR_SOME_INSTRUCTIONS));
-  EXPECT_EQ(text.alignment, 4U);
+  EXPECT_EQ((uint16_t)text.alignment, 16U);
   EXPECT_EQ(text.address, Hex64(0x0));
   EXPECT_EQ(text.content.size(), 48UL);
   EXPECT_EQ((int)(text.content[0]), 0x55);
@@ -428,7 +434,7 @@ TEST(BinaryReaderTest, hello_obj_x86) {
   EXPECT_TRUE(cstring.sectionName.equals("__cstring"));
   EXPECT_EQ(cstring.type, S_CSTRING_LITERALS);
   EXPECT_EQ(cstring.attributes, SectionAttr(0));
-  EXPECT_EQ(cstring.alignment, 0U);
+  EXPECT_EQ((uint16_t)cstring.alignment, 1U);
   EXPECT_EQ(cstring.address, Hex64(0x030));
   EXPECT_EQ(cstring.content.size(), 7UL);
   EXPECT_EQ((int)(cstring.content[0]), 0x68);
@@ -454,7 +460,7 @@ TEST(BinaryReaderTest, hello_obj_x86) {
 
 
 TEST(BinaryReaderTest, hello_obj_armv7) {
-  const uint8_t fileBytes[] = {
+  FILEBYTES = {
     0xCE, 0xFA, 0xED, 0xFE, 0x0C, 0x00, 0x00, 0x00,
     0x09, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
     0x03, 0x00, 0x00, 0x00, 0x28, 0x01, 0x00, 0x00,
@@ -526,7 +532,7 @@ TEST(BinaryReaderTest, hello_obj_armv7) {
   EXPECT_EQ(text.type, S_REGULAR);
   EXPECT_EQ(text.attributes,SectionAttr(S_ATTR_PURE_INSTRUCTIONS
                                       | S_ATTR_SOME_INSTRUCTIONS));
-  EXPECT_EQ(text.alignment, 2U);
+  EXPECT_EQ((uint16_t)text.alignment, 4U);
   EXPECT_EQ(text.address, Hex64(0x0));
   EXPECT_EQ(text.content.size(), 42UL);
   EXPECT_EQ((int)(text.content[0]), 0x80);
@@ -570,7 +576,7 @@ TEST(BinaryReaderTest, hello_obj_armv7) {
   EXPECT_TRUE(cstring.sectionName.equals("__cstring"));
   EXPECT_EQ(cstring.type, S_CSTRING_LITERALS);
   EXPECT_EQ(cstring.attributes, SectionAttr(0));
-  EXPECT_EQ(cstring.alignment, 0U);
+  EXPECT_EQ((uint16_t)cstring.alignment, 1U);
   EXPECT_EQ(cstring.address, Hex64(0x02A));
   EXPECT_EQ(cstring.content.size(), 7UL);
   EXPECT_EQ((int)(cstring.content[0]), 0x68);
@@ -596,7 +602,7 @@ TEST(BinaryReaderTest, hello_obj_armv7) {
 
 
 TEST(BinaryReaderTest, hello_obj_ppc) {
-  const uint8_t fileBytes[] = {
+  FILEBYTES = {
     0xFE, 0xED, 0xFA, 0xCE, 0x00, 0x00, 0x00, 0x12,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
     0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x01, 0x28,
@@ -671,7 +677,7 @@ TEST(BinaryReaderTest, hello_obj_ppc) {
   EXPECT_EQ(text.type, S_REGULAR);
   EXPECT_EQ(text.attributes,SectionAttr(S_ATTR_PURE_INSTRUCTIONS
                                       | S_ATTR_SOME_INSTRUCTIONS));
-  EXPECT_EQ(text.alignment, 2U);
+  EXPECT_EQ((uint16_t)text.alignment, 4U);
   EXPECT_EQ(text.address, Hex64(0x0));
   EXPECT_EQ(text.content.size(), 68UL);
   EXPECT_EQ((int)(text.content[0]), 0x7C);
@@ -714,7 +720,7 @@ TEST(BinaryReaderTest, hello_obj_ppc) {
   EXPECT_TRUE(cstring.sectionName.equals("__cstring"));
   EXPECT_EQ(cstring.type, S_CSTRING_LITERALS);
   EXPECT_EQ(cstring.attributes, SectionAttr(0));
-  EXPECT_EQ(cstring.alignment, 2U);
+  EXPECT_EQ((uint16_t)cstring.alignment, 4U);
   EXPECT_EQ(cstring.address, Hex64(0x044));
   EXPECT_EQ(cstring.content.size(), 7UL);
   EXPECT_EQ((int)(cstring.content[0]), 0x68);
@@ -740,4 +746,3 @@ TEST(BinaryReaderTest, hello_obj_ppc) {
   writeBinary(*f, "/tmp/foo.o");
 
 }
-

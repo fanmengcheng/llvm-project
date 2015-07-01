@@ -10,62 +10,37 @@
 #ifndef LLD_READER_WRITER_ELF_X86_TARGET_HANDLER_H
 #define LLD_READER_WRITER_ELF_X86_TARGET_HANDLER_H
 
-#include "DefaultTargetHandler.h"
 #include "TargetLayout.h"
-
-#include "lld/ReaderWriter/Reader.h"
+#include "ELFReader.h"
+#include "X86RelocationHandler.h"
 
 namespace lld {
 namespace elf {
 
-typedef llvm::object::ELFType<llvm::support::little, 2, false> X86ELFType;
 class X86LinkingContext;
 
-template <class ELFT> class X86TargetLayout : public TargetLayout<ELFT> {
+class X86TargetHandler final : public TargetHandler {
 public:
-  X86TargetLayout(X86LinkingContext &context) : TargetLayout<ELFT>(context) {}
-};
+  X86TargetHandler(X86LinkingContext &ctx);
 
-class X86TargetRelocationHandler final
-    : public TargetRelocationHandler<X86ELFType> {
-public:
-  X86TargetRelocationHandler(X86LinkingContext &context,
-                             X86TargetLayout<X86ELFType> &layout)
-      : _x86Context(context), _x86TargetLayout(layout) {}
-
-  std::error_code applyRelocation(ELFWriter &, llvm::FileOutputBuffer &,
-                                  const lld::AtomLayout &,
-                                  const Reference &) const override;
-
-  static const Registry::KindStrings kindStrings[];
-
-protected:
-  X86LinkingContext &_x86Context;
-  X86TargetLayout<X86ELFType> &_x86TargetLayout;
-};
-
-class X86TargetHandler final
-    : public DefaultTargetHandler<X86ELFType> {
-public:
-  X86TargetHandler(X86LinkingContext &context);
-
-  X86TargetLayout<X86ELFType> &getTargetLayout() override {
-    return *(_x86TargetLayout.get());
+  const TargetRelocationHandler &getRelocationHandler() const override {
+    return *_relocationHandler;
   }
 
-  void registerRelocationNames(Registry &registry) override;
+  std::unique_ptr<Reader> getObjReader() override {
+    return llvm::make_unique<ELFReader<ELFFile<ELF32LE>>>(_ctx);
+  }
 
-  const X86TargetRelocationHandler &getRelocationHandler() const override {
-    return *(_x86RelocationHandler.get());
+  std::unique_ptr<Reader> getDSOReader() override {
+    return llvm::make_unique<ELFReader<DynamicFile<ELF32LE>>>(_ctx);
   }
 
   std::unique_ptr<Writer> getWriter() override;
 
 protected:
-  static const Registry::KindStrings kindStrings[];
-  X86LinkingContext &_x86LinkingContext;
-  std::unique_ptr<X86TargetLayout<X86ELFType>> _x86TargetLayout;
-  std::unique_ptr<X86TargetRelocationHandler> _x86RelocationHandler;
+  X86LinkingContext &_ctx;
+  std::unique_ptr<TargetLayout<ELF32LE>> _targetLayout;
+  std::unique_ptr<X86TargetRelocationHandler> _relocationHandler;
 };
 } // end namespace elf
 } // end namespace lld

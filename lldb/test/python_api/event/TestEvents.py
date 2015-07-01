@@ -12,7 +12,7 @@ class EventAPITestCase(TestBase):
 
     mydir = TestBase.compute_mydir(__file__)
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @python_api_test
     @dsym_test
     def test_listen_for_and_print_event_with_dsym(self):
@@ -22,12 +22,14 @@ class EventAPITestCase(TestBase):
 
     @python_api_test
     @dwarf_test
+    @expectedFailureLinux("llvm.org/pr23730") # Flaky, fails ~1/10 cases
+    @skipIfLinux # skip to avoid crashes
     def test_listen_for_and_print_event_with_dwarf(self):
         """Exercise SBEvent API."""
         self.buildDwarf()
         self.do_listen_for_and_print_event()
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @python_api_test
     @dsym_test
     def test_wait_for_event_with_dsym(self):
@@ -42,7 +44,7 @@ class EventAPITestCase(TestBase):
         self.buildDwarf()
         self.do_wait_for_event()
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @python_api_test
     @dsym_test
     def test_add_listener_to_broadcaster_with_dsym(self):
@@ -50,8 +52,10 @@ class EventAPITestCase(TestBase):
         self.buildDsym()
         self.do_add_listener_to_broadcaster()
 
+    @skipIfFreeBSD # llvm.org/pr21325
     @python_api_test
     @dwarf_test
+    @expectedFailureLinux("llvm.org/pr23617") # Flaky, fails ~1/10 cases
     def test_add_listener_to_broadcaster_with_dwarf(self):
         """Exercise some SBBroadcaster APIs."""
         self.buildDwarf()
@@ -67,6 +71,8 @@ class EventAPITestCase(TestBase):
         """Create a listener and use SBEvent API to print the events received."""
         exe = os.path.join(os.getcwd(), "a.out")
 
+        self.dbg.SetAsync(True)
+
         # Create a target by the debugger.
         target = self.dbg.CreateTarget(exe)
         self.assertTrue(target, VALID_TARGET)
@@ -74,21 +80,25 @@ class EventAPITestCase(TestBase):
         # Now create a breakpoint on main.c by name 'c'.
         breakpoint = target.BreakpointCreateByName('c', 'a.out')
 
-        # Now launch the process, and do not stop at the entry point.
-        process = target.LaunchSimple (None, None, self.get_process_working_directory())
-        self.assertTrue(process.GetState() == lldb.eStateStopped,
-                        PROCESS_STOPPED)
+        listener = lldb.SBListener("my listener")
 
-        # Get a handle on the process's broadcaster.
-        broadcaster = process.GetBroadcaster()
+        # Now launch the process, and do not stop at the entry point.
+        error = lldb.SBError()
+        process = target.Launch (listener, 
+                                 None,      # argv
+                                 None,      # envp
+                                 None,      # stdin_path
+                                 None,      # stdout_path
+                                 None,      # stderr_path
+                                 None,      # working directory
+                                 0,         # launch flags
+                                 False,     # Stop at entry
+                                 error)     # error
+
+        self.assertTrue(process.GetState() == lldb.eStateStopped, PROCESS_STOPPED)
 
         # Create an empty event object.
         event = lldb.SBEvent()
-
-        # Create a listener object and register with the broadcaster.
-        listener = lldb.SBListener("my listener")
-        rc = broadcaster.AddListener(listener, lldb.SBProcess.eBroadcastBitStateChanged)
-        self.assertTrue(rc, "AddListener successfully retruns")
 
         traceOn = self.TraceOn()
         if traceOn:
@@ -104,10 +114,7 @@ class EventAPITestCase(TestBase):
                 while not count > 3:
                     if traceOn:
                         print "Try wait for event..."
-                    if listener.WaitForEventForBroadcasterWithType(5,
-                                                                   broadcaster,
-                                                                   lldb.SBProcess.eBroadcastBitStateChanged,
-                                                                   event):
+                    if listener.WaitForEvent(5, event):
                         if traceOn:
                             desc = lldbutil.get_description(event)
                             print "Event description:", desc
@@ -139,6 +146,8 @@ class EventAPITestCase(TestBase):
         """Get the listener associated with the debugger and exercise WaitForEvent API."""
         exe = os.path.join(os.getcwd(), "a.out")
 
+        self.dbg.SetAsync(True)
+
         # Create a target by the debugger.
         target = self.dbg.CreateTarget(exe)
         self.assertTrue(target, VALID_TARGET)
@@ -155,12 +164,17 @@ class EventAPITestCase(TestBase):
 
         # Now launch the process, and do not stop at entry point.
         error = lldb.SBError()
-        process = target.Launch (listener, None, None, None, None, None, None, 0, False, error)
+        process = target.Launch (listener, 
+                                 None,      # argv
+                                 None,      # envp
+                                 None,      # stdin_path
+                                 None,      # stdout_path
+                                 None,      # stderr_path
+                                 None,      # working directory
+                                 0,         # launch flags
+                                 False,     # Stop at entry
+                                 error)     # error
         self.assertTrue(error.Success() and process, PROCESS_IS_VALID)
-
-        # Get a handle on the process's broadcaster.
-        broadcaster = process.GetBroadcaster()
-        self.assertTrue(broadcaster, "Process with valid broadcaster")
 
         # Create an empty event object.
         event = lldb.SBEvent()
@@ -201,6 +215,8 @@ class EventAPITestCase(TestBase):
         """Get the broadcaster associated with the process and wait for broadcaster events."""
         exe = os.path.join(os.getcwd(), "a.out")
 
+        self.dbg.SetAsync(True)
+
         # Create a target by the debugger.
         target = self.dbg.CreateTarget(exe)
         self.assertTrue(target, VALID_TARGET)
@@ -212,30 +228,34 @@ class EventAPITestCase(TestBase):
                         breakpoint.GetNumLocations() == 1,
                         VALID_BREAKPOINT)
 
-        # Now launch the process, and do not stop at the entry point.
-        process = target.LaunchSimple (None, None, self.get_process_working_directory())
-        self.assertTrue(process.GetState() == lldb.eStateStopped,
-                        PROCESS_STOPPED)
+        listener = lldb.SBListener("my listener")
 
-        # Get a handle on the process's broadcaster.
-        broadcaster = process.GetBroadcaster()
-        self.assertTrue(broadcaster, "Process with valid broadcaster")
+        # Now launch the process, and do not stop at the entry point.
+        error = lldb.SBError()
+        process = target.Launch (listener, 
+                                 None,      # argv
+                                 None,      # envp
+                                 None,      # stdin_path
+                                 None,      # stdout_path
+                                 None,      # stderr_path
+                                 None,      # working directory
+                                 0,         # launch flags
+                                 False,     # Stop at entry
+                                 error)     # error
 
         # Create an empty event object.
         event = lldb.SBEvent()
         self.assertFalse(event, "Event should not be valid initially")
 
-        # Create a listener object and register with the broadcaster.
-        listener = lldb.SBListener("TestEvents.listener")
-        rc = broadcaster.AddListener(listener, lldb.SBProcess.eBroadcastBitStateChanged)
-        self.assertTrue(rc, "AddListener successfully retruns")
 
         # The finite state machine for our custom listening thread, with an
-        # initail state of 0, which means a "running" event is expected.
-        # It changes to 1 after "running" is received.
-        # It cahnges to 2 after "stopped" is received.
-        # 2 will be our final state and the test is complete.
-        self.state = 0 
+        # initail state of None, which means no event has been received.
+        # It changes to 'connected' after 'connected' event is received (for remote platforms)
+        # It changes to 'running' after 'running' event is received (should happen only if the
+        # currentstate is either 'None' or 'connected')
+        # It changes to 'stopped' if a 'stopped' event is received (should happen only if the
+        # current state is 'running'.)
+        self.state = None
 
         # Create MyListeningThread to wait for state changed events.
         # By design, a "running" event is expected following by a "stopped" event.
@@ -250,21 +270,26 @@ class EventAPITestCase(TestBase):
                 # Let's only try at most 6 times to retrieve our events.
                 count = 0
                 while True:
-                    if listener.WaitForEventForBroadcasterWithType(5,
-                                                                   broadcaster,
-                                                                   lldb.SBProcess.eBroadcastBitStateChanged,
-                                                                   event):
+                    if listener.WaitForEvent(5, event):
                         desc = lldbutil.get_description(event)
                         #print "Event description:", desc
                         match = pattern.search(desc)
                         if not match:
                             break;
-                        if self.context.state == 0 and match.group(1) == 'running':
-                            self.context.state = 1
+                        if match.group(1) == 'connected':
+                            # When debugging remote targets with lldb-server, we
+                            # first get the 'connected' event.
+                            self.context.assertTrue(self.context.state == None)
+                            self.context.state = 'connected'
                             continue
-                        elif self.context.state == 1 and match.group(1) == 'stopped':
+                        elif match.group(1) == 'running':
+                            self.context.assertTrue(self.context.state == None or self.context.state == 'connected')
+                            self.context.state = 'running'
+                            continue
+                        elif match.group(1) == 'stopped':
+                            self.context.assertTrue(self.context.state == 'running')
                             # Whoopee, both events have been received!
-                            self.context.state = 2
+                            self.context.state = 'stopped'
                             break
                         else:
                             break
@@ -290,12 +315,8 @@ class EventAPITestCase(TestBase):
         # Wait until the 'MyListeningThread' terminates.
         my_thread.join()
 
-        # We are no longer interested in receiving state changed events.
-        # Remove our custom listener before the inferior is killed.
-        broadcaster.RemoveListener(listener, lldb.SBProcess.eBroadcastBitStateChanged)
-
         # The final judgement. :-)
-        self.assertTrue(self.state == 2,
+        self.assertTrue(self.state == 'stopped',
                         "Both expected state changed events received")
 
         

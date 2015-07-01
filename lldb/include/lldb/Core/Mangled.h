@@ -37,7 +37,15 @@ public:
     enum NamePreference
     {
         ePreferMangled,
-        ePreferDemangled
+        ePreferDemangled,
+        ePreferDemangledWithoutArguments
+    };
+
+    enum ManglingScheme
+    {
+        eManglingSchemeNone = 0,
+        eManglingSchemeMSVC,
+        eManglingSchemeItanium
     };
 
     //----------------------------------------------------------------------
@@ -288,6 +296,25 @@ public:
     //----------------------------------------------------------------------
     void
     SetValue (const ConstString &name);
+
+    //----------------------------------------------------------------------
+    /// Try to guess the language from the mangling.
+    ///
+    /// For a mangled name to have a language it must have both a mangled
+    /// and a demangled name and it can be guessed from the mangling what
+    /// the language is.  Note: this will return C++ for any language that
+    /// uses Itanium ABI mangling.
+    ///
+    /// Standard C function names will return eLanguageTypeUnknown because
+    /// they aren't mangled and it isn't clear what language the name
+    /// represents (there will be no mangled name).
+    ///
+    /// @return
+    ///     The language for the mangled/demangled name, eLanguageTypeUnknown
+    ///     if there is no mangled or demangled counterpart.
+    //----------------------------------------------------------------------
+    lldb::LanguageType
+    GuessLanguage () const;
 
 private:
     //----------------------------------------------------------------------

@@ -26,6 +26,8 @@
 #include "lldb/Core/ModuleSpec.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Breakpoint/BreakpointLocation.h"
+#include "lldb/Breakpoint/BreakpointSite.h"
+#include "lldb/Target/Process.h"
 
 using namespace lldb;
 using namespace lldb_private;
@@ -66,7 +68,7 @@ namespace
     };
 }
 
-Platform *
+PlatformSP
 PlatformWindows::CreateInstance (bool force, const lldb_private::ArchSpec *arch)
 {
     // The only time we create an instance is when we are creating a remote
@@ -109,8 +111,8 @@ PlatformWindows::CreateInstance (bool force, const lldb_private::ArchSpec *arch)
         }
     }
     if (create)
-        return new PlatformWindows (is_host);
-    return NULL;
+        return PlatformSP(new PlatformWindows (is_host));
+    return PlatformSP();
 
 }
 
@@ -146,6 +148,8 @@ PlatformWindows::GetPluginName(void)
 void
 PlatformWindows::Initialize(void)
 {
+    Platform::Initialize ();
+
     if (g_initialize_count++ == 0)
     {
 #if defined (_WIN32)
@@ -154,7 +158,7 @@ PlatformWindows::Initialize(void)
         // Force a host flag to true for the default platform object.
         PlatformSP default_platform_sp (new PlatformWindows(true));
         default_platform_sp->SetSystemArchitecture(HostInfo::GetArchitecture());
-        Platform::SetDefaultPlatform (default_platform_sp);
+        Platform::SetHostPlatform (default_platform_sp);
 #endif
         PluginManager::RegisterPlugin(PlatformWindows::GetPluginNameStatic(false),
                                       PlatformWindows::GetPluginDescriptionStatic(false),
@@ -175,6 +179,8 @@ PlatformWindows::Terminate( void )
             PluginManager::UnregisterPlugin (PlatformWindows::CreateInstance);
         }
     }
+
+    Platform::Terminate ();
 }
 
 //------------------------------------------------------------------
@@ -195,9 +201,19 @@ PlatformWindows::~PlatformWindows()
 {
 }
 
+bool
+PlatformWindows::GetModuleSpec (const FileSpec& module_file_spec,
+                                const ArchSpec& arch,
+                                ModuleSpec &module_spec)
+{
+    if (m_remote_platform_sp)
+        return m_remote_platform_sp->GetModuleSpec (module_file_spec, arch, module_spec);
+
+    return Platform::GetModuleSpec (module_file_spec, arch, module_spec);
+}
+
 Error
-PlatformWindows::ResolveExecutable (const FileSpec &exe_file,
-                                    const ArchSpec &exe_arch,
+PlatformWindows::ResolveExecutable (const ModuleSpec &ms,
                                     lldb::ModuleSP &exe_module_sp,
                                     const FileSpecList *module_search_paths_ptr)
 {
@@ -205,25 +221,25 @@ PlatformWindows::ResolveExecutable (const FileSpec &exe_file,
     // Nothing special to do here, just use the actual file and architecture
 
     char exe_path[PATH_MAX];
-    FileSpec resolved_exe_file (exe_file);
+    ModuleSpec resolved_module_spec(ms);
 
     if (IsHost())
     {
         // if we cant resolve the executable loation based on the current path variables
-        if (!resolved_exe_file.Exists())
+        if (!resolved_module_spec.GetFileSpec().Exists())
         {
-            exe_file.GetPath(exe_path, sizeof(exe_path));
-            resolved_exe_file.SetFile(exe_path, true);
+            resolved_module_spec.GetFileSpec().GetPath(exe_path, sizeof(exe_path));
+            resolved_module_spec.GetFileSpec().SetFile(exe_path, true);
         }
 
-        if (!resolved_exe_file.Exists())
-            resolved_exe_file.ResolveExecutableLocation ();
+        if (!resolved_module_spec.GetFileSpec().Exists())
+            resolved_module_spec.GetFileSpec().ResolveExecutableLocation ();
 
-        if (resolved_exe_file.Exists())
+        if (resolved_module_spec.GetFileSpec().Exists())
             error.Clear();
         else
         {
-            exe_file.GetPath(exe_path, sizeof(exe_path));
+            ms.GetFileSpec().GetPath(exe_path, sizeof(exe_path));
             error.SetErrorStringWithFormat("unable to find executable for '%s'", exe_path);
         }
     }
@@ -231,15 +247,12 @@ PlatformWindows::ResolveExecutable (const FileSpec &exe_file,
     {
         if (m_remote_platform_sp)
         {
-            error = m_remote_platform_sp->ResolveExecutable (exe_file,
-                                                             exe_arch,
-                                                             exe_module_sp,
-                                                             NULL);
+            error = GetCachedExecutable (resolved_module_spec, exe_module_sp, nullptr, *m_remote_platform_sp);
         }
         else
         {
             // We may connect to a process and use the provided executable (Don't use local $PATH).
-            if (resolved_exe_file.Exists())
+            if (resolved_module_spec.GetFileSpec().Exists())
                 error.Clear();
             else
                 error.SetErrorStringWithFormat("the platform is not currently connected, and '%s' doesn't exist in the system root.", exe_path);
@@ -248,10 +261,9 @@ PlatformWindows::ResolveExecutable (const FileSpec &exe_file,
 
     if (error.Success())
     {
-        ModuleSpec module_spec (resolved_exe_file, exe_arch);
-        if (exe_arch.IsValid())
+        if (resolved_module_spec.GetArchitecture().IsValid())
         {
-            error = ModuleList::GetSharedModule (module_spec,
+            error = ModuleList::GetSharedModule (resolved_module_spec,
                                                  exe_module_sp,
                                                  NULL,
                                                  NULL,
@@ -261,8 +273,8 @@ PlatformWindows::ResolveExecutable (const FileSpec &exe_file,
             {
                 exe_module_sp.reset();
                 error.SetErrorStringWithFormat ("'%s' doesn't contain the architecture %s",
-                                                exe_file.GetPath().c_str(),
-                                                exe_arch.GetArchitectureName());
+                                                resolved_module_spec.GetFileSpec().GetPath().c_str(),
+                                                resolved_module_spec.GetArchitecture().GetArchitectureName());
             }
         }
         else
@@ -271,9 +283,9 @@ PlatformWindows::ResolveExecutable (const FileSpec &exe_file,
             // the architectures that we should be using (in the correct order)
             // and see if we can find a match that way
             StreamString arch_names;
-            for (uint32_t idx = 0; GetSupportedArchitectureAtIndex (idx, module_spec.GetArchitecture()); ++idx)
+            for (uint32_t idx = 0; GetSupportedArchitectureAtIndex (idx, resolved_module_spec.GetArchitecture()); ++idx)
             {
-                error = ModuleList::GetSharedModule (module_spec,
+                error = ModuleList::GetSharedModule (resolved_module_spec,
                                                      exe_module_sp,
                                                      NULL,
                                                      NULL,
@@ -289,21 +301,21 @@ PlatformWindows::ResolveExecutable (const FileSpec &exe_file,
 
                 if (idx > 0)
                     arch_names.PutCString (", ");
-                arch_names.PutCString (module_spec.GetArchitecture().GetArchitectureName());
+                arch_names.PutCString (resolved_module_spec.GetArchitecture().GetArchitectureName());
             }
 
             if (error.Fail() || !exe_module_sp)
             {
-                if (exe_file.Readable())
+                if (resolved_module_spec.GetFileSpec().Readable())
                 {
                     error.SetErrorStringWithFormat ("'%s' doesn't contain any '%s' platform architectures: %s",
-                                                    exe_file.GetPath().c_str(),
+                                                    resolved_module_spec.GetFileSpec().GetPath().c_str(),
                                                     GetPluginName().GetCString(),
                                                     arch_names.GetString().c_str());
                 }
                 else
                 {
-                    error.SetErrorStringWithFormat("'%s' is not readable", exe_file.GetPath().c_str());
+                    error.SetErrorStringWithFormat("'%s' is not readable", resolved_module_spec.GetFileSpec().GetPath().c_str());
                 }
             }
         }
@@ -417,7 +429,7 @@ PlatformWindows::ConnectRemote (Args& args)
     else
     {
         if (!m_remote_platform_sp)
-            m_remote_platform_sp = Platform::Create ("remote-gdb-server", error);
+            m_remote_platform_sp = Platform::Create (ConstString("remote-gdb-server"), error);
 
         if (m_remote_platform_sp)
         {
@@ -514,52 +526,88 @@ PlatformWindows::LaunchProcess (ProcessLaunchInfo &launch_info)
     return error;
 }
 
+ProcessSP
+PlatformWindows::DebugProcess(ProcessLaunchInfo &launch_info, Debugger &debugger, Target *target, Error &error)
+{
+    // Windows has special considerations that must be followed when launching or attaching to a process.  The
+    // key requirement is that when launching or attaching to a process, you must do it from the same the thread
+    // that will go into a permanent loop which will then receive debug events from the process.  In particular,
+    // this means we can't use any of LLDB's generic mechanisms to do it for us, because it doesn't have the
+    // special knowledge required for setting up the background thread or passing the right flags.  
+    //
+    // Another problem is that that LLDB's standard model for debugging a process is to first launch it, have
+    // it stop at the entry point, and then attach to it.  In Windows this doesn't quite work, you have to 
+    // specify as an argument to CreateProcess() that you're going to debug the process.  So we override DebugProcess
+    // here to handle this.  Launch operations go directly to the process plugin, and attach operations almost go
+    // directly to the process plugin (but we hijack the events first).  In essence, we encapsulate all the logic
+    // of Launching and Attaching in the process plugin, and PlatformWindows::DebugProcess is just a pass-through
+    // to get to the process plugin.
+
+    if (launch_info.GetProcessID() != LLDB_INVALID_PROCESS_ID)
+    {
+        // This is a process attach.  Don't need to launch anything.
+        ProcessAttachInfo attach_info(launch_info);
+        return Attach(attach_info, debugger, target, error);
+    }
+    else
+    {
+        ProcessSP process_sp = target->CreateProcess(launch_info.GetListenerForProcess(debugger),
+                                                     launch_info.GetProcessPluginName(),
+                                                     nullptr);
+
+        // We need to launch and attach to the process.
+        launch_info.GetFlags().Set(eLaunchFlagDebug);
+        if (process_sp)
+            error = process_sp->Launch(launch_info);
+
+        return process_sp;
+    }
+}
+
 lldb::ProcessSP
 PlatformWindows::Attach(ProcessAttachInfo &attach_info,
                         Debugger &debugger,
                         Target *target,
-                        Listener &listener,
                         Error &error)
 {
+    error.Clear();
     lldb::ProcessSP process_sp;
-    if (IsHost())
-    {
-        if (target == NULL)
-        {
-            TargetSP new_target_sp;
-            FileSpec emptyFileSpec;
-            ArchSpec emptyArchSpec;
-
-            error = debugger.GetTargetList().CreateTarget (debugger,
-                                                           NULL,
-                                                           NULL,
-                                                           false,
-                                                           NULL,
-                                                           new_target_sp);
-            target = new_target_sp.get();
-        }
-        else
-            error.Clear();
-
-        if (target && error.Success())
-        {
-            debugger.GetTargetList().SetSelectedTarget(target);
-            // The Windows platform always currently uses the GDB remote debugger plug-in
-            // so even when debugging locally we are debugging remotely!
-            // Just like the darwin plugin.
-            process_sp = target->CreateProcess (listener, "gdb-remote", NULL);
-
-            if (process_sp)
-                error = process_sp->Attach (attach_info);
-        }
-    }
-    else
+    if (!IsHost())
     {
         if (m_remote_platform_sp)
-            process_sp = m_remote_platform_sp->Attach (attach_info, debugger, target, listener, error);
+            process_sp = m_remote_platform_sp->Attach (attach_info, debugger, target, error);
         else
             error.SetErrorString ("the platform is not currently connected");
+        return process_sp;
     }
+
+    if (target == NULL)
+    {
+        TargetSP new_target_sp;
+        FileSpec emptyFileSpec;
+        ArchSpec emptyArchSpec;
+
+        error = debugger.GetTargetList().CreateTarget (debugger,
+                                                        NULL,
+                                                        NULL,
+                                                        false,
+                                                        NULL,
+                                                        new_target_sp);
+        target = new_target_sp.get();
+    }
+
+    if (!target || error.Fail())
+        return process_sp;
+
+    debugger.GetTargetList().SetSelectedTarget(target);
+
+    const char *plugin_name = attach_info.GetProcessPluginName();
+    process_sp = target->CreateProcess(attach_info.GetListenerForProcess(debugger), plugin_name, NULL);
+
+    process_sp->HijackProcessEvents(attach_info.GetHijackListener().get());
+    if (process_sp)
+        error = process_sp->Attach (attach_info);
+
     return process_sp;
 }
 
@@ -606,6 +654,7 @@ PlatformWindows::GetFileWithUUID (const FileSpec &platform_file,
 
 Error
 PlatformWindows::GetSharedModule (const ModuleSpec &module_spec,
+                                  Process* process,
                                   ModuleSP &module_sp,
                                   const FileSpecList *module_search_paths_ptr,
                                   ModuleSP *old_module_sp_ptr,
@@ -621,6 +670,7 @@ PlatformWindows::GetSharedModule (const ModuleSpec &module_spec,
         if (m_remote_platform_sp)
         {
             error = m_remote_platform_sp->GetSharedModule (module_spec,
+                                                           process,
                                                            module_sp,
                                                            module_search_paths_ptr,
                                                            old_module_sp_ptr,
@@ -632,6 +682,7 @@ PlatformWindows::GetSharedModule (const ModuleSpec &module_spec,
     {
         // Fall back to the local platform and find the file locally
         error = Platform::GetSharedModule (module_spec,
+                                           process,
                                            module_sp,
                                            module_search_paths_ptr,
                                            old_module_sp_ptr,
@@ -672,4 +723,23 @@ PlatformWindows::GetStatus (Stream &strm)
          << '.' << minor
          << " Build: " << update << '\n';
 #endif
+}
+
+bool
+PlatformWindows::CanDebugProcess()
+{
+    return true;
+}
+
+size_t
+PlatformWindows::GetEnvironment(StringList &env)
+{
+    if (IsRemote())
+    {
+        if (m_remote_platform_sp)
+            return m_remote_platform_sp->GetEnvironment(env);
+        return 0;
+    }
+
+    return Host::GetEnvironment(env);
 }

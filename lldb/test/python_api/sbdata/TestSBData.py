@@ -11,7 +11,7 @@ class SBDataAPICase(TestBase):
 
     mydir = TestBase.compute_mydir(__file__)
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @python_api_test
     @dsym_test
     def test_with_dsym_and_run_command(self):
@@ -51,7 +51,7 @@ class SBDataAPICase(TestBase):
         
         lldbutil.run_break_set_by_file_and_line (self, "main.cpp", self.line, num_expected_locations=1, loc_exact=True)
         
-        self.runCmd("run", RUN_SUCCEEDED)
+        self.runCmd("run", RUN_FAILED)
         
         # The stop reason of the thread should be breakpoint.
         self.expect("thread list", STOPPED_DUE_TO_BREAKPOINT,
@@ -205,10 +205,6 @@ class SBDataAPICase(TestBase):
         if self.TraceOn():
             print new_object
         
-        self.assertTrue(new_object.GetLoadAddress() == 0xFFFFFFFFFFFFFFFF, 'GetLoadAddress() == invalid')
-        self.assertTrue(new_object.AddressOf().IsValid() == False, 'AddressOf() == invalid')
-        self.assertTrue(new_object.GetAddress().IsValid() == False, 'GetAddress() == invalid')
-
         self.assertTrue(new_object.GetValue() == "1", 'new_object == 1')
 
         data.SetData(error, 'A\0\0\0', data.GetByteOrder(), data.GetAddressByteSize())

@@ -19,12 +19,10 @@
 #define LLD_READER_WRITER_PE_COFF_LOAD_CONFIG_PASS_H
 
 #include "Atoms.h"
-
 #include "lld/Core/File.h"
 #include "lld/Core/Pass.h"
 #include "lld/Core/Simple.h"
 #include "lld/ReaderWriter/PECOFFLinkingContext.h"
-
 #include <map>
 
 namespace lld {
@@ -41,7 +39,7 @@ public:
   ContentPermissions permissions() const override { return permR__; }
 
   template <typename T> T *getContents() const {
-    return (T *)rawContent().data();
+    return (T *)const_cast<uint8_t *>(rawContent().data());
   }
 };
 
@@ -51,7 +49,7 @@ class LoadConfigPass : public lld::Pass {
 public:
   LoadConfigPass(PECOFFLinkingContext &ctx) : _ctx(ctx), _file(ctx) {}
 
-  void perform(std::unique_ptr<MutableFile> &file) override;
+  std::error_code perform(SimpleFile &file) override;
 
 private:
   PECOFFLinkingContext &_ctx;

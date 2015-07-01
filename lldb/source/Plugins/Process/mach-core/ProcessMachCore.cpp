@@ -13,8 +13,10 @@
 
 // C++ Includes
 #include "llvm/Support/MathExtras.h"
+#include <mutex>
 
 // Other libraries and framework includes
+#include "lldb/Core/DataBuffer.h"
 #include "lldb/Core/Debugger.h"
 #include "lldb/Core/PluginManager.h"
 #include "lldb/Core/Module.h"
@@ -95,7 +97,11 @@ ProcessMachCore::CanDebug(Target &target, bool plugin_specified_by_name)
     // For now we are just making sure the file exists for a given module
     if (!m_core_module_sp && m_core_file.Exists())
     {
-        ModuleSpec core_module_spec(m_core_file, target.GetArchitecture());
+        // Don't add the Target's architecture to the ModuleSpec - we may be working
+        // with a core file that doesn't have the correct cpusubtype in the header
+        // but we should still try to use it - ModuleSpecList::FindMatchingModuleSpec
+        // enforces a strict arch mach.
+        ModuleSpec core_module_spec(m_core_file);
         Error error (ModuleList::GetSharedModule (core_module_spec, 
                                                   m_core_module_sp, 
                                                   NULL,
@@ -104,13 +110,9 @@ ProcessMachCore::CanDebug(Target &target, bool plugin_specified_by_name)
 
         if (m_core_module_sp)
         {
-            const llvm::Triple &triple_ref = m_core_module_sp->GetArchitecture().GetTriple();
-            if (triple_ref.getVendor() == llvm::Triple::Apple)
-            {
-                ObjectFile *core_objfile = m_core_module_sp->GetObjectFile();
-                if (core_objfile && core_objfile->GetType() == ObjectFile::eTypeCoreFile)
-                    return true;
-            }
+            ObjectFile *core_objfile = m_core_module_sp->GetObjectFile();
+            if (core_objfile && core_objfile->GetType() == ObjectFile::eTypeCoreFile)
+                return true;
         }
     }
     return false;
@@ -307,10 +309,14 @@ ProcessMachCore::DoLoadCore ()
         // We need to locate the main executable in the memory ranges
         // we have in the core file.  We need to search for both a user-process dyld binary
         // and a kernel binary in memory; we must look at all the pages in the binary so
-        // we don't miss one or the other.  If we find a user-process dyld binary, stop
-        // searching -- that's the one we'll prefer over the mach kernel.
+        // we don't miss one or the other.  Step through all memory segments searching for
+        // a kernel binary and for a user process dyld -- we'll decide which to prefer 
+        // later if both are present.
+
         const size_t num_core_aranges = m_core_aranges.GetSize();
-        for (size_t i=0; i<num_core_aranges && m_dyld_addr == LLDB_INVALID_ADDRESS; ++i)
+        for (size_t i = 0; 
+             i < num_core_aranges && (m_dyld_addr == LLDB_INVALID_ADDRESS || m_mach_kernel_addr == LLDB_INVALID_ADDRESS); 
+             ++i)
         {
             const VMRangeToFileOffset::Entry *entry = m_core_aranges.GetEntryAtIndex(i);
             lldb::addr_t section_vm_addr_start = entry->GetRangeBase();
@@ -393,7 +399,7 @@ ProcessMachCore::UpdateThreadList (ThreadList &old_thread_list, ThreadList &new_
     {
         const uint32_t num_threads = old_thread_list.GetSize(false);
         for (uint32_t i=0; i<num_threads; ++i)
-            new_thread_list.AddThread (old_thread_list.GetThreadAtIndex (i));
+            new_thread_list.AddThread (old_thread_list.GetThreadAtIndex (i, false));
     }
     return new_thread_list.GetSize(false) > 0;
 }
@@ -474,15 +480,13 @@ ProcessMachCore::Clear()
 void
 ProcessMachCore::Initialize()
 {
-    static bool g_initialized = false;
-    
-    if (g_initialized == false)
-    {
-        g_initialized = true;
+    static std::once_flag g_once_flag;
+
+    std::call_once(g_once_flag, []() {
         PluginManager::RegisterPlugin (GetPluginNameStatic(),
                                        GetPluginDescriptionStatic(),
-                                       CreateInstance);        
-    }
+                                       CreateInstance);
+    });
 }
 
 addr_t

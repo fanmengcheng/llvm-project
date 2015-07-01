@@ -14,6 +14,7 @@
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/MachineInstr.h"
+#include "llvm/Support/Debug.h"
 #include <map>
 #include <vector>
 
@@ -81,6 +82,55 @@ public:
   unsigned getNextScratchIdx(unsigned StartIdx = 0) const;
 };
 
+/// MI-level Statepoint operands
+///
+/// Statepoint operands take the form:
+///   <id>, <num patch bytes >, <num call arguments>, <call target>,
+///   [call arguments], <StackMaps::ConstantOp>, <calling convention>,
+///   <StackMaps::ConstantOp>, <statepoint flags>,
+///   <StackMaps::ConstantOp>, <num other args>, [other args],
+///   [gc values]
+class StatepointOpers {
+private:
+  // These values are aboolute offsets into the operands of the statepoint
+  // instruction.
+  enum { IDPos, NBytesPos, NCallArgsPos, CallTargetPos, MetaEnd };
+
+  // These values are relative offests from the start of the statepoint meta
+  // arguments (i.e. the end of the call arguments).
+  enum {
+    CCOffset = 1,
+    FlagsOffset = 3,
+    NumVMSArgsOffset = 5
+  };
+
+public:
+  explicit StatepointOpers(const MachineInstr *MI):
+    MI(MI) { }
+
+  /// Get starting index of non call related arguments
+  /// (calling convention, statepoint flags, vm state and gc state).
+  unsigned getVarIdx() const {
+    return MI->getOperand(NCallArgsPos).getImm() + MetaEnd;
+  }
+
+  /// Return the ID for the given statepoint.
+  uint64_t getID() const { return MI->getOperand(IDPos).getImm(); }
+
+  /// Return the number of patchable bytes the given statepoint should emit.
+  uint32_t getNumPatchBytes() const {
+    return MI->getOperand(NBytesPos).getImm();
+  }
+
+  /// Returns the target of the underlying call.
+  const MachineOperand &getCallTarget() const {
+    return MI->getOperand(CallTargetPos);
+  }
+
+private:
+  const MachineInstr *MI;
+};
+
 class StackMaps {
 public:
   struct Location {
@@ -118,6 +168,12 @@ public:
 
   StackMaps(AsmPrinter &AP);
 
+  void reset() {
+    CSInfos.clear();
+    ConstPool.clear();
+    FnStackSize.clear();
+  }
+
   /// \brief Generate a stackmap record for a stackmap instruction.
   ///
   /// MI must be a raw STACKMAP, not a PATCHPOINT.
@@ -126,6 +182,9 @@ public:
   /// \brief Generate a stackmap record for a patchpoint instruction.
   void recordPatchPoint(const MachineInstr &MI);
 
+  /// \brief Generate a stackmap record for a statepoint instruction.
+  void recordStatepoint(const MachineInstr &MI);
+
   /// If there is any stack map data, create a stack map section and serialize
   /// the map info into it. This clears the stack map data structures
   /// afterwards.
@@ -133,10 +192,9 @@ public:
 
 private:
   static const char *WSMP;
-
   typedef SmallVector<Location, 8> LocationVec;
   typedef SmallVector<LiveOutReg, 8> LiveOutVec;
-  typedef MapVector<int64_t, int64_t> ConstantPool;
+  typedef MapVector<uint64_t, uint64_t> ConstantPool;
   typedef MapVector<const MCSymbol *, uint64_t> FnStackSizeMap;
 
   struct CallsiteInfo {
@@ -146,9 +204,9 @@ private:
     LiveOutVec LiveOuts;
     CallsiteInfo() : CSOffsetExpr(nullptr), ID(0) {}
     CallsiteInfo(const MCExpr *CSOffsetExpr, uint64_t ID,
-                 LocationVec &Locations, LiveOutVec &LiveOuts)
-      : CSOffsetExpr(CSOffsetExpr), ID(ID), Locations(Locations),
-        LiveOuts(LiveOuts) {}
+                 LocationVec &&Locations, LiveOutVec &&LiveOuts)
+      : CSOffsetExpr(CSOffsetExpr), ID(ID), Locations(std::move(Locations)),
+        LiveOuts(std::move(LiveOuts)) {}
   };
 
   typedef std::vector<CallsiteInfo> CallsiteInfoList;
@@ -191,7 +249,10 @@ private:
   void emitConstantPoolEntries(MCStreamer &OS);
 
   /// \brief Emit the callsite info for each stackmap/patchpoint intrinsic call.
-  void emitCallsiteEntries(MCStreamer &OS, const TargetRegisterInfo *TRI);
+  void emitCallsiteEntries(MCStreamer &OS);
+
+  void print(raw_ostream &OS);
+  void debug() { print(dbgs()); }
 };
 
 }

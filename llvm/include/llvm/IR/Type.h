@@ -91,8 +91,8 @@ protected:
       NumContainedTys(0), ContainedTys(nullptr) {
     setTypeID(tid);
   }
-  ~Type() {}
-  
+  ~Type() = default;
+
   void setTypeID(TypeID ID) {
     IDAndSubclassData = (ID & 0xFF) | (IDAndSubclassData & 0xFFFFFF00);
     assert(getTypeID() == ID && "TypeID data too large for field");
@@ -313,6 +313,9 @@ public:
   typedef Type * const *subtype_iterator;
   subtype_iterator subtype_begin() const { return ContainedTys; }
   subtype_iterator subtype_end() const { return &ContainedTys[NumContainedTys];}
+  ArrayRef<Type*> subtypes() const {
+    return makeArrayRef(subtype_begin(), subtype_end());
+  }
 
   typedef std::reverse_iterator<subtype_iterator> subtype_reverse_iterator;
   subtype_reverse_iterator subtype_rbegin() const {
@@ -323,7 +326,7 @@ public:
   }
 
   /// getContainedType - This method is used to implement the type iterator
-  /// (defined a the end of the file).  For derived types, this returns the
+  /// (defined at the end of the file).  For derived types, this returns the
   /// types 'contained' in the derived type.
   ///
   Type *getContainedType(unsigned i) const {
@@ -392,7 +395,8 @@ public:
   static IntegerType *getInt16Ty(LLVMContext &C);
   static IntegerType *getInt32Ty(LLVMContext &C);
   static IntegerType *getInt64Ty(LLVMContext &C);
-
+  static IntegerType *getInt128Ty(LLVMContext &C);
+  
   //===--------------------------------------------------------------------===//
   // Convenience methods for getting pointer types with one of the above builtin
   // types as pointee.

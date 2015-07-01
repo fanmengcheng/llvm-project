@@ -17,17 +17,21 @@
 #include "Plugins/Platform/POSIX/PlatformPOSIX.h"
 
 namespace lldb_private {
+namespace platform_linux {
 
     class PlatformLinux : public PlatformPOSIX
     {
     public:
 
         static void
+        DebuggerInitialize (Debugger &debugger);
+
+        static void
         Initialize ();
 
         static void
         Terminate ();
-        
+
         PlatformLinux (bool is_host);
 
         virtual
@@ -36,18 +40,18 @@ namespace lldb_private {
         //------------------------------------------------------------
         // lldb_private::PluginInterface functions
         //------------------------------------------------------------
-        static Platform *
-        CreateInstance (bool force, const lldb_private::ArchSpec *arch);
+        static lldb::PlatformSP
+        CreateInstance (bool force, const ArchSpec *arch);
 
-        static lldb_private::ConstString
+        static ConstString
         GetPluginNameStatic (bool is_host);
 
         static const char *
         GetPluginDescriptionStatic (bool is_host);
 
-        lldb_private::ConstString
+        ConstString
         GetPluginName() override;
-        
+
         uint32_t
         GetPluginVersion() override
         {
@@ -58,8 +62,7 @@ namespace lldb_private {
         // lldb_private::Platform functions
         //------------------------------------------------------------
         Error
-        ResolveExecutable (const FileSpec &exe_file,
-                           const ArchSpec &arch,
+        ResolveExecutable (const ModuleSpec &module_spec,
                            lldb::ModuleSP &module_sp,
                            const FileSpecList *module_search_paths_ptr) override;
 
@@ -79,22 +82,28 @@ namespace lldb_private {
         bool
         GetProcessInfo (lldb::pid_t pid, ProcessInstanceInfo &proc_info) override;
 
+        uint32_t
+        FindProcesses (const ProcessInstanceInfoMatch &match_info,
+                       ProcessInstanceInfoList &process_infos) override;
+
         bool
         GetSupportedArchitectureAtIndex (uint32_t idx, ArchSpec &arch) override;
 
         size_t
-        GetSoftwareBreakpointTrapOpcode (Target &target, 
+        GetSoftwareBreakpointTrapOpcode (Target &target,
                                          BreakpointSite *bp_site) override;
 
-        lldb_private::Error
-        LaunchProcess (lldb_private::ProcessLaunchInfo &launch_info) override;
-
-        lldb::ProcessSP
-        Attach(ProcessAttachInfo &attach_info, Debugger &debugger,
-               Target *target, Listener &listener, Error &error) override;
+        int32_t
+        GetResumeCountForLaunchInfo (ProcessLaunchInfo &launch_info) override;
 
         bool
         CanDebugProcess () override;
+
+        lldb::ProcessSP
+        DebugProcess (ProcessLaunchInfo &launch_info,
+                      Debugger &debugger,
+                      Target *target,
+                      Error &error) override;
 
         void
         CalculateTrapHandlerSymbolNames () override;
@@ -102,17 +111,22 @@ namespace lldb_private {
         Error
         LaunchNativeProcess (
             ProcessLaunchInfo &launch_info,
-            lldb_private::NativeProcessProtocol::NativeDelegate &native_delegate,
+            NativeProcessProtocol::NativeDelegate &native_delegate,
             NativeProcessProtocolSP &process_sp) override;
 
         Error
         AttachNativeProcess (lldb::pid_t pid,
-                             lldb_private::NativeProcessProtocol::NativeDelegate &native_delegate,
+                             NativeProcessProtocol::NativeDelegate &native_delegate,
                              NativeProcessProtocolSP &process_sp) override;
+
+        uint64_t
+        ConvertMmapFlagsToPlatform(const ArchSpec &arch, unsigned flags) override;
 
     private:
         DISALLOW_COPY_AND_ASSIGN (PlatformLinux);
     };
+
+} // namespace platform_linux
 } // namespace lldb_private
 
 #endif  // liblldb_PlatformLinux_h_

@@ -13,7 +13,7 @@ class Radar10449092DataFormatterTestCase(TestBase):
     # test for rdar://problem/10449092 ()
     mydir = TestBase.compute_mydir(__file__)
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dsym_test
     def test_with_dsym_and_run_command(self):
         """Test data formatter commands."""
@@ -38,7 +38,7 @@ class Radar10449092DataFormatterTestCase(TestBase):
 
         lldbutil.run_break_set_by_file_and_line (self, "main.cpp", self.line, num_expected_locations=1, loc_exact=True)
 
-        self.runCmd("run", RUN_SUCCEEDED)
+        self.runCmd("run", RUN_FAILED)
 
         # The stop reason of the thread should be breakpoint.
         self.expect("thread list", STOPPED_DUE_TO_BREAKPOINT,
@@ -75,12 +75,14 @@ class Radar10449092DataFormatterTestCase(TestBase):
 
         self.runCmd("type summary add -s \"${var.first%X} and ${var.second%X}\" foo")
         self.runCmd("next")
+        self.runCmd("next")
         self.expect('frame variable mine',
                     substrs = ['(foo) mine = 0xAABBCCDD and 0x1122BB44'])
 
         self.runCmd("type summary add -s \"${var.first%x} and ${var.second%X}\" foo")
         self.expect('frame variable mine',
                     substrs = ['(foo) mine = 0xaabbccdd and 0x1122BB44'])
+        self.runCmd("next")
         self.runCmd("next")
         self.runCmd("type summary add -s \"${var.first%x} and ${var.second%x}\" foo")
         self.expect('frame variable mine',

@@ -61,6 +61,13 @@ TEST(AllocatorTest, ThreeSlabs) {
 // again.
 TEST(AllocatorTest, TestReset) {
   BumpPtrAllocator Alloc;
+
+  // Allocate something larger than the SizeThreshold=4096.
+  (void)Alloc.Allocate(5000, 1);
+  Alloc.Reset();
+  // Calling Reset should free all CustomSizedSlabs.
+  EXPECT_EQ(0u, Alloc.GetNumSlabs());
+
   Alloc.Allocate(3000, 1);
   EXPECT_EQ(1U, Alloc.GetNumSlabs());
   Alloc.Allocate(3000, 1);
@@ -115,6 +122,19 @@ TEST(AllocatorTest, TestSmallSlabSize) {
   EXPECT_EQ(1U, Alloc.GetNumSlabs());
 }
 
+// Test requesting alignment that goes past the end of the current slab.
+TEST(AllocatorTest, TestAlignmentPastSlab) {
+  BumpPtrAllocator Alloc;
+  Alloc.Allocate(4095, 1);
+
+  // Aligning the current slab pointer is likely to move it past the end of the
+  // slab, which would confuse any unsigned comparisons with the difference of
+  // the end pointer and the aligned pointer.
+  Alloc.Allocate(1024, 8192);
+
+  EXPECT_EQ(2U, Alloc.GetNumSlabs());
+}
+
 // Mock slab allocator that returns slabs aligned on 4096 bytes.  There is no
 // easy portable way to do this, so this is kind of a hack.
 class MockSlabAllocator {
@@ -130,7 +150,7 @@ public:
     void *MemBase = malloc(Size + Alignment - 1 + sizeof(void*));
 
     // Find the slab start.
-    void *Slab = alignPtr((char *)MemBase + sizeof(void *), Alignment);
+    void *Slab = (void *)alignAddr((char*)MemBase + sizeof(void *), Alignment);
 
     // Hold a pointer to the base so we can free the whole malloced block.
     ((void**)Slab)[-1] = MemBase;

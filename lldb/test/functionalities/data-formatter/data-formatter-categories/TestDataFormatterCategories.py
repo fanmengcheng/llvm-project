@@ -12,7 +12,7 @@ class CategoriesDataFormatterTestCase(TestBase):
 
     mydir = TestBase.compute_mydir(__file__)
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dsym_test
     def test_with_dsym_and_run_command(self):
         """Test data formatter commands."""
@@ -37,7 +37,7 @@ class CategoriesDataFormatterTestCase(TestBase):
 
         lldbutil.run_break_set_by_file_and_line (self, "main.cpp", self.line, num_expected_locations=1, loc_exact=True)
 
-        self.runCmd("run", RUN_SUCCEEDED)
+        self.runCmd("run", RUN_FAILED)
 
         # The stop reason of the thread should be breakpoint.
         self.expect("thread list", STOPPED_DUE_TO_BREAKPOINT,
@@ -156,11 +156,15 @@ class CategoriesDataFormatterTestCase(TestBase):
         # Now add another summary to another category and switch back and forth
         self.runCmd("type category delete Category1 Category2")
 
-        self.runCmd("type summary add Rectangle --summary-string \"Category1\" -w Category1")
-        self.runCmd("type summary add Rectangle --summary-string \"Category2\" -w Category2")
+        self.runCmd("type summary add Rectangle -w Category1 --summary-string \"Category1\"")
+        self.runCmd("type summary add Rectangle -w Category2 --summary-string \"Category2\"")
+
+        self.runCmd("type category list")
 
         self.runCmd("type category enable Category2")
         self.runCmd("type category enable Category1")
+        
+        self.runCmd("type summary list -w Category1")
         
         self.expect("frame variable r1 r2 r3",
                 substrs = ['r1 = Category1',
@@ -191,8 +195,8 @@ class CategoriesDataFormatterTestCase(TestBase):
                                'r3 = {'])
 
         # Check that multiple summaries can go into one category 
-        self.runCmd("type summary add --summary-string \"Width = ${var.w}, Height = ${var.h}\" Rectangle -w Category1")
-        self.runCmd("type summary add --summary-string \"Radius = ${var.r}\" Circle -w Category1")
+        self.runCmd("type summary add -w Category1 --summary-string \"Width = ${var.w}, Height = ${var.h}\" Rectangle")
+        self.runCmd("type summary add -w Category1 --summary-string \"Radius = ${var.r}\" Circle")
         
         self.runCmd("type category enable Category1")
 
@@ -214,7 +218,7 @@ class CategoriesDataFormatterTestCase(TestBase):
                                'c3 = {'])
 
         # Add a regex based summary to a category
-        self.runCmd("type summary add --summary-string \"Radius = ${var.r}\" -x Circle -w Category1")
+        self.runCmd("type summary add -w Category1 --summary-string \"Radius = ${var.r}\" -x Circle")
 
         self.expect("frame variable r1 r2 r3",
                     substrs = ['r1 = Width = ',
@@ -317,7 +321,7 @@ class CategoriesDataFormatterTestCase(TestBase):
         # check that filters work into categories
         self.runCmd("type filter add Rectangle --child w --category RectangleCategory")
         self.runCmd("type category enable RectangleCategory")
-        self.runCmd("type summary add Rectangle --summary-string \" \" -e --category RectangleCategory")
+        self.runCmd("type summary add Rectangle --category RectangleCategory --summary-string \" \" -e")
         self.expect('frame variable r2',
             substrs = ['w = 9'])
         self.runCmd("type summary add Rectangle --summary-string \" \" -e")

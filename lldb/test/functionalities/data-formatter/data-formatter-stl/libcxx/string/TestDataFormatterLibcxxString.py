@@ -13,14 +13,15 @@ class LibcxxStringDataFormatterTestCase(TestBase):
 
     mydir = TestBase.compute_mydir(__file__)
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dsym_test
     def test_with_dsym_and_run_command(self):
         """Test data formatter commands."""
         self.buildDsym()
         self.data_formatter_commands()
 
-    @skipIfLinux # No standard locations for libc++ on Linux, so skip for now 
+    @skipIfGcc
+    @skipIfWindows # libc++ not ported to Windows yet
     @dwarf_test
     def test_with_dwarf_and_run_command(self):
         """Test data formatter commands."""
@@ -39,7 +40,7 @@ class LibcxxStringDataFormatterTestCase(TestBase):
 
         lldbutil.run_break_set_by_file_and_line (self, "main.cpp", self.line, num_expected_locations=-1)
 
-        self.runCmd("run", RUN_SUCCEEDED)
+        self.runCmd("run", RUN_FAILED)
 
         # The stop reason of the thread should be breakpoint.
         self.expect("thread list", STOPPED_DUE_TO_BREAKPOINT,
@@ -66,6 +67,19 @@ class LibcxxStringDataFormatterTestCase(TestBase):
                     '(std::__1::string) Q = "quite a long std::strin with lots of info inside it"'])
 
         self.runCmd("n")
+
+        TheVeryLongOne = self.frame().FindVariable("TheVeryLongOne");
+        summaryOptions = lldb.SBTypeSummaryOptions()
+        summaryOptions.SetCapping(lldb.eTypeSummaryUncapped)
+        uncappedSummaryStream = lldb.SBStream()
+        TheVeryLongOne.GetSummary(uncappedSummaryStream,summaryOptions)
+        uncappedSummary = uncappedSummaryStream.GetData()
+        self.assertTrue(uncappedSummary.find("someText") > 0, "uncappedSummary does not include the full string")
+        summaryOptions.SetCapping(lldb.eTypeSummaryCapped)
+        cappedSummaryStream = lldb.SBStream()
+        TheVeryLongOne.GetSummary(cappedSummaryStream,summaryOptions)
+        cappedSummary = cappedSummaryStream.GetData()
+        self.assertTrue(cappedSummary.find("someText") <= 0, "cappedSummary includes the full string")
 
         self.expect("frame variable",
                     substrs = ['(std::__1::wstring) s = L"hello world! מזל טוב!"',

@@ -12,12 +12,12 @@ class BlocksTestCase(TestBase):
     lines = []
 
     @dsym_test
-    @unittest2.expectedFailure
+    @unittest2.expectedFailure("rdar://problem/10413887 - Call blocks in expressions")
     def test_expr_with_dsym(self):
         self.buildDsym()
         self.expr()
 
-    @unittest2.expectedFailure
+    @unittest2.expectedFailure("rdar://problem/10413887 - Call blocks in expressions")
     @dwarf_test
     def test_expr_with_dwarf(self):
         self.buildDwarf()
@@ -43,9 +43,9 @@ class BlocksTestCase(TestBase):
     def wait_for_breakpoint(self):
         if self.is_started == False:
             self.is_started = True
-            self.runCmd("process launch", RUN_SUCCEEDED)
+            self.runCmd("process launch", RUN_FAILED)
         else:
-            self.runCmd("process continue", RUN_SUCCEEDED)
+            self.runCmd("process continue", RUN_FAILED)
 
         # The stop reason of the thread should be breakpoint.
         self.expect("thread list", STOPPED_DUE_TO_BREAKPOINT,

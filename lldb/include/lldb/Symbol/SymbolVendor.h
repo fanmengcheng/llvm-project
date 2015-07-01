@@ -66,6 +66,10 @@ public:
     virtual bool
     ParseCompileUnitSupportFiles (const SymbolContext& sc,
                                   FileSpecList& support_files);
+    
+    virtual bool
+    ParseImportedModules (const SymbolContext &sc,
+                          std::vector<ConstString> &imported_modules);
 
     virtual size_t
     ParseFunctionBlocks (const SymbolContext& sc);
@@ -164,6 +168,9 @@ public:
         return m_sym_file_ap.get();
     }
 
+    FileSpec
+    GetMainFileSpec() const;
+
     // Get module unified section list symbol table.
     virtual Symtab *
     GetSymtab ();
@@ -171,6 +178,13 @@ public:
     // Clear module unified section list symbol table.
     virtual void
     ClearSymtab ();
+
+    //------------------------------------------------------------------
+    /// Notify the SymbolVendor that the file addresses in the Sections
+    /// for this module have been changed.
+    //------------------------------------------------------------------
+    virtual void
+    SectionFileAddressesChanged ();
 
     //------------------------------------------------------------------
     // PluginInterface protocol

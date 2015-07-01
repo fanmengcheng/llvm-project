@@ -12,7 +12,7 @@ class DataFormatterDisablingTestCase(TestBase):
 
     mydir = TestBase.compute_mydir(__file__)
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dsym_test
     def test_with_dsym_and_run_command(self):
         """Test data formatter commands."""
@@ -37,7 +37,7 @@ class DataFormatterDisablingTestCase(TestBase):
 
         lldbutil.run_break_set_by_file_and_line (self, "main.cpp", self.line, num_expected_locations=1, loc_exact=True)
 
-        self.runCmd("run", RUN_SUCCEEDED)
+        self.runCmd("run", RUN_FAILED)
 
         # The stop reason of the thread should be breakpoint.
         self.expect("thread list", STOPPED_DUE_TO_BREAKPOINT,
@@ -47,16 +47,7 @@ class DataFormatterDisablingTestCase(TestBase):
         # This is the function to remove the custom formats in order to have a
         # clean slate for the next test case.
         def cleanup():
-             self.runCmd('type category enable default', check=False)
-             self.runCmd('type category enable system', check=False)
-             self.runCmd('type category enable VectorTypes', check=False)
-             self.runCmd('type category enable libcxx', check=False)
-             self.runCmd('type category enable gnu-libstdc++', check=False)
-             self.runCmd('type category enable CoreGraphics', check=False)
-             self.runCmd('type category enable CoreServices', check=False)
-             self.runCmd('type category enable AppKit', check=False)
-             self.runCmd('type category enable CoreFoundation', check=False)
-             self.runCmd('type category enable objc', check=False)
+             self.runCmd('type category enable *', check=False)
 
         # Execute the cleanup function during test case tear down.
         self.addTearDownHook(cleanup)

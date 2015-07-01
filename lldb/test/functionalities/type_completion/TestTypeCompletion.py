@@ -12,7 +12,7 @@ class TypeCompletionTestCase(TestBase):
 
     mydir = TestBase.compute_mydir(__file__)
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dsym_test
     def test_with_dsym_and_run_command(self):
         """Check that types only get completed when necessary."""
@@ -30,16 +30,14 @@ class TypeCompletionTestCase(TestBase):
     def setUp(self):
         # Call super's setUp().
         TestBase.setUp(self)
-        # Find the line number to break at.
-        self.line = line_number('main.cpp', '// Set break point at this line.')
 
     def type_completion_commands(self):
         """Check that types only get completed when necessary."""
         self.runCmd("file a.out", CURRENT_EXECUTABLE_SET)
 
-        lldbutil.run_break_set_by_file_and_line (self, "main.cpp", self.line, num_expected_locations=-1)
+        lldbutil.run_break_set_by_source_regexp (self, "// Set break point at this line.")
 
-        self.runCmd("run", RUN_SUCCEEDED)
+        self.runCmd("run", RUN_FAILED)
 
         # The stop reason of the thread should be breakpoint.
         self.expect("thread list", STOPPED_DUE_TO_BREAKPOINT,
@@ -62,15 +60,13 @@ class TypeCompletionTestCase(TestBase):
         p_type = p_vector.GetType()
         self.assertFalse(p_type.IsTypeComplete(), 'vector<T> complete but it should not be')
 
-        self.runCmd("next")
-        self.runCmd("next")
+        self.runCmd("continue")
 
         p_vector = self.dbg.GetSelectedTarget().GetProcess().GetSelectedThread().GetSelectedFrame().FindVariable('p')
         p_type = p_vector.GetType()
         self.assertFalse(p_type.IsTypeComplete(), 'vector<T> complete but it should not be')
 
-        self.runCmd("next")
-        self.runCmd("next")
+        self.runCmd("continue")
 
         self.runCmd("frame variable p --show-types")
 
@@ -81,8 +77,7 @@ class TypeCompletionTestCase(TestBase):
         self.assertTrue(name_address_type.IsValid(), 'NameAndAddress should be valid')
         self.assertFalse(name_address_type.IsTypeComplete(), 'NameAndAddress complete but it should not be')
 
-        self.runCmd("next")
-        self.runCmd("next")
+        self.runCmd("continue")
 
         self.runCmd("frame variable guy --show-types")
 
@@ -102,8 +97,7 @@ class TypeCompletionTestCase(TestBase):
         self.assertTrue(string.IsValid(), 'std::string should be valid')
         self.assertFalse(string.IsTypeComplete(), 'std::string complete but it should not be')
 
-        self.runCmd("next")
-        self.runCmd("next")
+        self.runCmd("continue")
 
         p_vector = self.dbg.GetSelectedTarget().GetProcess().GetSelectedThread().GetSelectedFrame().FindVariable('p')
         p_type = p_vector.GetType()

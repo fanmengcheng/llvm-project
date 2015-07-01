@@ -190,7 +190,7 @@ supported include:
     for 'a' in 'c.'  This operation is analogous to $(subst) in GNU make.
 
 ``!foreach(a, b, c)``
-    For each member 'b' of dag or list 'a' apply operator 'c.'  'b' is a dummy
+    For each member of dag or list 'b' apply operator 'c.'  'a' is a dummy
     variable that should be declared as a member variable of an instantiated
     class.  This operation is analogous to $(foreach) in GNU make.
 
@@ -211,8 +211,8 @@ supported include:
     on string, int and bit objects.  Use !cast<string> to compare other types of
     objects.
 
-``!shl(a,b)`` ``!srl(a,b)`` ``!sra(a,b)`` ``!add(a,b)``
-    The usual logical and arithmetic operators.
+``!shl(a,b)`` ``!srl(a,b)`` ``!sra(a,b)`` ``!add(a,b)`` ``!and(a,b)``
+    The usual binary and arithmetic operators.
 
 Note that all of the values have rules specifying how they convert to values
 for different types.  These rules allow you to assign a value like "``7``"

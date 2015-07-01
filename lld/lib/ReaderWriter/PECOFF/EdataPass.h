@@ -20,13 +20,11 @@
 #define LLD_READER_WRITER_PE_COFF_EDATA_PASS_H
 
 #include "Atoms.h"
-
 #include "lld/Core/File.h"
 #include "lld/Core/Pass.h"
 #include "lld/Core/Simple.h"
 #include "lld/ReaderWriter/PECOFFLinkingContext.h"
 #include "llvm/Support/COFF.h"
-
 #include <map>
 
 using llvm::COFF::ImportDirectoryTableEntry;
@@ -57,7 +55,7 @@ public:
   ContentPermissions permissions() const override { return permR__; }
 
   template <typename T> T *getContents() const {
-    return (T *)rawContent().data();
+    return (T *)const_cast<uint8_t *>(rawContent().data());
   }
 };
 
@@ -66,9 +64,9 @@ public:
 class EdataPass : public lld::Pass {
 public:
   EdataPass(PECOFFLinkingContext &ctx)
-      : _ctx(ctx), _file(ctx), _stringOrdinal(1024) {}
+      : _ctx(ctx), _file(ctx), _is64(ctx.is64Bit()), _stringOrdinal(1024) {}
 
-  void perform(std::unique_ptr<MutableFile> &file) override;
+  std::error_code perform(SimpleFile &file) override;
 
 private:
   edata::EdataAtom *
@@ -82,7 +80,7 @@ private:
   edata::EdataAtom *
   createNamePointerTable(const PECOFFLinkingContext &ctx,
                          const std::vector<edata::TableEntry> &entries,
-                         MutableFile *file);
+                         SimpleFile *file);
 
   edata::EdataAtom *
   createOrdinalTable(const std::vector<edata::TableEntry> &entries,
@@ -90,6 +88,7 @@ private:
 
   PECOFFLinkingContext &_ctx;
   VirtualFile _file;
+  bool _is64;
   int _stringOrdinal;
   mutable llvm::BumpPtrAllocator _alloc;
 };

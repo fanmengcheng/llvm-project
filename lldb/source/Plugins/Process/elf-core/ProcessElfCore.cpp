@@ -10,6 +10,9 @@
 // C Includes
 #include <stdlib.h>
 
+// C++ Includes
+#include <mutex>
+
 // Other libraries and framework includes
 #include "lldb/Core/PluginManager.h"
 #include "lldb/Core/Module.h"
@@ -20,12 +23,14 @@
 #include "lldb/Core/Log.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Target/DynamicLoader.h"
+#include "lldb/Target/UnixSignals.h"
 
 #include "llvm/Support/ELF.h"
 
 #include "Plugins/ObjectFile/ELF/ObjectFileELF.h"
 #include "Plugins/DynamicLoader/POSIX-DYLD/DynamicLoaderPOSIXDYLD.h"
 #include "Plugins/Process/Utility/FreeBSDSignals.h"
+#include "Plugins/Process/Utility/LinuxSignals.h"
 
 // Project includes
 #include "ProcessElfCore.h"
@@ -108,7 +113,6 @@ ProcessElfCore::ProcessElfCore(Target& target, Listener &listener,
     m_core_file (core_file),
     m_dyld_plugin_name (),
     m_os(llvm::Triple::UnknownOS),
-    m_signals_sp (),
     m_thread_data_valid(false),
     m_thread_data(),
     m_core_aranges ()
@@ -190,7 +194,7 @@ ProcessElfCore::DoLoadCore ()
     const uint32_t num_segments = core->GetProgramHeaderCount();
     if (num_segments == 0)
     {
-        error.SetErrorString ("core file has no sections");
+        error.SetErrorString ("core file has no segments");
         return error;
     }
 
@@ -236,8 +240,17 @@ ProcessElfCore::DoLoadCore ()
     switch (m_os)
     {
         case llvm::Triple::FreeBSD:
-            m_signals_sp.reset(new FreeBSDSignals());
+        {
+            static UnixSignalsSP s_freebsd_signals_sp(new FreeBSDSignals ());
+            SetUnixSignals(s_freebsd_signals_sp);
             break;
+        }
+        case llvm::Triple::Linux:
+        {
+            static UnixSignalsSP s_linux_signals_sp(new process_linux::LinuxSignals ());
+            SetUnixSignals(s_linux_signals_sp);
+            break;
+        }
         default:
             break;
     }
@@ -356,19 +369,21 @@ ProcessElfCore::Clear()
 {
     m_thread_list.Clear();
     m_os = llvm::Triple::UnknownOS;
-    m_signals_sp.reset();
+
+    static UnixSignalsSP s_default_unix_signals_sp(new UnixSignals());
+    SetUnixSignals(s_default_unix_signals_sp);
 }
 
 void
 ProcessElfCore::Initialize()
 {
-    static bool g_initialized = false;
+    static std::once_flag g_once_flag;
 
-    if (g_initialized == false)
+    std::call_once(g_once_flag, []()
     {
-        g_initialized = true;
-        PluginManager::RegisterPlugin (GetPluginNameStatic(), GetPluginDescriptionStatic(), CreateInstance);
-    }
+        PluginManager::RegisterPlugin (GetPluginNameStatic(),
+          GetPluginDescriptionStatic(), CreateInstance);
+    });
 }
 
 lldb::addr_t
@@ -393,13 +408,18 @@ enum {
     NT_AUXV
 };
 
+namespace FREEBSD {
+
 enum {
-    NT_FREEBSD_PRSTATUS      = 1,
-    NT_FREEBSD_FPREGSET,
-    NT_FREEBSD_PRPSINFO,
-    NT_FREEBSD_THRMISC       = 7,
-    NT_FREEBSD_PROCSTAT_AUXV = 16
+    NT_PRSTATUS      = 1,
+    NT_FPREGSET,
+    NT_PRPSINFO,
+    NT_THRMISC       = 7,
+    NT_PROCSTAT_AUXV = 16,
+    NT_PPC_VMX       = 0x100
 };
+
+}
 
 // Parse a FreeBSD NT_PRSTATUS note - see FreeBSD sys/procfs.h for details.
 static void
@@ -407,7 +427,9 @@ ParseFreeBSDPrStatus(ThreadData &thread_data, DataExtractor &data,
                      ArchSpec &arch)
 {
     lldb::offset_t offset = 0;
-    bool lp64 = (arch.GetMachine() == llvm::Triple::mips64 ||
+    bool lp64 = (arch.GetMachine() == llvm::Triple::aarch64 ||
+                 arch.GetMachine() == llvm::Triple::mips64 ||
+                 arch.GetMachine() == llvm::Triple::ppc64 ||
                  arch.GetMachine() == llvm::Triple::x86_64);
     int pr_version = data.GetU32(&offset);
 
@@ -504,22 +526,25 @@ ProcessElfCore::ParseThreadContextsFromNoteSegment(const elf::ELFProgramHeader *
             m_os = llvm::Triple::FreeBSD;
             switch (note.n_type)
             {
-                case NT_FREEBSD_PRSTATUS:
+                case FREEBSD::NT_PRSTATUS:
                     have_prstatus = true;
                     ParseFreeBSDPrStatus(*thread_data, note_data, arch);
                     break;
-                case NT_FREEBSD_FPREGSET:
+                case FREEBSD::NT_FPREGSET:
                     thread_data->fpregset = note_data;
                     break;
-                case NT_FREEBSD_PRPSINFO:
+                case FREEBSD::NT_PRPSINFO:
                     have_prpsinfo = true;
                     break;
-                case NT_FREEBSD_THRMISC:
+                case FREEBSD::NT_THRMISC:
                     ParseFreeBSDThrMisc(*thread_data, note_data);
                     break;
-                case NT_FREEBSD_PROCSTAT_AUXV:
+                case FREEBSD::NT_PROCSTAT_AUXV:
                     // FIXME: FreeBSD sticks an int at the beginning of the note
                     m_auxv = DataExtractor(segment_data, note_start + 4, note_size - 4);
+                    break;
+                case FREEBSD::NT_PPC_VMX:
+                    thread_data->vregset = note_data;
                     break;
                 default:
                     break;
@@ -587,4 +612,3 @@ ProcessElfCore::GetAuxvData()
     lldb::DataBufferSP buffer(new lldb_private::DataBufferHeap(start, len));
     return buffer;
 }
-

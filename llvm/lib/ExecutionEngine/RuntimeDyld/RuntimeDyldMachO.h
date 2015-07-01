@@ -14,7 +14,6 @@
 #ifndef LLVM_LIB_EXECUTIONENGINE_RUNTIMEDYLD_RUNTIMEDYLDMACHO_H
 #define LLVM_LIB_EXECUTIONENGINE_RUNTIMEDYLD_RUNTIMEDYLDMACHO_H
 
-#include "ObjectImageCommon.h"
 #include "RuntimeDyldImpl.h"
 #include "llvm/Object/MachO.h"
 #include "llvm/Support/Format.h"
@@ -50,7 +49,9 @@ protected:
   // EH frame sections with the memory manager.
   SmallVector<EHFrameRelatedSections, 2> UnregisteredEHFrameSections;
 
-  RuntimeDyldMachO(RTDyldMemoryManager *mm) : RuntimeDyldImpl(mm) {}
+  RuntimeDyldMachO(RuntimeDyld::MemoryManager &MemMgr,
+                   RuntimeDyld::SymbolResolver &Resolver)
+      : RuntimeDyldImpl(MemMgr, Resolver) {}
 
   /// This convenience method uses memcpy to extract a contiguous addend (the
   /// addend size and offset are taken from the corresponding fields of the RE).
@@ -61,17 +62,17 @@ protected:
   /// filled in, since immediate encodings are highly target/opcode specific.
   /// For targets/opcodes with simple, contiguous immediates (e.g. X86) the
   /// memcpyAddend method can be used to read the immediate.
-  RelocationEntry getRelocationEntry(unsigned SectionID, ObjectImage &ObjImg,
+  RelocationEntry getRelocationEntry(unsigned SectionID,
+                                     const ObjectFile &BaseTObj,
                                      const relocation_iterator &RI) const {
     const MachOObjectFile &Obj =
-      static_cast<const MachOObjectFile &>(*ObjImg.getObjectFile());
+      static_cast<const MachOObjectFile &>(BaseTObj);
     MachO::any_relocation_info RelInfo =
       Obj.getRelocation(RI->getRawDataRefImpl());
 
     bool IsPCRel = Obj.getAnyRelocationPCRel(RelInfo);
     unsigned Size = Obj.getAnyRelocationLength(RelInfo);
-    uint64_t Offset;
-    RI->getOffset(Offset);
+    uint64_t Offset = RI->getOffset();
     MachO::RelocationInfoType RelType =
       static_cast<MachO::RelocationInfoType>(Obj.getAnyRelocationType(RelInfo));
 
@@ -87,45 +88,44 @@ protected:
   /// In both cases the Addend field is *NOT* fixed up to be PC-relative. That
   /// should be done by the caller where appropriate by calling makePCRel on
   /// the RelocationValueRef.
-  RelocationValueRef getRelocationValueRef(ObjectImage &ObjImg,
+  RelocationValueRef getRelocationValueRef(const ObjectFile &BaseTObj,
                                            const relocation_iterator &RI,
                                            const RelocationEntry &RE,
-                                           ObjSectionToIDMap &ObjSectionToID,
-                                           const SymbolTableMap &Symbols);
+                                           ObjSectionToIDMap &ObjSectionToID);
 
   /// Make the RelocationValueRef addend PC-relative.
-  void makeValueAddendPCRel(RelocationValueRef &Value, ObjectImage &ObjImg,
+  void makeValueAddendPCRel(RelocationValueRef &Value,
+                            const ObjectFile &BaseTObj,
                             const relocation_iterator &RI,
                             unsigned OffsetToNextPC);
 
   /// Dump information about the relocation entry (RE) and resolved value.
   void dumpRelocationToResolve(const RelocationEntry &RE, uint64_t Value) const;
 
-public:
-  /// Create an ObjectImage from the given ObjectBuffer.
-  static ObjectImage *createObjectImage(ObjectBuffer *InputBuffer) {
-    return new ObjectImageCommon(InputBuffer);
-  }
+  // Return a section iterator for the section containing the given address.
+  static section_iterator getSectionByAddress(const MachOObjectFile &Obj,
+                                              uint64_t Addr);
 
-  /// Create an ObjectImage from the given ObjectFile.
-  static ObjectImage *
-  createObjectImageFromFile(std::unique_ptr<object::ObjectFile> InputObject) {
-    return new ObjectImageCommon(std::move(InputObject));
-  }
+
+  // Populate __pointers section.
+  void populateIndirectSymbolPointersSection(const MachOObjectFile &Obj,
+                                             const SectionRef &PTSection,
+                                             unsigned PTSectionID);
+
+public:
 
   /// Create a RuntimeDyldMachO instance for the given target architecture.
-  static std::unique_ptr<RuntimeDyldMachO> create(Triple::ArchType Arch,
-                                                  RTDyldMemoryManager *mm);
+  static std::unique_ptr<RuntimeDyldMachO>
+  create(Triple::ArchType Arch,
+         RuntimeDyld::MemoryManager &MemMgr,
+         RuntimeDyld::SymbolResolver &Resolver);
 
-  /// Write the least significant 'Size' bytes in 'Value' out at the address
-  /// pointed to by Addr. Check for overflow.
-  bool writeBytesUnaligned(uint8_t *Dst, uint64_t Value, unsigned Size);
+  std::unique_ptr<RuntimeDyld::LoadedObjectInfo>
+  loadObject(const object::ObjectFile &O) override;
 
   SectionEntry &getSection(unsigned SectionID) { return Sections[SectionID]; }
 
-  bool isCompatibleFormat(const ObjectBuffer *Buffer) const override;
-  bool isCompatibleFile(const object::ObjectFile *Obj) const override;
-  void registerEHFrames() override;
+  bool isCompatibleFile(const object::ObjectFile &Obj) const override;
 };
 
 /// RuntimeDyldMachOTarget - Templated base class for generic MachO linker
@@ -141,31 +141,17 @@ private:
   Impl &impl() { return static_cast<Impl &>(*this); }
   const Impl &impl() const { return static_cast<const Impl &>(*this); }
 
+  unsigned char *processFDE(unsigned char *P, int64_t DeltaForText,
+                            int64_t DeltaForEH);
+
 public:
-  RuntimeDyldMachOCRTPBase(RTDyldMemoryManager *mm) : RuntimeDyldMachO(mm) {}
+  RuntimeDyldMachOCRTPBase(RuntimeDyld::MemoryManager &MemMgr,
+                           RuntimeDyld::SymbolResolver &Resolver)
+    : RuntimeDyldMachO(MemMgr, Resolver) {}
 
-  void finalizeLoad(ObjectImage &ObjImg, ObjSectionToIDMap &SectionMap) {
-    unsigned EHFrameSID = RTDYLD_INVALID_SECTION_ID;
-    unsigned TextSID = RTDYLD_INVALID_SECTION_ID;
-    unsigned ExceptTabSID = RTDYLD_INVALID_SECTION_ID;
-    ObjSectionToIDMap::iterator i, e;
-
-    for (i = SectionMap.begin(), e = SectionMap.end(); i != e; ++i) {
-      const SectionRef &Section = i->first;
-      StringRef Name;
-      Section.getName(Name);
-      if (Name == "__eh_frame")
-        EHFrameSID = i->second;
-      else if (Name == "__text")
-        TextSID = i->second;
-      else if (Name == "__gcc_except_tab")
-        ExceptTabSID = i->second;
-      else
-        impl().finalizeSection(ObjImg, i->second, Section);
-    }
-    UnregisteredEHFrameSections.push_back(
-        EHFrameRelatedSections(EHFrameSID, TextSID, ExceptTabSID));
-  }
+  void finalizeLoad(const ObjectFile &Obj,
+                    ObjSectionToIDMap &SectionMap) override;
+  void registerEHFrames() override;
 };
 
 } // end namespace llvm

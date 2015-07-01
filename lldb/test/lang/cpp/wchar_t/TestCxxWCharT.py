@@ -13,7 +13,7 @@ class CxxWCharTTestCase(TestBase):
 
     mydir = TestBase.compute_mydir(__file__)
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dsym_test
     def test_with_dsym(self):
         """Test that C++ supports wchar_t correctly."""
@@ -67,12 +67,17 @@ class CxxWCharTTestCase(TestBase):
             substrs = ['(int) foo_x.object = '])
 
         # Check that we can run expressions that return wchar_t
-        self.expect("expression L'a'",substrs = ['(wchar_t) $',"61 L'a'"])
+        self.expect("expression L'a'",substrs = ['(wchar_t) $',"L'a'"])
 
         # Mazel Tov if this works!
         self.expect("frame variable mazeltov",
             substrs = ['(const wchar_t *) mazeltov = ','L"מזל טוב"'])
 
+        self.expect("frame variable ws_NULL",substrs = ['(wchar_t *) ws_NULL = 0x0'])
+        self.expect("frame variable ws_empty",substrs = [' L""'])
+
+        self.expect("frame variable array",substrs = ['L"Hey, I\'m a super wchar_t string'])
+        self.expect("frame variable array",substrs = ['[0]'], matching=False)
 
 if __name__ == '__main__':
     import atexit

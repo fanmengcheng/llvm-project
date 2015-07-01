@@ -12,20 +12,16 @@ class StdMapDataFormatterTestCase(TestBase):
 
     mydir = TestBase.compute_mydir(__file__)
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dsym_test
-    @expectedFailureDarwin("llvm.org/pr20263")
     def test_with_dsym_and_run_command(self):
         """Test data formatter commands."""
         self.buildDsym()
         self.data_formatter_commands()
 
-    @expectedFailureClang # llvm.org/pr15301: LLDB prints incorrect size of
-                          # libstdc++ containers
-    @skipIfGcc # llvm.org/pr15036: When built with GCC, this test causes lldb to crash with
-               # assert DeclCXX.h:554 queried property of class with no definition
     @expectedFailureIcc   # llvm.org/pr15301: LLDB prints incorrect size of
                           # libstdc++ containers
+    @skipIfFreeBSD
     @dwarf_test
     def test_with_dwarf_and_run_command(self):
         """Test data formatter commands."""
@@ -44,7 +40,7 @@ class StdMapDataFormatterTestCase(TestBase):
 
         lldbutil.run_break_set_by_source_regexp (self, "Set break point at this line.")
 
-        self.runCmd("run", RUN_SUCCEEDED)
+        self.runCmd("run", RUN_FAILED)
 
         # The stop reason of the thread should be breakpoint.
         self.expect("thread list", STOPPED_DUE_TO_BREAKPOINT,

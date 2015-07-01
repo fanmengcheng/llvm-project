@@ -36,7 +36,7 @@ namespace lldb_private {
         //------------------------------------------------------------
         // lldb_private::PluginInterface functions
         //------------------------------------------------------------
-        static Platform *
+        static lldb::PlatformSP
         CreateInstance (bool force, const lldb_private::ArchSpec *arch);
 
         static lldb_private::ConstString
@@ -45,11 +45,10 @@ namespace lldb_private {
         static const char *
         GetPluginDescriptionStatic (bool is_host);
 
-        virtual lldb_private::ConstString
-        GetPluginName();
-        
-        virtual uint32_t
-        GetPluginVersion()
+        lldb_private::ConstString GetPluginName() override;
+
+        uint32_t
+        GetPluginVersion() override
         {
             return 1;
         }
@@ -57,51 +56,38 @@ namespace lldb_private {
         //------------------------------------------------------------
         // lldb_private::Platform functions
         //------------------------------------------------------------
-        virtual Error
-        ResolveExecutable (const FileSpec &exe_file,
-                           const ArchSpec &arch,
-                           lldb::ModuleSP &module_sp,
-                           const FileSpecList *module_search_paths_ptr);
+        Error ResolveExecutable(const lldb_private::ModuleSpec &module_spec, lldb::ModuleSP &module_sp,
+                                const FileSpecList *module_search_paths_ptr) override;
 
-        virtual const char *
-        GetDescription ()
+        const char *
+        GetDescription() override
         {
             return GetPluginDescriptionStatic(IsHost());
         }
 
-        virtual void
-        GetStatus (Stream &strm);
+        void GetStatus(Stream &strm) override;
 
-        virtual Error
-        GetFileWithUUID (const FileSpec &platform_file,
-                         const UUID* uuid, FileSpec &local_file);
+        Error GetFileWithUUID(const FileSpec &platform_file, const UUID *uuid, FileSpec &local_file) override;
 
-        virtual bool
-        GetProcessInfo (lldb::pid_t pid, ProcessInstanceInfo &proc_info);
+        bool GetProcessInfo(lldb::pid_t pid, ProcessInstanceInfo &proc_info) override;
 
-        virtual bool
-        GetSupportedArchitectureAtIndex (uint32_t idx, ArchSpec &arch);
+        bool GetSupportedArchitectureAtIndex(uint32_t idx, ArchSpec &arch) override;
 
-        virtual size_t
-        GetSoftwareBreakpointTrapOpcode (Target &target, 
-                                         BreakpointSite *bp_site);
+        size_t GetSoftwareBreakpointTrapOpcode(Target &target, BreakpointSite *bp_site) override;
 
-        virtual lldb_private::Error
-        LaunchProcess (lldb_private::ProcessLaunchInfo &launch_info);
+        lldb_private::Error LaunchProcess(lldb_private::ProcessLaunchInfo &launch_info) override;
 
-        virtual lldb::ProcessSP
-        Attach(ProcessAttachInfo &attach_info, Debugger &debugger,
-               Target *target, Listener &listener, Error &error);
+        lldb::ProcessSP Attach(ProcessAttachInfo &attach_info, Debugger &debugger, Target *target,
+                               Error &error) override;
 
         // Kalimba processes can not be launched by spawning and attaching.
-        virtual bool
-        CanDebugProcess ()
+        bool
+        CanDebugProcess() override
         {
             return false;
         }
 
-        virtual void
-        CalculateTrapHandlerSymbolNames ();
+        void CalculateTrapHandlerSymbolNames() override;
 
         Error
         LaunchNativeProcess (

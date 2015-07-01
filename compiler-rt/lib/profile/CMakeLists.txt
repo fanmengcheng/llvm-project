@@ -11,19 +11,15 @@ set(PROFILE_SOURCES
 
 if(APPLE)
   add_compiler_rt_osx_static_runtime(clang_rt.profile_osx
-    ARCH ${PROFILE_SUPPORTED_ARCH}
+    ARCHS ${PROFILE_SUPPORTED_ARCH}
     SOURCES ${PROFILE_SOURCES})
   add_dependencies(profile clang_rt.profile_osx)
 else()
   foreach(arch ${PROFILE_SUPPORTED_ARCH})
     add_compiler_rt_runtime(clang_rt.profile-${arch} ${arch} STATIC
-      SOURCES ${PROFILE_SOURCES})
-    add_dependencies(profile clang_rt.profile-${arch})
-
-    add_compiler_rt_runtime(clang_rt.profile-pic-${arch} ${arch} STATIC
       CFLAGS -fPIC
       SOURCES ${PROFILE_SOURCES})
-    add_dependencies(profile clang_rt.profile-pic-${arch})
+    add_dependencies(profile clang_rt.profile-${arch})
   endforeach()
 endif()
 

@@ -11,7 +11,7 @@ class StopHookMechanismTestCase(TestBase):
 
     mydir = TestBase.compute_mydir(__file__)
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dsym_test
     def test_with_dsym(self):
         """Test the stop-hook mechanism."""
@@ -19,7 +19,8 @@ class StopHookMechanismTestCase(TestBase):
         self.stop_hook_firing()
 
     @skipIfFreeBSD # llvm.org/pr15037
-    @expectedFailureLinux('llvm.org/pr15037') # stop-hooks sometimes fail to fire on Linux
+    @expectedFlakeyLinux('llvm.org/pr15037') # stop-hooks sometimes fail to fire on Linux
+    @expectedFailureWindows("llvm.org/pr22274: need a pexpect replacement for windows")
     @dwarf_test
     def test_with_dwarf(self):
         """Test the stop-hook mechanism."""
@@ -40,11 +41,11 @@ class StopHookMechanismTestCase(TestBase):
         import pexpect
         exe = os.path.join(os.getcwd(), "a.out")
         prompt = "(lldb) "
-        add_prompt = "Enter your stop hook command(s).  Type 'DONE' to end.\r\n> "
-        add_prompt1 = "\r\n> "
+        add_prompt = "Enter your stop hook command(s).  Type 'DONE' to end."
+        add_prompt1 = "> "
 
         # So that the child gets torn down after the test.
-        self.child = pexpect.spawn('%s %s %s' % (self.lldbHere, self.lldbOption, exe))
+        self.child = pexpect.spawn('%s %s %s' % (lldbtest_config.lldbExec, self.lldbOption, exe))
         child = self.child
         # Turn on logging for what the child sends back.
         if self.TraceOn():
@@ -58,15 +59,18 @@ class StopHookMechanismTestCase(TestBase):
         child.expect_exact(prompt)
         child.sendline('target stop-hook add -f main.cpp -l %d -e %d' % (self.begl, self.endl))
         child.expect_exact(add_prompt)
+        child.expect_exact(add_prompt1)
         child.sendline('expr ptr')
         child.expect_exact(add_prompt1)
         child.sendline('DONE')
         child.expect_exact(prompt)
         child.sendline('target stop-hook list')
 
-        # Now run the program, expect to stop at the the first breakpoint which is within the stop-hook range.
+        # Now run the program, expect to stop at the first breakpoint which is within the stop-hook range.
         child.expect_exact(prompt)
         child.sendline('run')
+        # Make sure we see the stop hook text from the stop of the process from the run hitting the first breakpoint
+        child.expect_exact('(void *) $')
         child.expect_exact(prompt)
         child.sendline('thread step-over')
         # Expecting to find the output emitted by the firing of our stop hook.
@@ -77,7 +81,9 @@ class StopHookMechanismTestCase(TestBase):
         # I fixed that in lldb and I'm sticking in a test here because I don't want to have to
         # make up a whole nother test case for it.
         child.sendline('frame info')
-        child.expect_exact('at main.cpp:%d'%self.correct_step_line)
+        at_line = 'at main.cpp:%d' % (self.correct_step_line)
+        print 'expecting "%s"' % at_line
+        child.expect_exact(at_line)
 
         # Now continue the inferior, we'll stop at another breakpoint which is outside the stop-hook range.
         child.sendline('process continue')

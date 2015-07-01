@@ -16,7 +16,6 @@
 
 #include "lld/Core/LLVM.h"
 #include "lld/Driver/Driver.h"
-
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/Signals.h"
@@ -33,5 +32,6 @@ int main(int argc, const char *argv[]) {
   llvm::PrettyStackTraceProgram stackPrinter(argc, argv);
   llvm::llvm_shutdown_obj shutdown;
 
-  return UniversalDriver::link(argc, argv) ? 0 : 1;
+  return !UniversalDriver::link(
+             llvm::MutableArrayRef<const char *>(argv, argc));
 }

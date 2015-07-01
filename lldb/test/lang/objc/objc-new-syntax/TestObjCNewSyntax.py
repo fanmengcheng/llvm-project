@@ -14,15 +14,17 @@ class ObjCNewSyntaxTestCase(TestBase):
 
     mydir = TestBase.compute_mydir(__file__)
 
+    @skipUnlessDarwin
     @dsym_test
-    @unittest2.expectedFailure
+    @expectedFailureDarwin # expr -- @((char*)"Hello world" + 6) cannot box a string value because NSString has not been declared
     def test_expr_with_dsym(self):
         self.buildDsym()
         self.expr()
 
     @dwarf_test
+    @skipIfFreeBSD
     @skipIfLinux
-    @unittest2.expectedFailure
+    @expectedFailureDarwin # expr -- @((char*)"Hello world" + 6) cannot box a string value because NSString has not been declared
     def test_expr_with_dwarf(self):
         self.buildDwarf()
         self.expr()
@@ -48,7 +50,7 @@ class ObjCNewSyntaxTestCase(TestBase):
         # Break inside the foo function which takes a bar_ptr argument.
         lldbutil.run_break_set_by_file_and_line (self, "main.m", self.line, num_expected_locations=1, loc_exact=True)
 
-        self.runCmd("run", RUN_SUCCEEDED)
+        self.runCmd("run", RUN_FAILED)
 
         # The stop reason of the thread should be breakpoint.
         self.expect("thread list", STOPPED_DUE_TO_BREAKPOINT,
@@ -93,34 +95,32 @@ class ObjCNewSyntaxTestCase(TestBase):
             substrs = ["NSArray", "foo", "bar"])
 
         self.expect("expr --object-description -- @{ @\"key\" : @\"object\" }", VARIABLES_DISPLAYED_CORRECTLY,
-            substrs = ["NSDictionary", "key", "object"])
+            substrs = ["key", "object"])
 
         self.expect("expr --object-description -- @'a'", VARIABLES_DISPLAYED_CORRECTLY,
-            substrs = ["NSNumber", str(ord('a'))])
+            substrs = [str(ord('a'))])
 
         self.expect("expr --object-description -- @1", VARIABLES_DISPLAYED_CORRECTLY,
-            substrs = ["NSNumber", "1"])
+            substrs = ["1"])
 
         self.expect("expr --object-description -- @1l", VARIABLES_DISPLAYED_CORRECTLY,
-            substrs = ["NSNumber", "1"])
+            substrs = ["1"])
 
         self.expect("expr --object-description -- @1ul", VARIABLES_DISPLAYED_CORRECTLY,
-            substrs = ["NSNumber", "1"])
+            substrs = ["1"])
 
         self.expect("expr --object-description -- @1ll", VARIABLES_DISPLAYED_CORRECTLY,
-            substrs = ["NSNumber", "1"])
+            substrs = ["1"])
 
         self.expect("expr --object-description -- @1ull", VARIABLES_DISPLAYED_CORRECTLY,
-            substrs = ["NSNumber", "1"])
+            substrs = ["1"])
 
-        self.expect("expr --object-description -- @123.45", VARIABLES_DISPLAYED_CORRECTLY,
-            substrs = ["NSNumber", "123.45"])
-        self.expect("expr --object-description -- @123.45f", VARIABLES_DISPLAYED_CORRECTLY,
+        self.expect("expr -- @123.45", VARIABLES_DISPLAYED_CORRECTLY,
             substrs = ["NSNumber", "123.45"])
 
         self.expect("expr --object-description -- @( 1 + 3 )", VARIABLES_DISPLAYED_CORRECTLY,
-            substrs = ["NSNumber", "4"])
-        self.expect("expr --object-description -- @(\"Hello world\" + 6)", VARIABLES_DISPLAYED_CORRECTLY,
+            substrs = ["4"])
+        self.expect("expr -- @((char*)\"Hello world\" + 6)", VARIABLES_DISPLAYED_CORRECTLY,
             substrs = ["NSString", "world"])
 
             

@@ -18,8 +18,8 @@ public:
   TransformA(const TransformOptions &Options)
       : Transform("TransformA", Options) {}
 
-  virtual int apply(const tooling::CompilationDatabase &,
-                    const std::vector<std::string> &) {
+  int apply(const tooling::CompilationDatabase &,
+            const std::vector<std::string> &) override {
     return 0;
   }
 
@@ -33,8 +33,8 @@ public:
   TransformB(const TransformOptions &Options)
       : Transform("TransformB", Options) {}
 
-  virtual int apply(const tooling::CompilationDatabase &,
-                    const std::vector<std::string> &) {
+  int apply(const tooling::CompilationDatabase &,
+            const std::vector<std::string> &) override {
     return 0;
   }
 
@@ -56,7 +56,7 @@ TEST(PerfSupport, collectSourcePerfData) {
   TransformOptions Options;
   TransformA A(Options);
   TransformB B(Options);
-  
+
   // The actual durations don't matter. Below only their relative ordering is
   // tested to ensure times, labels, and sources all stay together properly.
   A.addTiming("FileA.cpp", TimeRecord::getCurrentTime(/*Start=*/true));

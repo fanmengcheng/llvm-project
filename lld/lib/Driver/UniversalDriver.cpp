@@ -15,9 +15,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "lld/Driver/Driver.h"
-
+#include "lld/Config/Version.h"
 #include "lld/Core/LLVM.h"
-
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringSwitch.h"
@@ -69,10 +68,11 @@ public:
 
 enum class Flavor {
   invalid,
-  gnu_ld,       // -flavor gnu
-  win_link,     // -flavor link
-  darwin_ld,    // -flavor darwin
-  core          // -flavor core OR -core
+  gnu_ld,    // -flavor gnu
+  win_link,  // -flavor link
+  win_link2, // -flavor link2
+  darwin_ld, // -flavor darwin
+  core       // -flavor core OR -core
 };
 
 struct ProgramNameParts {
@@ -87,9 +87,11 @@ static Flavor strToFlavor(StringRef str) {
       .Case("gnu", Flavor::gnu_ld)
       .Case("link", Flavor::win_link)
       .Case("lld-link", Flavor::win_link)
+      .Case("link2", Flavor::win_link2)
+      .Case("lld-link2", Flavor::win_link2)
       .Case("darwin", Flavor::darwin_ld)
       .Case("core", Flavor::core)
-      .Case("ld", Flavor::gnu_ld) // deprecated
+      .Case("ld", Flavor::gnu_ld)
       .Default(Flavor::invalid);
 }
 
@@ -107,7 +109,7 @@ static ProgramNameParts parseProgramName(StringRef programName) {
 
   // Find the flavor component.
   auto flIter = std::find_if(components.begin(), components.end(),
-                             [](StringRef str)->bool {
+                             [](StringRef str) -> bool {
     return strToFlavor(str) != Flavor::invalid;
   });
 
@@ -123,59 +125,91 @@ static ProgramNameParts parseProgramName(StringRef programName) {
   return ret;
 }
 
+// Removes the argument from argv along with its value, if exists, and updates
+// argc.
+static void removeArg(llvm::opt::Arg *arg,
+                      llvm::MutableArrayRef<const char *> &args) {
+  unsigned int numToRemove = arg->getNumValues() + 1;
+  auto sub = args.slice(arg->getIndex() + 1);
+  std::rotate(sub.begin(), sub.begin() + numToRemove, sub.end());
+  args = args.drop_back(numToRemove);
+}
+
+static Flavor getFlavor(llvm::MutableArrayRef<const char *> &args,
+                        const llvm::opt::InputArgList &parsedArgs) {
+  if (llvm::opt::Arg *argCore = parsedArgs.getLastArg(OPT_core)) {
+    removeArg(argCore, args);
+    return Flavor::core;
+  }
+  if (llvm::opt::Arg *argFlavor = parsedArgs.getLastArg(OPT_flavor)) {
+    removeArg(argFlavor, args);
+    return strToFlavor(argFlavor->getValue());
+  }
+
+#if LLVM_ON_UNIX
+  if (llvm::sys::path::filename(args[0]).equals("ld")) {
+#if __APPLE__
+    // On a Darwin systems, if linker binary is named "ld", use Darwin driver.
+    return Flavor::darwin_ld;
+#endif
+    // On a ELF based systems, if linker binary is named "ld", use gnu driver.
+    return Flavor::gnu_ld;
+  }
+#endif
+
+  StringRef name = llvm::sys::path::stem(args[0]);
+  return strToFlavor(parseProgramName(name)._flavor);
+}
+
 namespace lld {
 
-bool UniversalDriver::link(int argc, const char *argv[],
+bool UniversalDriver::link(llvm::MutableArrayRef<const char *> args,
                            raw_ostream &diagnostics) {
   // Parse command line options using GnuLdOptions.td
-  std::unique_ptr<llvm::opt::InputArgList> parsedArgs;
   UniversalDriverOptTable table;
   unsigned missingIndex;
   unsigned missingCount;
 
   // Program name
-  StringRef programName = llvm::sys::path::stem(argv[0]);
+  StringRef programName = llvm::sys::path::stem(args[0]);
 
-  parsedArgs.reset(
-      table.ParseArgs(&argv[1], &argv[argc], missingIndex, missingCount));
+  llvm::opt::InputArgList parsedArgs =
+      table.ParseArgs(args.slice(1), missingIndex, missingCount);
 
   if (missingCount) {
     diagnostics << "error: missing arg value for '"
-                << parsedArgs->getArgString(missingIndex) << "' expected "
+                << parsedArgs.getArgString(missingIndex) << "' expected "
                 << missingCount << " argument(s).\n";
     return false;
   }
 
-  // Handle --help
-  if (parsedArgs->getLastArg(OPT_help)) {
-    table.PrintHelp(llvm::outs(), argv[0], "LLVM Linker", false);
+  // Handle -help
+  if (parsedArgs.getLastArg(OPT_help)) {
+    table.PrintHelp(llvm::outs(), programName.data(), "LLVM Linker", false);
     return true;
   }
 
-  Flavor flavor;
+  // Handle -version
+  if (parsedArgs.getLastArg(OPT_version)) {
+    diagnostics << "LLVM Linker Version: " << getLLDVersion()
+                << getLLDRepositoryVersion() << "\n";
+    return true;
+  }
 
-  if (parsedArgs->getLastArg(OPT_core)) {
-    flavor = Flavor::core;
-    argv++;
-    argc--;
-  } else if (llvm::opt::Arg *argFlavor = parsedArgs->getLastArg(OPT_flavor)) {
-    flavor = strToFlavor(argFlavor->getValue());
-    argv += 2;
-    argc -= 2;
-  } else
-    flavor = strToFlavor(parseProgramName(programName)._flavor);
+  Flavor flavor = getFlavor(args, parsedArgs);
 
-  std::vector<const char *> args(argv, argv + argc);
   // Switch to appropriate driver.
   switch (flavor) {
   case Flavor::gnu_ld:
-    return GnuLdDriver::linkELF(args.size(), args.data(), diagnostics);
+    return GnuLdDriver::linkELF(args, diagnostics);
   case Flavor::darwin_ld:
-    return DarwinLdDriver::linkMachO(args.size(), args.data(), diagnostics);
+    return DarwinLdDriver::linkMachO(args, diagnostics);
   case Flavor::win_link:
-    return WinLinkDriver::linkPECOFF(args.size(), args.data(), diagnostics);
+    return WinLinkDriver::linkPECOFF(args, diagnostics);
+  case Flavor::win_link2:
+    return coff::link(args);
   case Flavor::core:
-    return CoreDriver::link(args.size(), args.data(), diagnostics);
+    return CoreDriver::link(args, diagnostics);
   case Flavor::invalid:
     diagnostics << "Select the appropriate flavor\n";
     table.PrintHelp(llvm::outs(), programName.data(), "LLVM Linker", false);

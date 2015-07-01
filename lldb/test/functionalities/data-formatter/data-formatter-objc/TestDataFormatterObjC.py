@@ -14,16 +14,14 @@ class ObjCDataFormatterTestCase(TestBase):
 
     mydir = TestBase.compute_mydir(__file__)
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
-    @expectedFailureDarwin("llvm.org/pr20260")
+    @skipUnlessDarwin
     @dsym_test
     def test_plain_objc_with_dsym_and_run_command(self):
         """Test basic ObjC formatting behavior."""
         self.buildDsym()
         self.plain_data_formatter_commands()
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
-    @expectedFailureDarwin("llvm.org/pr20260")
+    @skipUnlessDarwin
     @dwarf_test
     def test_plain_objc_with_dwarf_and_run_command(self):
         """Test basic ObjC formatting behavior."""
@@ -35,186 +33,186 @@ class ObjCDataFormatterTestCase(TestBase):
         self.appkit_common_data_formatters_command()
         commands()
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dsym_test
     def test_nsnumber_with_dsym_and_run_command(self):
         """Test formatters for NSNumber."""
         self.appkit_tester_impl(self.buildDsym,self.nsnumber_data_formatter_commands)
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dwarf_test
     def test_nsnumber_with_dwarf_and_run_command(self):
         """Test formatters for NSNumber."""
         self.appkit_tester_impl(self.buildDwarf,self.nsnumber_data_formatter_commands)
 
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dsym_test
     def test_nsstring_with_dsym_and_run_command(self):
         """Test formatters for NSString."""
         self.appkit_tester_impl(self.buildDsym,self.nsstring_data_formatter_commands)
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dwarf_test
     def test_nsstring_with_dwarf_and_run_command(self):
         """Test formatters for NSString."""
         self.appkit_tester_impl(self.buildDwarf,self.nsstring_data_formatter_commands)
 
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dsym_test
     def test_nscontainers_with_dsym_and_run_command(self):
         """Test formatters for NS container classes."""
         self.appkit_tester_impl(self.buildDsym,self.nscontainers_data_formatter_commands)
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dwarf_test
     def test_nscontainers_with_dwarf_and_run_command(self):
         """Test formatters for  NS container classes."""
         self.appkit_tester_impl(self.buildDwarf,self.nscontainers_data_formatter_commands)
 
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dsym_test
     def test_nsdata_with_dsym_and_run_command(self):
         """Test formatters for NSData."""
         self.appkit_tester_impl(self.buildDsym,self.nsdata_data_formatter_commands)
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dwarf_test
     def test_nsdata_with_dwarf_and_run_command(self):
         """Test formatters for  NSData."""
         self.appkit_tester_impl(self.buildDwarf,self.nsdata_data_formatter_commands)
 
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dsym_test
     def test_nsurl_with_dsym_and_run_command(self):
         """Test formatters for NSURL."""
         self.appkit_tester_impl(self.buildDsym,self.nsurl_data_formatter_commands)
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dwarf_test
     def test_nsurl_with_dwarf_and_run_command(self):
         """Test formatters for NSURL."""
         self.appkit_tester_impl(self.buildDwarf,self.nsurl_data_formatter_commands)
 
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dsym_test
     def test_nserror_with_dsym_and_run_command(self):
         """Test formatters for NSError."""
         self.appkit_tester_impl(self.buildDsym,self.nserror_data_formatter_commands)
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dwarf_test
     def test_nserror_with_dwarf_and_run_command(self):
         """Test formatters for NSError."""
         self.appkit_tester_impl(self.buildDwarf,self.nserror_data_formatter_commands)
 
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dsym_test
     def test_nsbundle_with_dsym_and_run_command(self):
         """Test formatters for NSBundle."""
         self.appkit_tester_impl(self.buildDsym,self.nsbundle_data_formatter_commands)
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dwarf_test
     def test_nsbundle_with_dwarf_and_run_command(self):
         """Test formatters for NSBundle."""
         self.appkit_tester_impl(self.buildDwarf,self.nsbundle_data_formatter_commands)
 
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dsym_test
     def test_nsexception_with_dsym_and_run_command(self):
         """Test formatters for NSException."""
         self.appkit_tester_impl(self.buildDsym,self.nsexception_data_formatter_commands)
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dwarf_test
     def test_nsexception_with_dwarf_and_run_command(self):
         """Test formatters for NSException."""
         self.appkit_tester_impl(self.buildDwarf,self.nsexception_data_formatter_commands)
 
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dsym_test
     def test_nsmisc_with_dsym_and_run_command(self):
         """Test formatters for misc NS classes."""
         self.appkit_tester_impl(self.buildDsym,self.nsmisc_data_formatter_commands)
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dwarf_test
     def test_nsmisc_with_dwarf_and_run_command(self):
         """Test formatters for misc NS classes."""
         self.appkit_tester_impl(self.buildDwarf,self.nsmisc_data_formatter_commands)
 
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dsym_test
     def test_nsdate_with_dsym_and_run_command(self):
         """Test formatters for NSDate."""
         self.appkit_tester_impl(self.buildDsym,self.nsdate_data_formatter_commands)
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dwarf_test
     def test_nsdate_with_dwarf_and_run_command(self):
         """Test formatters for NSDate."""
         self.appkit_tester_impl(self.buildDwarf,self.nsdate_data_formatter_commands)
 
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dsym_test
     def test_coreframeworks_with_dsym_and_run_command(self):
         """Test formatters for Core OSX frameworks."""
         self.buildDsym()
         self.cf_data_formatter_commands()
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dwarf_test
     def test_coreframeworks_with_dwarf_and_run_command(self):
         """Test formatters for Core OSX frameworks."""
         self.buildDwarf()
         self.cf_data_formatter_commands()
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dsym_test
     def test_kvo_with_dsym_and_run_command(self):
         """Test the behavior of formatters when KVO is in use."""
         self.buildDsym()
         self.kvo_data_formatter_commands()
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dwarf_test
     def test_kvo_with_dwarf_and_run_command(self):
         """Test the behavior of formatters when KVO is in use."""
         self.buildDwarf()
         self.kvo_data_formatter_commands()
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dsym_test
     def test_rdar11106605_with_dsym_and_run_command(self):
         """Check that Unicode characters come out of CFString summary correctly."""
         self.buildDsym()
         self.rdar11106605_commands()
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dwarf_test
     def test_rdar11106605_with_dwarf_and_run_command(self):
         """Check that Unicode characters come out of CFString summary correctly."""
         self.buildDwarf()
         self.rdar11106605_commands()
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dsym_test
     def test_expr_with_dsym_and_run_command(self):
         """Test common cases of expression parser <--> formatters interaction."""
         self.buildDsym()
         self.expr_objc_data_formatter_commands()
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dwarf_test
     def test_expr_with_dwarf_and_run_command(self):
         """Test common cases of expression parser <--> formatters interaction."""
@@ -233,7 +231,7 @@ class ObjCDataFormatterTestCase(TestBase):
 
         lldbutil.run_break_set_by_file_and_line (self, "main.m", self.line, num_expected_locations=1, loc_exact=True)
 
-        self.runCmd("run", RUN_SUCCEEDED)
+        self.runCmd("run", RUN_FAILED)
 
         # The stop reason of the thread should be breakpoint.
         self.expect("thread list", STOPPED_DUE_TO_BREAKPOINT,
@@ -264,7 +262,7 @@ class ObjCDataFormatterTestCase(TestBase):
 
         lldbutil.run_break_set_by_file_and_line (self, "main.m", self.line, num_expected_locations=1, loc_exact=True)
 
-        self.runCmd("run", RUN_SUCCEEDED)
+        self.runCmd("run", RUN_FAILED)
 
         # The stop reason of the thread should be breakpoint.
         self.expect("thread list", STOPPED_DUE_TO_BREAKPOINT,
@@ -315,7 +313,7 @@ class ObjCDataFormatterTestCase(TestBase):
         self.expect('frame variable myclass',
                     substrs = ['(Class) myclass = NSValue'])
         self.expect('frame variable myclass2',
-                    substrs = ['(Class) myclass2 = NS','String'])
+                    substrs = ['(Class) myclass2 = ','NS','String'])
         self.expect('frame variable myclass3',
                     substrs = ['(Class) myclass3 = Molecule'])
         self.expect('frame variable myclass4',
@@ -329,7 +327,7 @@ class ObjCDataFormatterTestCase(TestBase):
 
         lldbutil.run_break_set_by_file_and_line (self, "main.m", self.line, num_expected_locations=1, loc_exact=True)
 
-        self.runCmd("run", RUN_SUCCEEDED)
+        self.runCmd("run", RUN_FAILED)
 
         # The stop reason of the thread should be breakpoint.
         self.expect("thread list", STOPPED_DUE_TO_BREAKPOINT,
@@ -474,7 +472,7 @@ class ObjCDataFormatterTestCase(TestBase):
 
     def nsdate_data_formatter_commands(self):
         self.expect('frame variable date1 date2',
-                    substrs = ['1985-04','2011-01'])
+                    patterns = ['(1985-04-10|1985-04-11)','(2011-01-01|2010-12-31)'])
 
         # this test might fail if we hit the breakpoint late on December 31st of some given year
         # and midnight comes between hitting the breakpoint and running this line of code
@@ -510,7 +508,7 @@ class ObjCDataFormatterTestCase(TestBase):
 
         lldbutil.run_break_set_by_file_and_line (self, "main.m", self.line, num_expected_locations=1, loc_exact=True)
 
-        self.runCmd("run", RUN_SUCCEEDED)
+        self.runCmd("run", RUN_FAILED)
 
         # The stop reason of the thread should be breakpoint.
         self.expect("thread list", STOPPED_DUE_TO_BREAKPOINT,
@@ -553,7 +551,7 @@ class ObjCDataFormatterTestCase(TestBase):
 
         lldbutil.run_break_set_by_file_and_line (self, "main.m", self.line, num_expected_locations=1, loc_exact=True)
 
-        self.runCmd("run", RUN_SUCCEEDED)
+        self.runCmd("run", RUN_FAILED)
 
         # The stop reason of the thread should be breakpoint.
         self.expect("thread list", STOPPED_DUE_TO_BREAKPOINT,
@@ -576,16 +574,14 @@ class ObjCDataFormatterTestCase(TestBase):
         self.runCmd("log timers enable")
         expect_strings = ['(CFGregorianUnits) cf_greg_units = 1 years, 3 months, 5 days, 12 hours, 5 minutes 7 seconds',
          '(CFRange) cf_range = location=4 length=4',
-         '(NSPoint) ns_point = (x=4, y=4)',
+         '(NSPoint) ns_point = (x = 4, y = 4)',
          '(NSRange) ns_range = location=4, length=4',
-         '(NSRect *) ns_rect_ptr = (x=1, y=1), (width=5, height=5)',
-         '(NSRect) ns_rect = (x=1, y=1), (width=5, height=5)',
-         '(NSRectArray) ns_rect_arr = ((x=1, y=1), (width=5, height=5)), ...',
-         '(NSSize) ns_size = (width=5, height=7)',
-         '(NSSize *) ns_size_ptr = (width=5, height=7)',
-         '(CGSize) cg_size = (width=1, height=6)',
-         '(CGPoint) cg_point = (x=2, y=7)',
-         '(CGRect) cg_rect = origin=(x=1, y=2) size=(width=7, height=7)',
+         '(NSRect) ns_rect = (origin = (x = 1, y = 1), size = (width = 5, height = 5))',
+         '(NSRectArray) ns_rect_arr = ((x = 1, y = 1), (width = 5, height = 5)), ...',
+         '(NSSize) ns_size = (width = 5, height = 7)',
+         '(CGSize) cg_size = (width = 1, height = 6)',
+         '(CGPoint) cg_point = (x = 2, y = 7)',
+         '(CGRect) cg_rect = (origin = (x = 1, y = 2), size = (width = 7, height = 7))',
          '(Rect) rect = (t=4, l=8, b=4, r=7)',
          '(Rect *) rect_ptr = (t=4, l=8, b=4, r=7)',
          '(Point) point = (v=7, h=12)',
@@ -596,7 +592,7 @@ class ObjCDataFormatterTestCase(TestBase):
          
         if self.getArchitecture() in ['i386', 'x86_64']:
             expect_strings.append('(HIPoint) hi_point = (x=7, y=12)')
-            expect_strings.append('(HIRect) hi_rect = origin=(x=3, y=5) size=(width=4, height=6)')
+            expect_strings.append('(HIRect) hi_rect = origin=(x = 3, y = 5) size=(width = 4, height = 6)')
             expect_strings.append('(RGBColor) rgb_color = red=3 green=56 blue=35')
             expect_strings.append('(RGBColor *) rgb_color_ptr = red=3 green=56 blue=35')
             
@@ -611,7 +607,7 @@ class ObjCDataFormatterTestCase(TestBase):
 
         lldbutil.run_break_set_by_file_and_line (self, "main.m", self.line, num_expected_locations=1, loc_exact=True)
 
-        self.runCmd("run", RUN_SUCCEEDED)
+        self.runCmd("run", RUN_FAILED)
 
         # The stop reason of the thread should be breakpoint.
         self.expect("thread list", STOPPED_DUE_TO_BREAKPOINT,

@@ -102,6 +102,10 @@ private:
   /// registers are created.
   void MRI_NoteNewVirtualRegister(unsigned VReg) override;
 
+  /// \brief Check if MachineOperand \p MO is a last use/kill either in the
+  /// main live range of \p LI or in one of the matching subregister ranges.
+  bool useIsKill(const LiveInterval &LI, const MachineOperand &MO) const;
+
 public:
   /// Create a LiveRangeEdit for breaking down parent into smaller pieces.
   /// @param parent The register being spilled or split.
@@ -116,13 +120,13 @@ public:
                 MachineFunction &MF, LiveIntervals &lis, VirtRegMap *vrm,
                 Delegate *delegate = nullptr)
       : Parent(parent), NewRegs(newRegs), MRI(MF.getRegInfo()), LIS(lis),
-        VRM(vrm), TII(*MF.getTarget().getSubtargetImpl()->getInstrInfo()),
+        VRM(vrm), TII(*MF.getSubtarget().getInstrInfo()),
         TheDelegate(delegate), FirstNew(newRegs.size()),
         ScannedRemattable(false) {
     MRI.setDelegate(this);
   }
 
-  ~LiveRangeEdit() { MRI.resetDelegate(this); }
+  ~LiveRangeEdit() override { MRI.resetDelegate(this); }
 
   LiveInterval &getParent() const {
    assert(Parent && "No parent LiveInterval");

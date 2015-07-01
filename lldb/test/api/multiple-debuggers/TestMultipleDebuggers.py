@@ -14,22 +14,24 @@ class TestMultipleSimultaneousDebuggers(TestBase):
     def setUp(self):
         TestBase.setUp(self)
         self.lib_dir = os.environ["LLDB_LIB_DIR"]
+        self.implib_dir = os.environ["LLDB_IMPLIB_DIR"]
 
     @skipIfi386
+    @skipIfNoSBHeaders
     @expectedFailureDarwin("llvm.org/pr20282") # intermittent
     @expectedFailureFreeBSD("llvm.org/pr20282")
     @expectedFailureLinux("llvm.org/pr20282")
     def test_multiple_debuggers(self):
+        env = {self.dylibPath : self.getLLDBLibraryEnvVal()}
 
         self.driver_exe = os.path.join(os.getcwd(), "multi-process-driver")
         self.buildDriver('multi-process-driver.cpp', self.driver_exe)
         self.addTearDownHook(lambda: os.remove(self.driver_exe))
+        self.signBinary(self.driver_exe)
 
         self.inferior_exe = os.path.join(os.getcwd(), "testprog")
         self.buildDriver('testprog.cpp', self.inferior_exe)
         self.addTearDownHook(lambda: os.remove(self.inferior_exe))
-
-        env = {self.dylibPath : self.getLLDBLibraryEnvVal()}
 
 # check_call will raise a CalledProcessError if multi-process-driver doesn't return
 # exit code 0 to indicate success.  We can let this exception go - the test harness

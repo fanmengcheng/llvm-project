@@ -1,4 +1,4 @@
-//===- lib/ReaderWriter/ELF/Mips/MipsTargetHandler.cpp --------------------===//
+//===- lib/ReaderWriter/ELF/Mips/MipsTargetHandler32EL.cpp ----------------===//
 //
 //                             The LLVM Linker
 //
@@ -7,31 +7,45 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "ELFFile.h"
-#include "MipsLinkingContext.h"
+#include "ELFReader.h"
+#include "MipsELFFile.h"
+#include "MipsELFWriters.h"
 #include "MipsTargetHandler.h"
-#include "MipsExecutableWriter.h"
-#include "MipsDynamicLibraryWriter.h"
 
-using namespace lld;
-using namespace elf;
+namespace lld {
+namespace elf {
 
-typedef llvm::object::ELFType<llvm::support::little, 2, false> Mips32ElELFType;
+template <class ELFT>
+MipsTargetHandler<ELFT>::MipsTargetHandler(MipsLinkingContext &ctx)
+    : _ctx(ctx), _targetLayout(new MipsTargetLayout<ELFT>(ctx, _abiInfoHandler)),
+      _relocationHandler(
+          createMipsRelocationHandler<ELFT>(ctx, *_targetLayout)) {}
 
-MipsTargetHandler::MipsTargetHandler(MipsLinkingContext &ctx)
-    : DefaultTargetHandler(ctx), _ctx(ctx),
-      _runtimeFile(new MipsRuntimeFile<Mips32ElELFType>(ctx)),
-      _targetLayout(new MipsTargetLayout<Mips32ElELFType>(ctx)),
-      _relocationHandler(new MipsTargetRelocationHandler(*_targetLayout)) {}
+template <class ELFT>
+std::unique_ptr<Reader> MipsTargetHandler<ELFT>::getObjReader() {
+  return llvm::make_unique<ELFReader<MipsELFFile<ELFT>>>(_ctx);
+}
 
-std::unique_ptr<Writer> MipsTargetHandler::getWriter() {
+template <class ELFT>
+std::unique_ptr<Reader> MipsTargetHandler<ELFT>::getDSOReader() {
+  return llvm::make_unique<ELFReader<DynamicFile<ELFT>>>(_ctx);
+}
+
+template <class ELFT>
+const TargetRelocationHandler &
+MipsTargetHandler<ELFT>::getRelocationHandler() const {
+  return *_relocationHandler;
+}
+
+template <class ELFT>
+std::unique_ptr<Writer> MipsTargetHandler<ELFT>::getWriter() {
   switch (_ctx.getOutputELFType()) {
   case llvm::ELF::ET_EXEC:
-    return std::unique_ptr<Writer>(
-        new MipsExecutableWriter<Mips32ElELFType>(_ctx, *_targetLayout));
+    return llvm::make_unique<MipsExecutableWriter<ELFT>>(_ctx, *_targetLayout,
+                                                         _abiInfoHandler);
   case llvm::ELF::ET_DYN:
-    return std::unique_ptr<Writer>(
-        new MipsDynamicLibraryWriter<Mips32ElELFType>(_ctx, *_targetLayout));
+    return llvm::make_unique<MipsDynamicLibraryWriter<ELFT>>(
+        _ctx, *_targetLayout, _abiInfoHandler);
   case llvm::ELF::ET_REL:
     llvm_unreachable("TODO: support -r mode");
   default:
@@ -39,40 +53,104 @@ std::unique_ptr<Writer> MipsTargetHandler::getWriter() {
   }
 }
 
-void MipsTargetHandler::registerRelocationNames(Registry &registry) {
-  registry.addKindTable(Reference::KindNamespace::ELF,
-                        Reference::KindArch::Mips, kindStrings);
+template class MipsTargetHandler<ELF32LE>;
+template class MipsTargetHandler<ELF64LE>;
+
+template <class ELFT>
+MipsSymbolTable<ELFT>::MipsSymbolTable(const ELFLinkingContext &ctx)
+    : SymbolTable<ELFT>(ctx, ".symtab",
+                        TargetLayout<ELFT>::ORDER_SYMBOL_TABLE) {}
+
+template <class ELFT>
+void MipsSymbolTable<ELFT>::addDefinedAtom(Elf_Sym &sym, const DefinedAtom *da,
+                                           int64_t addr) {
+  SymbolTable<ELFT>::addDefinedAtom(sym, da, addr);
+
+  switch (da->codeModel()) {
+  case DefinedAtom::codeMipsMicro:
+    sym.st_other |= llvm::ELF::STO_MIPS_MICROMIPS;
+    break;
+  case DefinedAtom::codeMipsMicroPIC:
+    sym.st_other |= llvm::ELF::STO_MIPS_MICROMIPS | llvm::ELF::STO_MIPS_PIC;
+    break;
+  default:
+    break;
+  }
 }
 
-const Registry::KindStrings MipsTargetHandler::kindStrings[] = {
-  LLD_KIND_STRING_ENTRY(R_MIPS_NONE),
-  LLD_KIND_STRING_ENTRY(R_MIPS_32),
-  LLD_KIND_STRING_ENTRY(R_MIPS_REL32),
-  LLD_KIND_STRING_ENTRY(R_MIPS_26),
-  LLD_KIND_STRING_ENTRY(R_MIPS_HI16),
-  LLD_KIND_STRING_ENTRY(R_MIPS_LO16),
-  LLD_KIND_STRING_ENTRY(R_MIPS_GOT16),
-  LLD_KIND_STRING_ENTRY(R_MIPS_CALL16),
-  LLD_KIND_STRING_ENTRY(R_MIPS_GPREL32),
-  LLD_KIND_STRING_ENTRY(R_MIPS_JALR),
-  LLD_KIND_STRING_ENTRY(R_MIPS_TLS_DTPMOD32),
-  LLD_KIND_STRING_ENTRY(R_MIPS_TLS_DTPREL32),
-  LLD_KIND_STRING_ENTRY(R_MIPS_TLS_GD),
-  LLD_KIND_STRING_ENTRY(R_MIPS_TLS_LDM),
-  LLD_KIND_STRING_ENTRY(R_MIPS_TLS_GOTTPREL),
-  LLD_KIND_STRING_ENTRY(R_MIPS_TLS_TPREL32),
-  LLD_KIND_STRING_ENTRY(R_MIPS_TLS_DTPREL_HI16),
-  LLD_KIND_STRING_ENTRY(R_MIPS_TLS_DTPREL_LO16),
-  LLD_KIND_STRING_ENTRY(R_MIPS_TLS_TPREL_HI16),
-  LLD_KIND_STRING_ENTRY(R_MIPS_TLS_TPREL_LO16),
-  LLD_KIND_STRING_ENTRY(R_MIPS_COPY),
-  LLD_KIND_STRING_ENTRY(R_MIPS_JUMP_SLOT),
-  LLD_KIND_STRING_ENTRY(R_MIPS_PC32),
-  LLD_KIND_STRING_ENTRY(LLD_R_MIPS_GLOBAL_GOT),
-  LLD_KIND_STRING_ENTRY(LLD_R_MIPS_32_HI16),
-  LLD_KIND_STRING_ENTRY(LLD_R_MIPS_GLOBAL_26),
-  LLD_KIND_STRING_ENTRY(LLD_R_MIPS_HI16),
-  LLD_KIND_STRING_ENTRY(LLD_R_MIPS_LO16),
-  LLD_KIND_STRING_ENTRY(LLD_R_MIPS_STO_PLT),
-  LLD_KIND_STRING_END
-};
+template <class ELFT> void MipsSymbolTable<ELFT>::finalize(bool sort) {
+  SymbolTable<ELFT>::finalize(sort);
+
+  for (auto &ste : this->_symbolTable) {
+    if (!ste._atom)
+      continue;
+    if (const auto *da = dyn_cast<DefinedAtom>(ste._atom)) {
+      if (da->codeModel() == DefinedAtom::codeMipsMicro ||
+          da->codeModel() == DefinedAtom::codeMipsMicroPIC) {
+        // Adjust dynamic microMIPS symbol value. That allows a dynamic
+        // linker to recognize and handle this symbol correctly.
+        ste._symbol.st_value = ste._symbol.st_value | 1;
+      }
+    }
+  }
+}
+
+template class MipsSymbolTable<ELF32LE>;
+template class MipsSymbolTable<ELF64LE>;
+
+template <class ELFT>
+MipsDynamicSymbolTable<ELFT>::MipsDynamicSymbolTable(
+    const ELFLinkingContext &ctx, MipsTargetLayout<ELFT> &layout)
+    : DynamicSymbolTable<ELFT>(ctx, layout, ".dynsym",
+                               TargetLayout<ELFT>::ORDER_DYNAMIC_SYMBOLS),
+      _targetLayout(layout) {}
+
+template <class ELFT> void MipsDynamicSymbolTable<ELFT>::sortSymbols() {
+  typedef typename DynamicSymbolTable<ELFT>::SymbolEntry SymbolEntry;
+  std::stable_sort(this->_symbolTable.begin(), this->_symbolTable.end(),
+                   [this](const SymbolEntry &A, const SymbolEntry &B) {
+                     if (A._symbol.getBinding() != STB_GLOBAL &&
+                         B._symbol.getBinding() != STB_GLOBAL)
+                       return A._symbol.getBinding() < B._symbol.getBinding();
+
+                     return _targetLayout.getGOTSection().compare(A._atom,
+                                                                  B._atom);
+                   });
+}
+
+template <class ELFT> void MipsDynamicSymbolTable<ELFT>::finalize() {
+  DynamicSymbolTable<ELFT>::finalize();
+
+  const auto &pltSection = _targetLayout.getPLTSection();
+
+  for (auto &ste : this->_symbolTable) {
+    const Atom *a = ste._atom;
+    if (!a)
+      continue;
+    if (auto *layout = pltSection.findPLTLayout(a)) {
+      a = layout->_atom;
+      // Under some conditions a dynamic symbol table record should hold
+      // a symbol value of the corresponding PLT entry. For details look
+      // at the PLT entry creation code in the class MipsRelocationPass.
+      // Let's update atomLayout fields for such symbols.
+      assert(!ste._atomLayout);
+      ste._symbol.st_value = layout->_virtualAddr;
+      ste._symbol.st_other |= ELF::STO_MIPS_PLT;
+    }
+
+    if (const auto *da = dyn_cast<DefinedAtom>(a)) {
+      if (da->codeModel() == DefinedAtom::codeMipsMicro ||
+          da->codeModel() == DefinedAtom::codeMipsMicroPIC) {
+        // Adjust dynamic microMIPS symbol value. That allows a dynamic
+        // linker to recognize and handle this symbol correctly.
+        ste._symbol.st_value = ste._symbol.st_value | 1;
+      }
+    }
+  }
+}
+
+template class MipsDynamicSymbolTable<ELF32LE>;
+template class MipsDynamicSymbolTable<ELF64LE>;
+
+}
+}

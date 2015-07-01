@@ -12,22 +12,18 @@ class StdVectorDataFormatterTestCase(TestBase):
 
     mydir = TestBase.compute_mydir(__file__)
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dsym_test
-    @expectedFailureDarwin("llvm.org/pr20264")
     def test_with_dsym_and_run_command(self):
         """Test data formatter commands."""
         self.buildDsym()
         self.data_formatter_commands()
 
     @dwarf_test
-    @expectedFailureClang # llvm.org/pr15301 LLDB prints incorrect sizes of STL containers
+    @skipIfFreeBSD
     @expectedFailureIcc # llvm.org/pr15301 LLDB prints incorrect sizes of STL containers
-    @expectedFailureGcc # llvm.org/pr17499 The data formatter cannot parse STL containers
     def test_with_dwarf_and_run_command(self):
         """Test data formatter commands."""
-        if "gcc" in self.getCompiler() and "4.8" in self.getCompilerVersion():
-            self.skipTest("llvm.org/pr15301 LLDB prints incorrect sizes of STL containers")
         self.buildDwarf()
         self.data_formatter_commands()
 
@@ -43,7 +39,7 @@ class StdVectorDataFormatterTestCase(TestBase):
 
         lldbutil.run_break_set_by_source_regexp (self, "Set break point at this line.")
 
-        self.runCmd("run", RUN_SUCCEEDED)
+        self.runCmd("run", RUN_FAILED)
 
         # The stop reason of the thread should be breakpoint.
         self.expect("thread list", STOPPED_DUE_TO_BREAKPOINT,

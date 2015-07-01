@@ -12,7 +12,7 @@ class StdIteratorDataFormatterTestCase(TestBase):
 
     mydir = TestBase.compute_mydir(__file__)
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dsym_test
     def test_with_dsym_and_run_command(self):
         """Test data formatter commands."""
@@ -21,7 +21,6 @@ class StdIteratorDataFormatterTestCase(TestBase):
 
     @dwarf_test
     @expectedFailureFreeBSD("llvm.org/pr20548") # fails to build on lab.llvm.org buildbot
-    @expectedFailureGcc # llvm.org/pr15301 LLDB prints incorrect sizes of STL containers
     @expectedFailureIcc # llvm.org/pr15301 LLDB prints incorrect sizes of STL containers
     def test_with_dwarf_and_run_command(self):
         """Test data formatter commands."""
@@ -40,7 +39,7 @@ class StdIteratorDataFormatterTestCase(TestBase):
 
         lldbutil.run_break_set_by_file_and_line (self, "main.cpp", self.line, num_expected_locations=-1)
 
-        self.runCmd("run", RUN_SUCCEEDED)
+        self.runCmd("run", RUN_FAILED)
 
         # The stop reason of the thread should be breakpoint.
         self.expect("thread list", STOPPED_DUE_TO_BREAKPOINT,

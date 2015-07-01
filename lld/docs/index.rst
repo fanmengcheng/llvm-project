@@ -26,8 +26,6 @@ lld is a new set of modular code for creating linker tools.
 
   * Extensive unit tests
   * Internal linker model can be dumped/read to textual format
-  * Internal linker model can be dumped/read to a new native format
-  * Native format designed to be fast to read and write
   * Additional linking features can be plugged in as "passes"
   * OS specific and CPU specific code factored out
 
@@ -46,20 +44,25 @@ system linker tool.
 Current Status
 --------------
 
-lld can self host on x86-64 Linux and x86 Windows.
+lld can self host on x86-64 FreeBSD and Linux and x86 Windows.
 
 All SingleSource tests in test-suite pass on x86-64 Linux.
+
+All SingleSource and MultiSource tests in the LLVM test-suite
+pass on MIPS 32-bit little-endian Linux.
 
 Source
 ------
 
 lld is available in the LLVM SVN repository::
 
-  svn co http://llvm.org/svn/llvm-project/lld/trunk
+  svn co http://llvm.org/svn/llvm-project/lld/trunk lld
 
 lld is also available via the read-only git mirror::
 
   git clone http://llvm.org/git/lld.git
+
+Put it in llvm's tools/ directory, rerun cmake, then build target lld.
 
 Contents
 --------

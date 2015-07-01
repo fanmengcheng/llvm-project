@@ -10,23 +10,13 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/ToolOutputFile.h"
-#include "llvm/Config/config.h"
+#include "llvm/Config/llvm-config.h"
 
-#define LLVM_350_AND_NEWER \
-  (LLVM_VERSION_MAJOR > 3 || (LLVM_VERSION_MAJOR == 3 && LLVM_VERSION_MINOR >= 5))
-
-#if LLVM_350_AND_NEWER
 #include <system_error>
 
-#define ERROR_CODE std::error_code
-#define UNIQUE_PTR std::unique_ptr
-#else
-#include "llvm/ADT/OwningPtr.h"
-#include "llvm/Support/system_error.h"
+#define LLVM_360 \
+  (LLVM_VERSION_MAJOR == 3 && LLVM_VERSION_MINOR == 6)
 
-#define ERROR_CODE error_code
-#define UNIQUE_PTR OwningPtr
-#endif
 
 using namespace llvm;
 
@@ -44,32 +34,33 @@ int main(int argc, char **argv) {
   cl::ParseCommandLineOptions(argc, argv, "libclc builtin preparation tool\n");
 
   std::string ErrorMessage;
-  std::auto_ptr<Module> M;
+  Module *M = nullptr;
 
   {
-#if LLVM_350_AND_NEWER
     ErrorOr<std::unique_ptr<MemoryBuffer>> BufferOrErr =
       MemoryBuffer::getFile(InputFilename);
     std::unique_ptr<MemoryBuffer> &BufferPtr = BufferOrErr.get();
     if (std::error_code  ec = BufferOrErr.getError())
-#else
-    UNIQUE_PTR<MemoryBuffer> BufferPtr;
-    if (ERROR_CODE ec = MemoryBuffer::getFileOrSTDIN(InputFilename, BufferPtr))
-#endif
       ErrorMessage = ec.message();
     else {
-#if LLVM_VERSION_MAJOR > 3 || (LLVM_VERSION_MAJOR == 3 && LLVM_VERSION_MINOR > 4)
-      ErrorOr<Module *> ModuleOrErr = parseBitcodeFile(BufferPtr.get(), Context);
-      if (ERROR_CODE ec = ModuleOrErr.getError())
-        ErrorMessage = ec.message();
-      M.reset(ModuleOrErr.get());
+#if LLVM_360
+      ErrorOr<Module *>
 #else
-      M.reset(ParseBitcodeFile(BufferPtr.get(), Context, &ErrorMessage));
+      ErrorOr<std::unique_ptr<Module>>
+#endif
+      ModuleOrErr =
+          parseBitcodeFile(BufferPtr.get()->getMemBufferRef(), Context);
+      if (std::error_code ec = ModuleOrErr.getError())
+        ErrorMessage = ec.message();
+#if LLVM_360
+      M = ModuleOrErr.get().get();
+#else
+      M = ModuleOrErr.get().release();
 #endif
     }
   }
 
-  if (M.get() == 0) {
+  if (!M) {
     errs() << argv[0] << ": ";
     if (ErrorMessage.size())
       errs() << ErrorMessage << "\n";
@@ -95,22 +86,15 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  std::string ErrorInfo;
-  UNIQUE_PTR<tool_output_file> Out
-  (new tool_output_file(OutputFilename.c_str(), ErrorInfo,
-#if (LLVM_VERSION_MAJOR == 3 && LLVM_VERSION_MINOR == 4)
-                        sys::fs::F_Binary));
-#elif LLVM_VERSION_MAJOR > 3 || (LLVM_VERSION_MAJOR == 3 && LLVM_VERSION_MINOR >= 5)
-                        sys::fs::F_None));
-#else
-                        raw_fd_ostream::F_Binary));
-#endif
-  if (!ErrorInfo.empty()) {
-    errs() << ErrorInfo << '\n';
+  std::error_code EC;
+  std::unique_ptr<tool_output_file> Out
+  (new tool_output_file(OutputFilename, EC, sys::fs::F_None));
+  if (EC) {
+    errs() << EC.message() << '\n';
     exit(1);
   }
 
-  WriteBitcodeToFile(M.get(), Out->os());
+  WriteBitcodeToFile(M, Out->os());
 
   // Declare success.
   Out->keep();

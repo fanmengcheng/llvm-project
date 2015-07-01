@@ -1,11 +1,5 @@
 /* include/polly/Config/config.h.in.  Generated from autoconf/configure.ac by autoheader.  */
 
-/* Define if cloog found */
-#undef CLOOG_FOUND
-
-/* Use gmp for isl */
-#undef CLOOG_INT_GMP
-
 /* Define if cudalib found */
 #undef CUDALIB_FOUND
 
@@ -29,6 +23,3 @@
 
 /* Define to the version of this package. */
 #undef PACKAGE_VERSION
-
-/* Define if pluto found */
-#undef PLUTO_FOUND

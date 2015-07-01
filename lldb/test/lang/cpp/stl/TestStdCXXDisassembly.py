@@ -34,7 +34,7 @@ class StdCXXDisassembleTestCase(TestBase):
         # Break on line 13 of main.cpp.
         lldbutil.run_break_set_by_file_and_line (self, "main.cpp", self.line, num_expected_locations=1, loc_exact=True)
 
-        self.runCmd("run", RUN_SUCCEEDED)
+        self.runCmd("run", RUN_FAILED)
 
         # Now let's get the target as well as the process objects.
         target = self.dbg.GetSelectedTarget()
@@ -69,7 +69,7 @@ class StdCXXDisassembleTestCase(TestBase):
         self.expect(lib_stdcxx, "Libraray StdC++ is located", exe=False,
             substrs = ["lib"])
 
-        self.runCmd("image dump symtab %s" % lib_stdcxx)
+        self.runCmd("image dump symtab '%s'" % lib_stdcxx)
         raw_output = self.res.GetOutput()
         # Now, look for every 'Code' symbol and feed its load address into the
         # command: 'disassemble -s load_address -e end_address', where the

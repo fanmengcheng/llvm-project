@@ -18,7 +18,7 @@ class BreakpointCommandTestCase(TestBase):
         cls.RemoveTempFile("output.txt")
         cls.RemoveTempFile("output2.txt")
 
-    @unittest2.skipUnless(sys.platform.startswith("darwin"), "requires Darwin")
+    @skipUnlessDarwin
     @dsym_test
     def test_with_dsym(self):
         """Test a sequence of breakpoint command add, list, and delete."""
@@ -52,9 +52,11 @@ class BreakpointCommandTestCase(TestBase):
         lldbutil.run_break_set_by_file_and_line (self, None, self.line, num_expected_locations=1, loc_exact=True)
         lldbutil.run_break_set_by_file_and_line (self, "main.c", self.line, num_expected_locations=1, loc_exact=True)
         lldbutil.run_break_set_by_file_and_line (self, "main.c", self.line, num_expected_locations=1, loc_exact=True)
+        # Breakpoint 4 - set at the same location as breakpoint 1 to test setting breakpoint commands on two breakpoints at a time
+        lldbutil.run_break_set_by_file_and_line (self, None, self.line, num_expected_locations=1, loc_exact=True)
 
         # Now add callbacks for the breakpoints just created.
-        self.runCmd("breakpoint command add -s command -o 'frame variable --show-types --scope' 1")
+        self.runCmd("breakpoint command add -s command -o 'frame variable --show-types --scope' 1 4")
         self.runCmd("breakpoint command add -s python -o 'here = open(\"output.txt\", \"w\"); print >> here, \"lldb\"; here.close()' 2")
         self.runCmd("breakpoint command add --python-function bktptcmd.function 3")
 
@@ -62,12 +64,12 @@ class BreakpointCommandTestCase(TestBase):
 
         # The breakpoint list now only contains breakpoint 1.
         self.expect("breakpoint list", "Breakpoints 1 & 2 created",
-            substrs = ["2: file = 'main.c', line = %d, locations = 1" % self.line],
-            patterns = ["1: file = '.*main.c', line = %d, locations = 1" % self.line] )
+            substrs = ["2: file = 'main.c', line = %d, exact_match = 0, locations = 1" % self.line],
+            patterns = ["1: file = '.*main.c', line = %d, exact_match = 0, locations = 1" % self.line] )
 
         self.expect("breakpoint list -f", "Breakpoints 1 & 2 created",
-            substrs = ["2: file = 'main.c', line = %d, locations = 1" % self.line],
-            patterns = ["1: file = '.*main.c', line = %d, locations = 1" % self.line,
+            substrs = ["2: file = 'main.c', line = %d, exact_match = 0, locations = 1" % self.line],
+            patterns = ["1: file = '.*main.c', line = %d, exact_match = 0, locations = 1" % self.line,
                         "1.1: .+at main.c:%d, .+unresolved, hit count = 0" % self.line,
                         "2.1: .+at main.c:%d, .+unresolved, hit count = 0" % self.line])
 
@@ -82,6 +84,12 @@ class BreakpointCommandTestCase(TestBase):
         self.expect("breakpoint command list 3", "Breakpoint 3 command ok",
             substrs = ["Breakpoint commands:",
                           "bktptcmd.function(frame, bp_loc, internal_dict)"])
+
+        self.expect("breakpoint command list 4", "Breakpoint 4 command ok",
+            substrs = ["Breakpoint commands:",
+                          "frame variable --show-types --scope"])
+
+        self.runCmd("breakpoint delete 4")
 
         self.runCmd("command script import --allow-reload ./bktptcmd.py")
 
@@ -103,7 +111,7 @@ class BreakpointCommandTestCase(TestBase):
         # Run the program.  Remove 'output.txt' if it exists.
         self.RemoveTempFile("output.txt")
         self.RemoveTempFile("output2.txt")
-        self.runCmd("run", RUN_SUCCEEDED)
+        self.runCmd("run", RUN_FAILED)
 
         # Check that the file 'output.txt' exists and contains the string "lldb".
 
@@ -143,17 +151,17 @@ class BreakpointCommandTestCase(TestBase):
 
         # The breakpoint list now only contains breakpoint 1.
         self.expect("breakpoint list -f", "Breakpoint 1 exists",
-            patterns = ["1: file = '.*main.c', line = %d, locations = 1, resolved = 1" %
+            patterns = ["1: file = '.*main.c', line = %d, exact_match = 0, locations = 1, resolved = 1" %
                         self.line,
                        "hit count = 1"])
 
         # Not breakpoint 2.
         self.expect("breakpoint list -f", "No more breakpoint 2", matching=False,
-            substrs = ["2: file = 'main.c', line = %d, locations = 1, resolved = 1" %
+            substrs = ["2: file = 'main.c', line = %d, exact_match = 0, locations = 1, resolved = 1" %
                         self.line])
 
         # Run the program again, with breakpoint 1 remaining.
-        self.runCmd("run", RUN_SUCCEEDED)
+        self.runCmd("run", RUN_FAILED)
 
         # We should be stopped again due to breakpoint 1.
 
@@ -183,7 +191,7 @@ class BreakpointCommandTestCase(TestBase):
             os.remove ('output-2.txt')
 
         # Run program, hit breakpoint, and hopefully write out new version of 'output-2.txt'
-        self.runCmd ("run", RUN_SUCCEEDED)
+        self.runCmd ("run", RUN_FAILED)
 
         # Check that the file 'output.txt' exists and contains the string "lldb".
 

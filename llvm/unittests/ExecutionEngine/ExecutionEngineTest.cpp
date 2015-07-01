@@ -8,10 +8,14 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ExecutionEngine/Interpreter.h"
+#include "llvm/ExecutionEngine/RTDyldMemoryManager.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Support/DynamicLibrary.h"
+#include "llvm/Support/ManagedStatic.h"
 #include "gtest/gtest.h"
 
 using namespace llvm;
@@ -19,6 +23,9 @@ using namespace llvm;
 namespace {
 
 class ExecutionEngineTest : public testing::Test {
+private:
+  llvm_shutdown_obj Y; // Call llvm_shutdown() on exit.
+
 protected:
   ExecutionEngineTest() {
     auto Owner = make_unique<Module>("<main>", getGlobalContext());
@@ -26,7 +33,7 @@ protected:
     Engine.reset(EngineBuilder(std::move(Owner)).setErrorStr(&Error).create());
   }
 
-  virtual void SetUp() {
+  void SetUp() override {
     ASSERT_TRUE(Engine.get() != nullptr) << "EngineBuilder returned error: '"
       << Error << "'";
   }
@@ -47,6 +54,7 @@ TEST_F(ExecutionEngineTest, ForwardGlobalMapping) {
   int32_t Mem1 = 3;
   Engine->addGlobalMapping(G1, &Mem1);
   EXPECT_EQ(&Mem1, Engine->getPointerToGlobalIfAvailable(G1));
+  EXPECT_EQ(&Mem1, Engine->getPointerToGlobalIfAvailable("Global1"));
   int32_t Mem2 = 4;
   Engine->updateGlobalMapping(G1, &Mem2);
   EXPECT_EQ(&Mem2, Engine->getPointerToGlobalIfAvailable(G1));
@@ -126,6 +134,37 @@ TEST_F(ExecutionEngineTest, DestructionRemovesGlobalMapping) {
   // mappings that refer to it.
   G1->eraseFromParent();
   EXPECT_EQ(nullptr, Engine->getGlobalValueAtAddress(&Mem1));
+}
+
+TEST_F(ExecutionEngineTest, LookupWithMangledName) {
+  int x;
+  llvm::sys::DynamicLibrary::AddSymbol("x", &x);
+
+  // Demonstrate that getSymbolAddress accepts mangled names and always strips
+  // the leading underscore.
+  EXPECT_EQ(reinterpret_cast<uint64_t>(&x),
+            RTDyldMemoryManager::getSymbolAddressInProcess("_x"));
+}
+
+TEST_F(ExecutionEngineTest, LookupWithMangledAndDemangledSymbol) {
+  int x;
+  int _x;
+  llvm::sys::DynamicLibrary::AddSymbol("x", &x);
+  llvm::sys::DynamicLibrary::AddSymbol("_x", &_x);
+
+  // Lookup the demangled name first, even if there's a demangled symbol that
+  // matches the input already.
+  EXPECT_EQ(reinterpret_cast<uint64_t>(&x),
+            RTDyldMemoryManager::getSymbolAddressInProcess("_x"));
+}
+
+TEST_F(ExecutionEngineTest, LookupwithDemangledName) {
+  int _x;
+  llvm::sys::DynamicLibrary::AddSymbol("_x", &_x);
+
+  // But do fallback to looking up a demangled name if there's no ambiguity
+  EXPECT_EQ(reinterpret_cast<uint64_t>(&_x),
+            RTDyldMemoryManager::getSymbolAddressInProcess("_x"));
 }
 
 }

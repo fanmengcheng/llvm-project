@@ -19,14 +19,12 @@
 
 #include "Pass.h"
 #include "LoadConfigPass.h"
-
 #include "lld/Core/File.h"
 #include "lld/Core/Pass.h"
 #include "lld/Core/Simple.h"
 #include "llvm/Object/COFF.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Path.h"
-
 #include <climits>
 #include <ctime>
 #include <utility>
@@ -42,22 +40,23 @@ LoadConfigAtom::LoadConfigAtom(VirtualFile &file, const DefinedAtom *sxdata,
     : COFFLinkerInternalAtom(
           file, file.getNextOrdinal(),
           std::vector<uint8_t>(sizeof(coff_load_configuration32))) {
-  addDir32Reloc(this, sxdata, offsetof(llvm::object::coff_load_configuration32,
-                                       SEHandlerTable));
+  addDir32Reloc(
+      this, sxdata, llvm::COFF::IMAGE_FILE_MACHINE_I386,
+      offsetof(llvm::object::coff_load_configuration32, SEHandlerTable));
   auto *data = getContents<llvm::object::coff_load_configuration32>();
   data->SEHandlerCount = count;
 }
 
 } // namespace loadcfg
 
-void LoadConfigPass::perform(std::unique_ptr<MutableFile> &file) {
+std::error_code LoadConfigPass::perform(SimpleFile &file) {
   if (_ctx.noSEH())
-    return;
+    return std::error_code();
 
   // Find the first atom in .sxdata section.
   const DefinedAtom *sxdata = nullptr;
   int sectionSize = 0;
-  for (const DefinedAtom *atom : file->defined()) {
+  for (const DefinedAtom *atom : file.defined()) {
     if (atom->customSectionName() == ".sxdata") {
       if (!sxdata)
         sxdata = atom;
@@ -65,11 +64,13 @@ void LoadConfigPass::perform(std::unique_ptr<MutableFile> &file) {
     }
   }
   if (!sxdata)
-    return;
+    return std::error_code();
 
   auto *loadcfg = new (_alloc)
       loadcfg::LoadConfigAtom(_file, sxdata, sectionSize / sizeof(uint32_t));
-  file->addAtom(*loadcfg);
+  file.addAtom(*loadcfg);
+
+  return std::error_code();
 }
 
 } // namespace pecoff

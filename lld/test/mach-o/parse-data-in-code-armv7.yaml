@@ -1,5 +1,7 @@
-# RUN: lld -flavor darwin -arch armv7 -r -print_atoms %s -o %t  | FileCheck %s \
-# RUN: && lld -flavor darwin -arch armv7 -r -print_atoms %t -o %t2  | FileCheck %s
+# RUN: lld -flavor darwin -arch armv7 -r -print_atoms %s -o %t  | FileCheck %s
+# RUN: lld -flavor darwin -arch armv7 -r -print_atoms %t -o %t2  | FileCheck %s
+# RUN: lld -flavor darwin -arch armv7 -dylib %s -o %t3.dylib %p/Inputs/libSystem.yaml \
+# RUN:   && llvm-objdump -macho -private-headers %t3.dylib | FileCheck --check-prefix=CHECK2 %s
 #
 # Test parsing LC_DATA_IN_CODE
 #
@@ -16,11 +18,11 @@ sections:
     attributes:      [ S_ATTR_PURE_INSTRUCTIONS, S_ATTR_SOME_INSTRUCTIONS ]
     alignment:       2
     address:         0x0000000000000000
-    content:         [ 0x00, 0xBF, 0x00, 0xBF, 0x00, 0x00, 0x00, 0x00, 
-                       0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 
-                       0x03, 0x00, 0x00, 0x00, 0x00, 0xBF, 0x00, 0xBF, 
-                       0x00, 0xF0, 0x20, 0xE3, 0x0A, 0x00, 0x00, 0x00, 
-                       0x0B, 0x00, 0x00, 0x00, 0x0C, 0x00, 0x00, 0x00, 
+    content:         [ 0x00, 0xBF, 0x00, 0xBF, 0x00, 0x00, 0x00, 0x00,
+                       0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+                       0x03, 0x00, 0x00, 0x00, 0x00, 0xBF, 0x00, 0xBF,
+                       0x00, 0xF0, 0x20, 0xE3, 0x0A, 0x00, 0x00, 0x00,
+                       0x0B, 0x00, 0x00, 0x00, 0x0C, 0x00, 0x00, 0x00,
                        0x0D, 0x00, 0x00, 0x00, 0x00, 0xF0, 0x20, 0xE3 ]
 local-symbols:
   - name:            _foo_thumb
@@ -98,6 +100,10 @@ dataInCode:
 # CHECK:         offset:          20
 
 
+# CHECK2:      cmd LC_DATA_IN_CODE
+# CHECK2:  cmdsize 16
+# CHECK2: datasize 64
+
 
 #	.code	16
 #  .thumb_func	_foo_thumb
@@ -127,7 +133,7 @@ dataInCode:
 #
 #
 #	.code	32
-#  .align 2  
+#  .align 2
 #_foo_arm:
 #  nop
 #

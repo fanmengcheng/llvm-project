@@ -15,7 +15,7 @@
 
 namespace lldb {
 
-class SBFrame
+class LLDB_API SBFrame
 {
 public:
     SBFrame ();
@@ -25,7 +25,7 @@ public:
     const lldb::SBFrame &
     operator =(const lldb::SBFrame &rhs);
 
-   ~SBFrame();
+    ~SBFrame();
 
     bool
     IsEqual (const lldb::SBFrame &that) const;
@@ -35,6 +35,9 @@ public:
 
     uint32_t
     GetFrameID () const;
+
+    lldb::addr_t
+    GetCFA () const;
 
     lldb::addr_t
     GetPC () const;
@@ -88,12 +91,18 @@ public:
     const char *
     GetFunctionName();
 
+    const char *
+    GetFunctionName() const;
+
     /// Return true if this frame represents an inlined function.
     ///
     /// See also GetFunctionName().
     bool
     IsInlined();
-    
+
+    bool
+    IsInlined() const;
+
     /// The version that doesn't supply a 'use_dynamic' value will use the
     /// target's default.
     lldb::SBValue
@@ -157,6 +166,9 @@ public:
                   lldb::DynamicValueType  use_dynamic);
 
     lldb::SBValueList
+    GetVariables (const lldb::SBVariablesOptions& options);
+    
+    lldb::SBValueList
     GetRegisters ();
 
     lldb::SBValue
@@ -198,21 +210,6 @@ public:
     lldb::SBValue
     FindValue (const char *name, ValueType value_type, lldb::DynamicValueType use_dynamic);
 
-    /// Find and watch a variable using the frame as the scope.
-    /// It returns an SBValue, similar to FindValue() method, if find-and-watch
-    /// operation succeeds.  Otherwise, an invalid SBValue is returned.
-    /// You can use LLDB_WATCH_TYPE_READ | LLDB_WATCH_TYPE_WRITE for 'rw' watch.
-    lldb::SBValue
-    WatchValue (const char *name, ValueType value_type, uint32_t watch_type);
-
-    /// Find and watch the location pointed to by a variable using the frame as
-    /// the scope.
-    /// It returns an SBValue, similar to FindValue() method, if find-and-watch
-    /// operation succeeds.  Otherwise, an invalid SBValue is returned.
-    /// You can use LLDB_WATCH_TYPE_READ | LLDB_WATCH_TYPE_WRITE for 'rw' watch.
-    lldb::SBValue
-    WatchLocation (const char *name, ValueType value_type, uint32_t watch_type, size_t size);
-
     bool
     GetDescription (lldb::SBStream &description);
 
@@ -221,12 +218,10 @@ public:
 protected:
 
     friend class SBBlock;
+    friend class SBExecutionContext;
     friend class SBInstruction;
     friend class SBThread;
     friend class SBValue;
-#ifndef LLDB_DISABLE_PYTHON
-    friend class lldb_private::ScriptInterpreterPython;
-#endif
 
     lldb::StackFrameSP
     GetFrameSP() const;

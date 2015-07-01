@@ -11,9 +11,9 @@
 #include "MCTargetDesc/PPCFixupKinds.h"
 #include "MCTargetDesc/PPCMCExpr.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/MC/MCELF.h"
 #include "llvm/MC/MCELFObjectWriter.h"
 #include "llvm/MC/MCExpr.h"
+#include "llvm/MC/MCSymbolELF.h"
 #include "llvm/MC/MCValue.h"
 #include "llvm/Support/ErrorHandling.h"
 
@@ -24,15 +24,11 @@ namespace {
   public:
     PPCELFObjectWriter(bool Is64Bit, uint8_t OSABI);
 
-    virtual ~PPCELFObjectWriter();
   protected:
-    virtual unsigned getRelocTypeInner(const MCValue &Target,
-                                       const MCFixup &Fixup,
-                                       bool IsPCRel) const;
     unsigned GetRelocType(const MCValue &Target, const MCFixup &Fixup,
                           bool IsPCRel) const override;
 
-    bool needsRelocateWithSymbol(const MCSymbolData &SD,
+    bool needsRelocateWithSymbol(const MCSymbol &Sym,
                                  unsigned Type) const override;
   };
 }
@@ -41,9 +37,6 @@ PPCELFObjectWriter::PPCELFObjectWriter(bool Is64Bit, uint8_t OSABI)
   : MCELFObjectTargetWriter(Is64Bit, OSABI,
                             Is64Bit ?  ELF::EM_PPC64 : ELF::EM_PPC,
                             /*HasRelocationAddend*/ true) {}
-
-PPCELFObjectWriter::~PPCELFObjectWriter() {
-}
 
 static MCSymbolRefExpr::VariantKind getAccessVariant(const MCValue &Target,
                                                      const MCFixup &Fixup) {
@@ -73,10 +66,9 @@ static MCSymbolRefExpr::VariantKind getAccessVariant(const MCValue &Target,
   llvm_unreachable("unknown PPCMCExpr kind");
 }
 
-unsigned PPCELFObjectWriter::getRelocTypeInner(const MCValue &Target,
-                                               const MCFixup &Fixup,
-                                               bool IsPCRel) const
-{
+unsigned PPCELFObjectWriter::GetRelocType(const MCValue &Target,
+                                          const MCFixup &Fixup,
+                                          bool IsPCRel) const {
   MCSymbolRefExpr::VariantKind Modifier = getAccessVariant(Target, Fixup);
 
   // determine the type of the relocation
@@ -94,6 +86,9 @@ unsigned PPCELFObjectWriter::getRelocTypeInner(const MCValue &Target,
         break;
       case MCSymbolRefExpr::VK_PLT:
         Type = ELF::R_PPC_PLTREL24;
+        break;
+      case MCSymbolRefExpr::VK_PPC_LOCAL:
+        Type = ELF::R_PPC_LOCAL24PC;
         break;
       }
       break;
@@ -400,13 +395,7 @@ unsigned PPCELFObjectWriter::getRelocTypeInner(const MCValue &Target,
   return Type;
 }
 
-unsigned PPCELFObjectWriter::GetRelocType(const MCValue &Target,
-                                          const MCFixup &Fixup,
-                                          bool IsPCRel) const {
-  return getRelocTypeInner(Target, Fixup, IsPCRel);
-}
-
-bool PPCELFObjectWriter::needsRelocateWithSymbol(const MCSymbolData &SD,
+bool PPCELFObjectWriter::needsRelocateWithSymbol(const MCSymbol &Sym,
                                                  unsigned Type) const {
   switch (Type) {
     default:
@@ -418,12 +407,12 @@ bool PPCELFObjectWriter::needsRelocateWithSymbol(const MCSymbolData &SD,
       // The "other" values are stored in the last 6 bits of the second byte.
       // The traditional defines for STO values assume the full byte and thus
       // the shift to pack it.
-      unsigned Other = MCELF::getOther(SD) << 2;
+      unsigned Other = cast<MCSymbolELF>(Sym).getOther() << 2;
       return (Other & ELF::STO_PPC64_LOCAL_MASK) != 0;
   }
 }
 
-MCObjectWriter *llvm::createPPCELFObjectWriter(raw_ostream &OS,
+MCObjectWriter *llvm::createPPCELFObjectWriter(raw_pwrite_stream &OS,
                                                bool Is64Bit,
                                                bool IsLittleEndian,
                                                uint8_t OSABI) {

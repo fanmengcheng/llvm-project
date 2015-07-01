@@ -40,7 +40,7 @@
 # CHECK-NEXT:   }
 # CHECK-NEXT: ]
 
-# CHECK:      0x00000003 PLTGOT 0x1000
+# CHECK:      0x00000003 PLTGOT 0x{{[0-9A-F]+}}
 # CHECK-NEXT: 0x00000001 NEEDED SharedLibrary (dynsym-table-2.test.tmp-bar.so)
 # CHECK-NEXT: 0x00000000 NULL   0x0
 
@@ -51,6 +51,8 @@ FileHeader:
   Data:            ELFDATA2LSB
   Type:            ET_REL
   Machine:         EM_MIPS
+  Flags:           [EF_MIPS_PIC, EF_MIPS_CPIC, EF_MIPS_ABI_O32, EF_MIPS_ARCH_32]
+
 Sections:
   - Name:            .text
     Type:            SHT_PROGBITS
@@ -76,6 +78,8 @@ FileHeader:
   Data:            ELFDATA2LSB
   Type:            ET_REL
   Machine:         EM_MIPS
+  Flags:           [EF_MIPS_PIC, EF_MIPS_CPIC, EF_MIPS_ABI_O32, EF_MIPS_ARCH_32]
+
 Sections:
   - Name:            .text
     Type:            SHT_PROGBITS

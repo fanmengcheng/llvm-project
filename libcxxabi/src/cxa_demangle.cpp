@@ -55,51 +55,51 @@ template <class C>
 void
 print_stack(const C& db)
 {
-    printf("---------\n");
-    printf("names:\n");
+    fprintf(stderr, "---------\n");
+    fprintf(stderr, "names:\n");
     for (auto& s : db.names)
-        printf("{%s#%s}\n", s.first.c_str(), s.second.c_str());
+        fprintf(stderr, "{%s#%s}\n", s.first.c_str(), s.second.c_str());
     int i = -1;
-    printf("subs:\n");
+    fprintf(stderr, "subs:\n");
     for (auto& v : db.subs)
     {
         if (i >= 0)
-            printf("S%i_ = {", i);
+            fprintf(stderr, "S%i_ = {", i);
         else
-            printf("S_  = {");
+            fprintf(stderr, "S_  = {");
         for (auto& s : v)
-            printf("{%s#%s}", s.first.c_str(), s.second.c_str());
-        printf("}\n");
+            fprintf(stderr, "{%s#%s}", s.first.c_str(), s.second.c_str());
+        fprintf(stderr, "}\n");
         ++i;
     }
-    printf("template_param:\n");
+    fprintf(stderr, "template_param:\n");
     for (auto& t : db.template_param)
     {
-        printf("--\n");
+        fprintf(stderr, "--\n");
         i = -1;
         for (auto& v : t)
         {
             if (i >= 0)
-                printf("T%i_ = {", i);
+                fprintf(stderr, "T%i_ = {", i);
             else
-                printf("T_  = {");
+                fprintf(stderr, "T_  = {");
             for (auto& s : v)
-                printf("{%s#%s}", s.first.c_str(), s.second.c_str());
-            printf("}\n");
+                fprintf(stderr, "{%s#%s}", s.first.c_str(), s.second.c_str());
+            fprintf(stderr, "}\n");
             ++i;
         }
     }
-    printf("---------\n\n");
+    fprintf(stderr, "---------\n\n");
 }
 
 template <class C>
 void
 print_state(const char* msg, const char* first, const char* last, const C& db)
 {
-    printf("%s: ", msg);
+    fprintf(stderr, "%s: ", msg);
     for (; first != last; ++first)
-        printf("%c", *first);
-    printf("\n");
+        fprintf(stderr, "%c", *first);
+    fprintf(stderr, "\n");
     print_stack(db);
 }
 
@@ -195,7 +195,7 @@ parse_floating_number(const char* first, const char* last, C& db)
         }
         if (*t == 'E')
         {
-#if __LITTLE_ENDIAN__
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
             std::reverse(buf, e);
 #endif
             char num[float_data<Float>::max_demangled_size] = {0};
@@ -1575,10 +1575,9 @@ parse_function_type(const char* first, const char* last, C& db)
         const char* t = first+1;
         if (t != last)
         {
-            bool externC = false;
             if (*t == 'Y')
             {
-                externC = true;
+                /* extern "C" */
                 if (++t == last)
                     return first;
             }
@@ -1672,7 +1671,7 @@ parse_pointer_to_member_type(const char* first, const char* last, C& db)
                 auto func = std::move(db.names.back());
                 db.names.pop_back();
                 auto class_type = std::move(db.names.back());
-                if (func.second.front() == '(')
+                if (!func.second.empty() && func.second.front() == '(')
                 {
                     db.names.back().first = std::move(func.first) + "(" + class_type.move_full() + "::*";
                     db.names.back().second = ")" + std::move(func.second);
@@ -2019,7 +2018,8 @@ parse_type(const char* first, const char* last, C& db)
                                     db.names[k].first += " (";
                                     db.names[k].second.insert(0, ")");
                                 }
-                                else if (db.names[k].second.front() == '(')
+                                else if (!db.names[k].second.empty() &&
+                                          db.names[k].second.front() == '(')
                                 {
                                     db.names[k].first += "(";
                                     db.names[k].second.insert(0, ")");
@@ -2046,7 +2046,8 @@ parse_type(const char* first, const char* last, C& db)
                                     db.names[k].first += " (";
                                     db.names[k].second.insert(0, ")");
                                 }
-                                else if (db.names[k].second.front() == '(')
+                                else if (!db.names[k].second.empty() &&
+                                          db.names[k].second.front() == '(')
                                 {
                                     db.names[k].first += "(";
                                     db.names[k].second.insert(0, ")");
@@ -2080,7 +2081,8 @@ parse_type(const char* first, const char* last, C& db)
                                     db.names[k].first += " (";
                                     db.names[k].second.insert(0, ")");
                                 }
-                                else if (db.names[k].second.front() == '(')
+                                else if (!db.names[k].second.empty() &&
+                                          db.names[k].second.front() == '(')
                                 {
                                     db.names[k].first += "(";
                                     db.names[k].second.insert(0, ")");
@@ -4711,7 +4713,7 @@ class arena
 
     std::size_t 
     align_up(std::size_t n) noexcept
-        {return n + (alignment-1) & ~(alignment-1);}
+        {return (n + (alignment-1)) & ~(alignment-1);}
 
     bool
     pointer_in_buffer(char* p) noexcept

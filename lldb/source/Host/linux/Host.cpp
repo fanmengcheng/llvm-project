@@ -14,7 +14,9 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <fcntl.h>
+#ifndef __ANDROID__
 #include <execinfo.h>
+#endif
 
 // C++ Includes
 // Other libraries and framework includes
@@ -24,13 +26,18 @@
 #include "lldb/Target/Process.h"
 
 #include "lldb/Host/Host.h"
+#include "lldb/Host/HostInfo.h"
+#ifdef __ANDROID_NDK__
+#include "lldb/Host/android/Android.h"
+#endif
 #include "lldb/Core/DataBufferHeap.h"
 #include "lldb/Core/DataExtractor.h"
 
 #include "lldb/Core/ModuleSpec.h"
 #include "lldb/Symbol/ObjectFile.h"
 #include "Plugins/Process/Linux/ProcFileReader.h"
-
+#include "Plugins/Process/Utility/LinuxSignals.h"
+#include "Plugins/Process/Utility/MipsLinuxSignals.h"
 using namespace lldb;
 using namespace lldb_private;
 
@@ -57,7 +64,7 @@ static bool
 ReadProcPseudoFileStat (lldb::pid_t pid, ProcessStatInfo& stat_info)
 {
     // Read the /proc/$PID/stat file.
-    lldb::DataBufferSP buf_sp = ProcFileReader::ReadIntoDataBuffer (pid, "stat");
+    lldb::DataBufferSP buf_sp = process_linux::ProcFileReader::ReadIntoDataBuffer (pid, "stat");
 
     // The filename of the executable is stored in parenthesis right after the pid. We look for the closing
     // parenthesis for the filename and work from there in case the name has something funky like ')' in it.
@@ -110,7 +117,7 @@ GetLinuxProcessUserAndGroup (lldb::pid_t pid, ProcessInstanceInfo &process_info,
     uint32_t eGid = UINT32_MAX;     // Effective Group ID
 
     // Read the /proc/$PID/status file and parse the Uid:, Gid:, and TracerPid: fields.
-    lldb::DataBufferSP buf_sp = ProcFileReader::ReadIntoDataBuffer (pid, "status");
+    lldb::DataBufferSP buf_sp = process_linux::ProcFileReader::ReadIntoDataBuffer (pid, "status");
 
     static const char uid_token[] = "Uid:";
     char *buf_uid = strstr ((char *)buf_sp->GetBytes(), uid_token);
@@ -150,13 +157,13 @@ GetLinuxProcessUserAndGroup (lldb::pid_t pid, ProcessInstanceInfo &process_info,
 lldb::DataBufferSP
 Host::GetAuxvData(lldb_private::Process *process)
 {
-    return ProcFileReader::ReadIntoDataBuffer (process->GetID(), "auxv");
+    return process_linux::ProcFileReader::ReadIntoDataBuffer (process->GetID(), "auxv");
 }
 
 lldb::DataBufferSP
 Host::GetAuxvData (lldb::pid_t pid)
 {
-    return ProcFileReader::ReadIntoDataBuffer (pid, "auxv");
+    return process_linux::ProcFileReader::ReadIntoDataBuffer (pid, "auxv");
 }
 
 static bool
@@ -316,11 +323,12 @@ GetProcessAndStatInfo (lldb::pid_t pid, ProcessInstanceInfo &process_info, Proce
 
     process_info.SetProcessID(pid);
     process_info.GetExecutableFile().SetFile(exe_path, false);
+    process_info.GetArchitecture().MergeFrom(HostInfo::GetArchitecture());
 
     lldb::DataBufferSP buf_sp;
 
     // Get the process environment.
-    buf_sp = ProcFileReader::ReadIntoDataBuffer(pid, "environ");
+    buf_sp = process_linux::ProcFileReader::ReadIntoDataBuffer(pid, "environ");
     Args &info_env = process_info.GetEnvironmentEntries();
     char *next_var = (char *)buf_sp->GetBytes();
     char *end_buf = next_var + buf_sp->GetByteSize();
@@ -331,7 +339,7 @@ GetProcessAndStatInfo (lldb::pid_t pid, ProcessInstanceInfo &process_info, Proce
     }
 
     // Get the command line used to start the process.
-    buf_sp = ProcFileReader::ReadIntoDataBuffer(pid, "cmdline");
+    buf_sp = process_linux::ProcFileReader::ReadIntoDataBuffer(pid, "cmdline");
 
     // Grab Arg0 first, if there is one.
     char *cmd = (char *)buf_sp->GetBytes();
@@ -371,49 +379,6 @@ Host::GetProcessInfo (lldb::pid_t pid, ProcessInstanceInfo &process_info)
     return GetProcessAndStatInfo (pid, process_info, stat_info, tracerpid);
 }
 
-void
-Host::ThreadCreated (const char *thread_name)
-{
-    if (!Host::SetThreadName (LLDB_INVALID_PROCESS_ID, LLDB_INVALID_THREAD_ID, thread_name))
-    {
-        Host::SetShortThreadName (LLDB_INVALID_PROCESS_ID, LLDB_INVALID_THREAD_ID, thread_name, 16);
-    }
-}
-
-std::string
-Host::GetThreadName (lldb::pid_t pid, lldb::tid_t tid)
-{
-    assert(pid != LLDB_INVALID_PROCESS_ID);
-    assert(tid != LLDB_INVALID_THREAD_ID);
-
-    // Read /proc/$TID/comm file.
-    lldb::DataBufferSP buf_sp = ProcFileReader::ReadIntoDataBuffer (tid, "comm");
-    const char *comm_str = (const char *)buf_sp->GetBytes();
-    const char *cr_str = ::strchr(comm_str, '\n');
-    size_t length = cr_str ? (cr_str - comm_str) : strlen(comm_str);
-
-    std::string thread_name(comm_str, length);
-    return thread_name;
-}
-
-void
-Host::Backtrace (Stream &strm, uint32_t max_frames)
-{
-    if (max_frames > 0)
-    {
-        std::vector<void *> frame_buffer (max_frames, NULL);
-        int num_frames = ::backtrace (&frame_buffer[0], frame_buffer.size());
-        char** strs = ::backtrace_symbols (&frame_buffer[0], num_frames);
-        if (strs)
-        {
-            // Start at 1 to skip the "Host::Backtrace" frame
-            for (int i = 1; i < num_frames; ++i)
-                strm.Printf("%s\n", strs[i]);
-            ::free (strs);
-        }
-    }
-}
-
 size_t
 Host::GetEnvironment (StringList &env)
 {
@@ -423,4 +388,30 @@ Host::GetEnvironment (StringList &env)
     for (i=0; (env_entry = host_env[i]) != NULL; ++i)
         env.AppendString(env_entry);
     return i;
+}
+
+// TODO: Generalize this with a function Host::GetSignals() as discussed at http://reviews.llvm.org/D10180 
+const lldb_private::UnixSignalsSP&
+Host::GetUnixSignals ()
+{
+    ArchSpec target_arch = HostInfoBase::GetArchitecture();
+    if(target_arch.GetTriple ().getArch () == llvm::Triple::mips64 ||
+       target_arch.GetTriple ().getArch () == llvm::Triple::mips64el ||
+       target_arch.GetTriple ().getArch () == llvm::Triple::mips ||
+       target_arch.GetTriple ().getArch () == llvm::Triple::mipsel) {
+        static const lldb_private::UnixSignalsSP s_unix_signals_sp (new process_linux::MipsLinuxSignals ());
+        return s_unix_signals_sp;
+    }
+    else
+    {
+        static const lldb_private::UnixSignalsSP s_unix_signals_sp (new process_linux::LinuxSignals ());
+        return s_unix_signals_sp;
+    }
+
+}
+
+Error
+Host::ShellExpandArguments (ProcessLaunchInfo &launch_info)
+{
+    return Error("unimplemented");
 }

@@ -99,14 +99,20 @@ public:
     virtual ClassDescriptorSP
     GetClassDescriptorFromISA (ObjCISA isa);
     
-    virtual TypeVendor *
-    GetTypeVendor();
+    virtual DeclVendor *
+    GetDeclVendor();
     
     virtual lldb::addr_t
     LookupRuntimeSymbol (const ConstString &name);
     
     virtual EncodingToTypeSP
     GetEncodingToType ();
+    
+    virtual TaggedPointerVendor*
+    GetTaggedPointerVendor ()
+    {
+        return m_tagged_pointer_vendor_ap.get();
+    }
     
 protected:
     virtual lldb::BreakpointResolverSP
@@ -157,37 +163,34 @@ private:
         uint64_t                                                    m_objc_debug_isa_magic_mask;
         uint64_t                                                    m_objc_debug_isa_magic_value;
 
+        friend class AppleObjCRuntimeV2;
+        
         DISALLOW_COPY_AND_ASSIGN(NonPointerISACache);
     };
     
-    class TaggedPointerVendor
+    class TaggedPointerVendorV2 : public ObjCLanguageRuntime::TaggedPointerVendor
     {
     public:
-        static TaggedPointerVendor*
+        static TaggedPointerVendorV2*
         CreateInstance (AppleObjCRuntimeV2& runtime,
                         const lldb::ModuleSP& objc_module_sp);
         
-        virtual bool
-        IsPossibleTaggedPointer (lldb::addr_t ptr) = 0;
-        
-        virtual ObjCLanguageRuntime::ClassDescriptorSP
-        GetClassDescriptor (lldb::addr_t ptr) = 0;
-        
         virtual
-        ~TaggedPointerVendor () { }
+        ~TaggedPointerVendorV2 () { }
     protected:
         AppleObjCRuntimeV2&                                         m_runtime;
         
-        TaggedPointerVendor (AppleObjCRuntimeV2& runtime) :
+        TaggedPointerVendorV2 (AppleObjCRuntimeV2& runtime) :
+        TaggedPointerVendor(),
         m_runtime(runtime)
         {
         }
     private:
         
-        DISALLOW_COPY_AND_ASSIGN(TaggedPointerVendor);
+        DISALLOW_COPY_AND_ASSIGN(TaggedPointerVendorV2);
     };
     
-    class TaggedPointerVendorRuntimeAssisted : public TaggedPointerVendor
+    class TaggedPointerVendorRuntimeAssisted : public TaggedPointerVendorV2
     {
     public:
         virtual bool
@@ -214,12 +217,12 @@ private:
         uint32_t                                                    m_objc_debug_taggedpointer_payload_rshift;
         lldb::addr_t                                                m_objc_debug_taggedpointer_classes;
         
-        friend class AppleObjCRuntimeV2::TaggedPointerVendor;
+        friend class AppleObjCRuntimeV2::TaggedPointerVendorV2;
         
         DISALLOW_COPY_AND_ASSIGN(TaggedPointerVendorRuntimeAssisted);
     };
     
-    class TaggedPointerVendorLegacy : public TaggedPointerVendor
+    class TaggedPointerVendorLegacy : public TaggedPointerVendorV2
     {
     public:
         virtual bool
@@ -229,17 +232,45 @@ private:
         GetClassDescriptor (lldb::addr_t ptr);
     protected:
         TaggedPointerVendorLegacy (AppleObjCRuntimeV2& runtime) :
-        TaggedPointerVendor (runtime)
+        TaggedPointerVendorV2 (runtime)
         {
         }
         
-        friend class AppleObjCRuntimeV2::TaggedPointerVendor;
+        friend class AppleObjCRuntimeV2::TaggedPointerVendorV2;
         
         DISALLOW_COPY_AND_ASSIGN(TaggedPointerVendorLegacy);
     };
     
+    struct DescriptorMapUpdateResult
+    {
+        bool update_ran;
+        bool any_found;
+        
+        DescriptorMapUpdateResult (bool ran,
+                                   bool found)
+        {
+            update_ran = ran;
+            any_found = found;
+        }
+        
+        static DescriptorMapUpdateResult
+        Fail ()
+        {
+            return {false, false};
+        }
+        
+        static DescriptorMapUpdateResult
+        Success ()
+        {
+            return {true, true};
+        }
+    };
+    
     AppleObjCRuntimeV2 (Process *process,
                         const lldb::ModuleSP &objc_module_sp);
+    
+    ObjCISA
+    GetPointerISA (ObjCISA isa);
     
     bool
     IsTaggedPointer(lldb::addr_t ptr);
@@ -253,16 +284,21 @@ private:
     bool
     UpdateISAToDescriptorMapDynamic(RemoteNXMapTable &hash_table);
     
-    void
+    uint32_t
     ParseClassInfoArray (const lldb_private::DataExtractor &data,
                          uint32_t num_class_infos);
     
-    bool
+    DescriptorMapUpdateResult
     UpdateISAToDescriptorMapSharedCache ();
+    
+    void
+    WarnIfNoClassesCached ();
 
     lldb::addr_t
     GetSharedCacheReadOnlyAddress();
     
+    friend class ClassDescriptorV2;
+
     std::unique_ptr<ClangFunction>            m_get_class_info_function;
     std::unique_ptr<ClangUtilityFunction>     m_get_class_info_code;
     lldb::addr_t                            m_get_class_info_args;
@@ -273,7 +309,7 @@ private:
     lldb::addr_t                            m_get_shared_cache_class_info_args;
     Mutex                                   m_get_shared_cache_class_info_args_mutex;
 
-    std::unique_ptr<TypeVendor>               m_type_vendor_ap;
+    std::unique_ptr<DeclVendor>               m_decl_vendor_ap;
     lldb::addr_t                            m_isa_hash_table_ptr;
     HashTableSignature                      m_hash_signature;
     bool                                    m_has_object_getClass;
@@ -281,6 +317,7 @@ private:
     std::unique_ptr<NonPointerISACache>       m_non_pointer_isa_cache_ap;
     std::unique_ptr<TaggedPointerVendor>    m_tagged_pointer_vendor_ap;
     EncodingToTypeSP                        m_encoding_to_type_sp;
+    bool                                    m_noclasses_warning_emitted;
 };
     
 } // namespace lldb_private

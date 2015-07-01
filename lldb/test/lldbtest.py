@@ -31,6 +31,8 @@ OK
 $ 
 """
 
+import abc
+import glob
 import os, sys, traceback
 import os.path
 import re
@@ -41,6 +43,22 @@ import time
 import types
 import unittest2
 import lldb
+import lldbtest_config
+import lldbutil
+from _pyio import __metaclass__
+
+if sys.version_info.major < 3:
+    import urlparse
+else:
+    import urllib.parse as urlparse
+
+# dosep.py starts lots and lots of dotest instances
+# This option helps you find if two (or more) dotest instances are using the same
+# directory at the same time
+# Enable it to cause test failures and stderr messages if dotest instances try to run in
+# the same directory simultaneously
+# it is disabled by default because it litters the test directories with ".dirlock" files
+debug_confirm_directory_exclusivity = False
 
 # See also dotest.parseOptionsAndInitTestdirs(), where the environment variables
 # LLDB_COMMAND_TRACE and LLDB_DO_CLEANUP are set from '-t' and '-r dir' options.
@@ -74,7 +92,7 @@ PROCESS_EXITED = "Process exited successfully"
 
 PROCESS_STOPPED = "Process status should be stopped"
 
-RUN_SUCCEEDED = "Process is launched successfully"
+RUN_FAILED = "Process could not be launched successfully"
 
 RUN_COMPLETED = "Process exited successfully"
 
@@ -137,6 +155,8 @@ VALID_SYMBOL = "Got a valid symbol"
 
 VALID_TARGET = "Got a valid target"
 
+VALID_PLATFORM = "Got a valid platform"
+
 VALID_TYPE = "Got a valid type"
 
 VALID_VARIABLE = "Got a valid variable"
@@ -145,9 +165,18 @@ VARIABLES_DISPLAYED_CORRECTLY = "Variable(s) displayed correctly"
 
 WATCHPOINT_CREATED = "Watchpoint created successfully"
 
-def CMD_MSG(str):
-    '''A generic "Command '%s' returns successfully" message generator.'''
-    return "Command '%s' returns successfully" % str
+def cmd_failure_message(cmd, res, msg=None):
+    """ Return a command failure message.
+
+    Args:
+        cmd - The command which failed.
+        res - The command result of type SBCommandReturnObject.
+        msg - Additional failure message if any.
+    """
+    err_msg = res.GetError()
+    full_msg = (err_msg or "") + (msg or "")
+    full_msg = (">>> %s" % full_msg.replace("\n", "\n>>> ")) if full_msg else ""
+    return "Command '%s' failed.\n%s" % (cmd, full_msg)
 
 def COMPLETION_MSG(str_before, str_after):
     '''A generic message generator for the completion mechanism.'''
@@ -231,6 +260,101 @@ class recording(StringIO.StringIO):
             print >> self.session, self.getvalue()
         self.close()
 
+class _BaseProcess(object):
+    __metaclass__ = abc.ABCMeta
+
+    @abc.abstractproperty
+    def pid(self):
+        """Returns process PID if has been launched already."""
+
+    @abc.abstractmethod
+    def launch(self, executable, args):
+        """Launches new process with given executable and args."""
+
+    @abc.abstractmethod
+    def terminate(self):
+        """Terminates previously launched process.."""
+
+class _LocalProcess(_BaseProcess):
+
+    def __init__(self, trace_on):
+        self._proc = None
+        self._trace_on = trace_on
+        self._delayafterterminate = 0.1
+
+    @property
+    def pid(self):
+        return self._proc.pid
+
+    def launch(self, executable, args):
+        self._proc = Popen([executable] + args,
+                           stdout = open(os.devnull) if not self._trace_on else None,
+                           stdin = PIPE)
+
+    def terminate(self):
+        if self._proc.poll() == None:
+            # Terminate _proc like it does the pexpect
+            self._proc.send_signal(signal.SIGHUP)
+            time.sleep(self._delayafterterminate)
+            if self._proc.poll() != None:
+                return
+            self._proc.send_signal(signal.SIGCONT)
+            time.sleep(self._delayafterterminate)
+            if self._proc.poll() != None:
+                return
+            self._proc.send_signal(signal.SIGINT)
+            time.sleep(self._delayafterterminate)
+            if self._proc.poll() != None:
+                return
+            self._proc.terminate()
+            time.sleep(self._delayafterterminate)
+            if self._proc.poll() != None:
+                return
+            self._proc.kill()
+            time.sleep(self._delayafterterminate)
+
+    def poll(self):
+        return self._proc.poll()
+
+class _RemoteProcess(_BaseProcess):
+
+    def __init__(self, install_remote):
+        self._pid = None
+        self._install_remote = install_remote
+
+    @property
+    def pid(self):
+        return self._pid
+
+    def launch(self, executable, args):
+        if self._install_remote:
+            src_path = executable
+            dst_path = lldbutil.append_to_process_working_directory(os.path.basename(executable))
+
+            dst_file_spec = lldb.SBFileSpec(dst_path, False)
+            err = lldb.remote_platform.Install(lldb.SBFileSpec(src_path, True), dst_file_spec)
+            if err.Fail():
+                raise Exception("remote_platform.Install('%s', '%s') failed: %s" % (src_path, dst_path, err))
+        else:
+            dst_path = executable
+            dst_file_spec = lldb.SBFileSpec(executable, False)
+
+        launch_info = lldb.SBLaunchInfo(args)
+        launch_info.SetExecutableFile(dst_file_spec, True)
+        launch_info.SetWorkingDirectory(lldb.remote_platform.GetWorkingDirectory())
+
+        # Redirect stdout and stderr to /dev/null
+        launch_info.AddSuppressFileAction(1, False, True)
+        launch_info.AddSuppressFileAction(2, False, True)
+
+        err = lldb.remote_platform.Launch(launch_info)
+        if err.Fail():
+            raise Exception("remote_platform.Launch('%s', '%s') failed: %s" % (dst_path, args, err))
+        self._pid = launch_info.GetProcessID()
+
+    def terminate(self):
+        lldb.remote_platform.Kill(self._pid)
+
 # From 2.7's subprocess.check_output() convenience function.
 # Return a tuple (stdoutdata, stderrdata).
 def system(commands, **kwargs):
@@ -257,41 +381,41 @@ def system(commands, **kwargs):
     # Assign the sender object to variable 'test' and remove it from kwargs.
     test = kwargs.pop('sender', None)
 
-    separator = None
-    separator = " && " if os.name == "nt" else "; "
     # [['make', 'clean', 'foo'], ['make', 'foo']] -> ['make clean foo', 'make foo']
     commandList = [' '.join(x) for x in commands]
-    # ['make clean foo', 'make foo'] -> 'make clean foo; make foo'
-    shellCommand = separator.join(commandList)
+    output = ""
+    error = ""
+    for shellCommand in commandList:
+        if 'stdout' in kwargs:
+            raise ValueError('stdout argument not allowed, it will be overridden.')
+        if 'shell' in kwargs and kwargs['shell']==False:
+            raise ValueError('shell=False not allowed')
+        process = Popen(shellCommand, stdout=PIPE, stderr=PIPE, shell=True, **kwargs)
+        pid = process.pid
+        this_output, this_error = process.communicate()
+        retcode = process.poll()
 
-    if 'stdout' in kwargs:
-        raise ValueError('stdout argument not allowed, it will be overridden.')
-    if 'shell' in kwargs and kwargs['shell']==False:
-        raise ValueError('shell=False not allowed')
-    process = Popen(shellCommand, stdout=PIPE, stderr=PIPE, shell=True, **kwargs)
-    pid = process.pid
-    output, error = process.communicate()
-    retcode = process.poll()
+        # Enable trace on failure return while tracking down FreeBSD buildbot issues
+        trace = traceAlways
+        if not trace and retcode and sys.platform.startswith("freebsd"):
+            trace = True
 
-    # Enable trace on failure return while tracking down FreeBSD buildbot issues
-    trace = traceAlways
-    if not trace and retcode and sys.platform.startswith("freebsd"):
-        trace = True
+        with recording(test, trace) as sbuf:
+            print >> sbuf
+            print >> sbuf, "os command:", shellCommand
+            print >> sbuf, "with pid:", pid
+            print >> sbuf, "stdout:", this_output
+            print >> sbuf, "stderr:", this_error
+            print >> sbuf, "retcode:", retcode
+            print >> sbuf
 
-    with recording(test, trace) as sbuf:
-        print >> sbuf
-        print >> sbuf, "os command:", shellCommand
-        print >> sbuf, "with pid:", pid
-        print >> sbuf, "stdout:", output
-        print >> sbuf, "stderr:", error
-        print >> sbuf, "retcode:", retcode
-        print >> sbuf
-
-    if retcode:
-        cmd = kwargs.get("args")
-        if cmd is None:
-            cmd = shellCommand
-        raise CalledProcessError(retcode, cmd)
+        if retcode:
+            cmd = kwargs.get("args")
+            if cmd is None:
+                cmd = shellCommand
+            raise CalledProcessError(retcode, cmd)
+        output = output + this_output
+        error = error + this_error
     return (output, error)
 
 def getsource_if_available(obj):
@@ -309,6 +433,31 @@ def builder_module():
     if sys.platform.startswith("freebsd"):
         return __import__("builder_freebsd")
     return __import__("builder_" + sys.platform)
+
+def run_adb_command(cmd, device_id):
+    device_id_args = []
+    if device_id:
+        device_id_args = ["-s", device_id]
+    full_cmd = ["adb"] + device_id_args + cmd
+    p = Popen(full_cmd, stdout=PIPE, stderr=PIPE)
+    stdout, stderr = p.communicate()
+    return p.returncode, stdout, stderr
+
+def android_device_api():
+    assert lldb.platform_url is not None
+    device_id = None
+    parsed_url = urlparse.urlparse(lldb.platform_url)
+    if parsed_url.scheme == "adb":
+        device_id = parsed_url.netloc.split(":")[0]
+    retcode, stdout, stderr = run_adb_command(
+        ["shell", "getprop", "ro.build.version.sdk"], device_id)
+    if retcode == 0:
+        return int(stdout)
+    else:
+        raise LookupError(
+            ">>> Unable to determine the API level of the Android device.\n"
+            ">>> stdout:\n%s\n"
+            ">>> stderr:\n%s\n" % (stdout, stderr))
 
 #
 # Decorators for categorizing test cases.
@@ -330,6 +479,23 @@ def python_api_test(func):
 
     # Mark this function as such to separate them from lldb command line tests.
     wrapper.__python_api_test__ = True
+    return wrapper
+
+def lldbmi_test(func):
+    """Decorate the item as a lldb-mi only test."""
+    if isinstance(func, type) and issubclass(func, unittest2.TestCase):
+        raise Exception("@lldbmi_test can only be used to decorate a test method")
+    @wraps(func)
+    def wrapper(self, *args, **kwargs):
+        try:
+            if lldb.dont_do_lldbmi_test:
+                self.skipTest("lldb-mi tests")
+        except AttributeError:
+            pass
+        return func(self, *args, **kwargs)
+
+    # Mark this function as such to separate them from lldb command line tests.
+    wrapper.__lldbmi_test__ = True
     return wrapper
 
 def benchmarks_test(func):
@@ -401,7 +567,7 @@ def debugserver_test(func):
     return wrapper
 
 def llgs_test(func):
-    """Decorate the item as a lldb-gdbserver test."""
+    """Decorate the item as a lldb-server test."""
     if isinstance(func, type) and issubclass(func, unittest2.TestCase):
         raise Exception("@llgs_test can only be used to decorate a test method")
     @wraps(func)
@@ -424,7 +590,7 @@ def not_remote_testsuite_ready(func):
     @wraps(func)
     def wrapper(self, *args, **kwargs):
         try:
-            if lldb.lldbtest_remote_sandbox:
+            if lldb.lldbtest_remote_sandbox or lldb.remote_platform:
                 self.skipTest("not ready for remote testsuite")
         except AttributeError:
             pass
@@ -450,6 +616,8 @@ def expectedFailure(expected_fn, bugnumber=None):
             if expected_fn(self):
                 raise case._UnexpectedSuccess(sys.exc_info(), bugnumber)
         return wrapper
+    # if bugnumber is not-callable(incluing None), that means decorator function is called with optional arguments
+    # return decorator in this case, so it will be used to decorating original method
     if callable(bugnumber):
         return expectedFailure_impl(bugnumber)
     else:
@@ -462,8 +630,23 @@ def expectedFailureCompiler(compiler, compiler_version=None, bugnumber=None):
         return compiler in self.getCompiler() and self.expectedCompilerVersion(compiler_version)
     return expectedFailure(fn, bugnumber)
 
-def expectedFailureClang(bugnumber=None):
-    return expectedFailureCompiler('clang', None, bugnumber)
+# provide a function to xfail on defined oslist, compiler version, and archs
+# if none is specified for any argument, that argument won't be checked and thus means for all
+# for example,
+# @expectedFailureAll, xfail for all platform/compiler/arch,
+# @expectedFailureAll(compiler='gcc'), xfail for gcc on all platform/architecture
+# @expectedFailureAll(bugnumber, ["linux"], "gcc", ['>=', '4.9'], ['i386']), xfail for gcc>=4.9 on linux with i386
+def expectedFailureAll(bugnumber=None, oslist=None, compiler=None, compiler_version=None, archs=None):
+    def fn(self):
+        return ((oslist is None or self.getPlatform() in oslist) and
+                (compiler is None or (compiler in self.getCompiler() and self.expectedCompilerVersion(compiler_version))) and
+                self.expectedArch(archs))
+    return expectedFailure(fn, bugnumber)
+
+# to XFAIL a specific clang versions, try this
+# @expectedFailureClang('bugnumber', ['<=', '3.4'])
+def expectedFailureClang(bugnumber=None, compiler_version=None):
+    return expectedFailureCompiler('clang', compiler_version, bugnumber)
 
 def expectedFailureGcc(bugnumber=None, compiler_version=None):
     return expectedFailureCompiler('gcc', compiler_version, bugnumber)
@@ -482,19 +665,114 @@ def expectedFailurei386(bugnumber=None):
 def expectedFailurex86_64(bugnumber=None):
     return expectedFailureArch('x86_64', bugnumber)
 
-def expectedFailureOS(os, bugnumber=None, compilers=None):
+def expectedFailureOS(oslist, bugnumber=None, compilers=None):
     def fn(self):
-        return os in sys.platform and self.expectedCompiler(compilers)
+        return (self.getPlatform() in oslist and
+                self.expectedCompiler(compilers))
+    return expectedFailure(fn, bugnumber)
+
+def expectedFailureHostOS(oslist, bugnumber=None, compilers=None):
+    def fn(self):
+        return (getHostPlatform() in oslist and
+                self.expectedCompiler(compilers))
     return expectedFailure(fn, bugnumber)
 
 def expectedFailureDarwin(bugnumber=None, compilers=None):
-    return expectedFailureOS('darwin', bugnumber, compilers)
+    # For legacy reasons, we support both "darwin" and "macosx" as OS X triples.
+    return expectedFailureOS(getDarwinOSTriples(), bugnumber, compilers)
 
 def expectedFailureFreeBSD(bugnumber=None, compilers=None):
-    return expectedFailureOS('freebsd', bugnumber, compilers)
+    return expectedFailureOS(['freebsd'], bugnumber, compilers)
 
 def expectedFailureLinux(bugnumber=None, compilers=None):
-    return expectedFailureOS('linux', bugnumber, compilers)
+    return expectedFailureOS(['linux'], bugnumber, compilers)
+
+def expectedFailureWindows(bugnumber=None, compilers=None):
+    return expectedFailureOS(['windows'], bugnumber, compilers)
+
+def expectedFailureHostWindows(bugnumber=None, compilers=None):
+    return expectedFailureHostOS(['windows'], bugnumber, compilers)
+
+def expectedFailureAndroid(bugnumber=None, api_levels=None):
+    """ Mark a test as xfail for Android.
+
+    Arguments:
+        bugnumber - The LLVM pr associated with the problem.
+        api_levels - A sequence of numbers specifying the Android API levels
+            for which a test is expected to fail.
+    """
+    def fn(self):
+        triple = self.dbg.GetSelectedPlatform().GetTriple()
+        match = re.match(".*-.*-.*-android", triple)
+        if match:
+            if not api_levels:
+                return True
+            device_api = android_device_api()
+            return device_api and (device_api in api_levels)
+
+    return expectedFailure(fn, bugnumber)
+
+# if the test passes on the first try, we're done (success)
+# if the test fails once, then passes on the second try, raise an ExpectedFailure
+# if the test fails twice in a row, re-throw the exception from the second test run
+def expectedFlakey(expected_fn, bugnumber=None):
+    def expectedFailure_impl(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            from unittest2 import case
+            self = args[0]
+            try:
+                func(*args, **kwargs)
+            except Exception:
+                if expected_fn(self):
+                    # retry
+                    try:
+                        func(*args, **kwargs)
+                    except Exception:
+                        # oh snap! two failures in a row, record a failure/error
+                        raise
+                    # record the expected failure
+                    raise case._ExpectedFailure(sys.exc_info(), bugnumber)
+                else:
+                    raise
+        return wrapper
+    # if bugnumber is not-callable(incluing None), that means decorator function is called with optional arguments
+    # return decorator in this case, so it will be used to decorating original method
+    if callable(bugnumber):
+        return expectedFailure_impl(bugnumber)
+    else:
+        return expectedFailure_impl
+
+def expectedFlakeyOS(oslist, bugnumber=None, compilers=None):
+    def fn(self):
+        return (self.getPlatform() in oslist and
+                self.expectedCompiler(compilers))
+    return expectedFlakey(fn, bugnumber)
+
+def expectedFlakeyDarwin(bugnumber=None, compilers=None):
+    # For legacy reasons, we support both "darwin" and "macosx" as OS X triples.
+    return expectedFlakeyOS(getDarwinOSTriples(), bugnumber, compilers)
+
+def expectedFlakeyLinux(bugnumber=None, compilers=None):
+    return expectedFlakeyOS(['linux'], bugnumber, compilers)
+
+def expectedFlakeyFreeBSD(bugnumber=None, compilers=None):
+    return expectedFlakeyOS(['freebsd'], bugnumber, compilers)
+
+def expectedFlakeyCompiler(compiler, compiler_version=None, bugnumber=None):
+    if compiler_version is None:
+        compiler_version=['=', None]
+    def fn(self):
+        return compiler in self.getCompiler() and self.expectedCompilerVersion(compiler_version)
+    return expectedFlakey(fn, bugnumber)
+
+# @expectedFlakeyClang('bugnumber', ['<=', '3.4'])
+def expectedFlakeyClang(bugnumber=None, compiler_version=None):
+    return expectedFlakeyCompiler('clang', compiler_version, bugnumber)
+
+# @expectedFlakeyGcc('bugnumber', ['<=', '3.4'])
+def expectedFlakeyGcc(bugnumber=None, compiler_version=None):
+    return expectedFlakeyCompiler('gcc', compiler_version, bugnumber)
 
 def skipIfRemote(func):
     """Decorate the item to skip tests if testing remotely."""
@@ -510,6 +788,28 @@ def skipIfRemote(func):
             func(*args, **kwargs)
     return wrapper
 
+def skipUnlessListedRemote(remote_list=None):
+    def myImpl(func):
+        if isinstance(func, type) and issubclass(func, unittest2.TestCase):
+            raise Exception("@skipIfRemote can only be used to decorate a "
+                            "test method")
+
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            if remote_list and lldb.remote_platform:
+                self = args[0]
+                triple = self.dbg.GetSelectedPlatform().GetTriple()
+                for r in remote_list:
+                    if r in triple:
+                        func(*args, **kwargs)
+                        return
+                self.skipTest("skip on remote platform %s" % str(triple))
+            else:
+                func(*args, **kwargs)
+        return wrapper
+
+    return myImpl
+
 def skipIfRemoteDueToDeadlock(func):
     """Decorate the item to skip tests if testing remotely due to the test deadlocking."""
     if isinstance(func, type) and issubclass(func, unittest2.TestCase):
@@ -524,66 +824,116 @@ def skipIfRemoteDueToDeadlock(func):
             func(*args, **kwargs)
     return wrapper
 
+def skipIfNoSBHeaders(func):
+    """Decorate the item to mark tests that should be skipped when LLDB is built with no SB API headers."""
+    if isinstance(func, type) and issubclass(func, unittest2.TestCase):
+        raise Exception("@skipIfNoSBHeaders can only be used to decorate a test method")
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        from unittest2 import case
+        self = args[0]
+        if sys.platform.startswith("darwin"):
+            header = os.path.join(self.lib_dir, 'LLDB.framework', 'Versions','Current','Headers','LLDB.h')
+        else:
+            header = os.path.join(os.environ["LLDB_SRC"], "include", "lldb", "API", "LLDB.h")
+        platform = sys.platform
+        if not os.path.exists(header):
+            self.skipTest("skip because LLDB.h header not found")
+        else:
+            func(*args, **kwargs)
+    return wrapper
+
 def skipIfFreeBSD(func):
     """Decorate the item to skip tests that should be skipped on FreeBSD."""
-    if isinstance(func, type) and issubclass(func, unittest2.TestCase):
-        raise Exception("@skipIfFreeBSD can only be used to decorate a test method")
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        from unittest2 import case
-        self = args[0]
-        platform = sys.platform
-        if "freebsd" in platform:
-            self.skipTest("skip on FreeBSD")
-        else:
-            func(*args, **kwargs)
-    return wrapper
+    return skipIfPlatform(["freebsd"])(func)
 
-def skipIfLinux(func):
-    """Decorate the item to skip tests that should be skipped on Linux."""
-    if isinstance(func, type) and issubclass(func, unittest2.TestCase):
-        raise Exception("@skipIfLinux can only be used to decorate a test method")
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        from unittest2 import case
-        self = args[0]
-        platform = sys.platform
-        if "linux" in platform:
-            self.skipTest("skip on linux")
-        else:
-            func(*args, **kwargs)
-    return wrapper
-
-def skipIfWindows(func):
-    """Decorate the item to skip tests that should be skipped on Windows."""
-    if isinstance(func, type) and issubclass(func, unittest2.TestCase):
-        raise Exception("@skipIfWindows can only be used to decorate a test method")
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        from unittest2 import case
-        self = args[0]
-        platform = sys.platform
-        if "win32" in platform:
-            self.skipTest("skip on Windows")
-        else:
-            func(*args, **kwargs)
-    return wrapper
+def getDarwinOSTriples():
+    return ['darwin', 'macosx', 'ios']
 
 def skipIfDarwin(func):
     """Decorate the item to skip tests that should be skipped on Darwin."""
+    return skipIfPlatform(getDarwinOSTriples())(func)
+
+def skipIfLinux(func):
+    """Decorate the item to skip tests that should be skipped on Linux."""
+    return skipIfPlatform(["linux"])(func)
+
+def skipIfWindows(func):
+    """Decorate the item to skip tests that should be skipped on Windows."""
+    return skipIfPlatform(["windows"])(func)
+
+def skipIfHostWindows(func):
+    """Decorate the item to skip tests that should be skipped on Windows."""
+    return skipIfHostPlatform(["windows"])(func)
+
+def skipUnlessDarwin(func):
+    """Decorate the item to skip tests that should be skipped on any non Darwin platform."""
+    return skipUnlessPlatform(getDarwinOSTriples())(func)
+
+def getPlatform():
+    """Returns the target platform which the tests are running on."""
+    platform = lldb.DBG.GetSelectedPlatform().GetTriple().split('-')[2]
+    if platform.startswith('freebsd'):
+        platform = 'freebsd'
+    return platform
+
+def getHostPlatform():
+    """Returns the host platform running the test suite."""
+    # Attempts to return a platform name matching a target Triple platform.
+    if sys.platform.startswith('linux'):
+        return 'linux'
+    elif sys.platform.startswith('win32'):
+        return 'windows'
+    elif sys.platform.startswith('darwin'):
+        return 'darwin'
+    elif sys.platform.startswith('freebsd'):
+        return 'freebsd'
+    else:
+        return sys.platform
+
+def platformIsDarwin():
+    """Returns true if the OS triple for the selected platform is any valid apple OS"""
+    return getPlatform() in getDarwinOSTriples()
+
+def skipIfHostIncompatibleWithRemote(func):
+    """Decorate the item to skip tests if binaries built on this host are incompatible."""
     if isinstance(func, type) and issubclass(func, unittest2.TestCase):
-        raise Exception("@skipIfDarwin can only be used to decorate a test method")
+        raise Exception("@skipIfHostIncompatibleWithRemote can only be used to decorate a test method")
     @wraps(func)
     def wrapper(*args, **kwargs):
         from unittest2 import case
         self = args[0]
-        platform = sys.platform
-        if "darwin" in platform:
-            self.skipTest("skip on darwin")
+        host_arch = self.getLldbArchitecture()
+        host_platform = getHostPlatform()
+        target_arch = self.getArchitecture()
+        target_platform = 'darwin' if self.platformIsDarwin() else self.getPlatform()
+        if not (target_arch == 'x86_64' and host_arch == 'i386') and host_arch != target_arch:
+            self.skipTest("skipping because target %s is not compatible with host architecture %s" % (target_arch, host_arch))
+        elif target_platform != host_platform:
+            self.skipTest("skipping because target is %s but host is %s" % (target_platform, host_platform))
         else:
             func(*args, **kwargs)
     return wrapper
 
+def skipIfHostPlatform(oslist):
+    """Decorate the item to skip tests if running on one of the listed host platforms."""
+    return unittest2.skipIf(getHostPlatform() in oslist,
+                            "skip on %s" % (", ".join(oslist)))
+
+def skipUnlessHostPlatform(oslist):
+    """Decorate the item to skip tests unless running on one of the listed host platforms."""
+    return unittest2.skipUnless(getHostPlatform() in oslist,
+                                "requires on of %s" % (", ".join(oslist)))
+
+def skipIfPlatform(oslist):
+    """Decorate the item to skip tests if running on one of the listed platforms."""
+    return unittest2.skipIf(getPlatform() in oslist,
+                            "skip on %s" % (", ".join(oslist)))
+
+def skipUnlessPlatform(oslist):
+    """Decorate the item to skip tests unless running on one of the listed platforms."""
+    return unittest2.skipUnless(getPlatform() in oslist,
+                                "requires on of %s" % (", ".join(oslist)))
 
 def skipIfLinuxClang(func):
     """Decorate the item to skip tests that should be skipped if building on 
@@ -596,12 +946,43 @@ def skipIfLinuxClang(func):
         from unittest2 import case
         self = args[0]
         compiler = self.getCompiler()
-        platform = sys.platform
-        if "clang" in compiler and "linux" in platform:
+        platform = self.getPlatform()
+        if "clang" in compiler and platform == "linux":
             self.skipTest("skipping because Clang is used on Linux")
         else:
             func(*args, **kwargs)
     return wrapper
+
+# provide a function to skip on defined oslist, compiler version, and archs
+# if none is specified for any argument, that argument won't be checked and thus means for all
+# for example,
+# @skipIf, skip for all platform/compiler/arch,
+# @skipIf(compiler='gcc'), skip for gcc on all platform/architecture
+# @skipIf(bugnumber, ["linux"], "gcc", ['>=', '4.9'], ['i386']), skip for gcc>=4.9 on linux with i386
+
+# TODO: refactor current code, to make skipIfxxx functions to call this function
+def skipIf(bugnumber=None, oslist=None, compiler=None, compiler_version=None, archs=None):
+    def fn(self):
+        return ((oslist is None or self.getPlatform() in oslist) and
+                (compiler is None or (compiler in self.getCompiler() and self.expectedCompilerVersion(compiler_version))) and
+                self.expectedArch(archs))
+    return skipTestIfFn(fn, bugnumber, skipReason="skipping because os:%s compiler: %s %s arch: %s"%(oslist, compiler, compiler_version, archs))
+
+def skipTestIfFn(expected_fn, bugnumber=None, skipReason=None):
+    def skipTestIfFn_impl(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            from unittest2 import case
+            self = args[0]
+            if expected_fn(self):
+               self.skipTest(skipReason)
+            else:
+                func(*args, **kwargs)
+        return wrapper
+    if callable(bugnumber):
+        return skipTestIfFn_impl(bugnumber)
+    else:
+        return skipTestIfFn_impl
 
 def skipIfGcc(func):
     """Decorate the item to skip tests that should be skipped if building with gcc ."""
@@ -647,6 +1028,58 @@ def skipIfi386(func):
             func(*args, **kwargs)
     return wrapper
 
+def skipIfTargetAndroid(api_levels=None):
+    """Decorator to skip tests when the target is Android.
+
+    Arguments:
+        api_levels - The API levels for which the test should be skipped. If
+            it is None, then the test will be skipped for all API levels.
+    """
+    def myImpl(func):
+        if isinstance(func, type) and issubclass(func, unittest2.TestCase):
+            raise Exception("@skipIfTargetAndroid can only be used to "
+                            "decorate a test method")
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            from unittest2 import case
+            self = args[0]
+            triple = self.dbg.GetSelectedPlatform().GetTriple()
+            if re.match(".*-.*-.*-android", triple):
+                if api_levels:
+                    device_api = android_device_api()
+                    if device_api and (device_api in api_levels):
+                        self.skipTest(
+                            "skip on Android target with API %d" % device_api)
+                else:
+                    self.skipTest("skip on Android target")
+            func(*args, **kwargs)
+        return wrapper
+    return myImpl
+
+def skipUnlessCompilerRt(func):
+    """Decorate the item to skip tests if testing remotely."""
+    if isinstance(func, type) and issubclass(func, unittest2.TestCase):
+        raise Exception("@skipUnless can only be used to decorate a test method")
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        from unittest2 import case
+        import os.path
+        compilerRtPath = os.path.join(os.path.dirname(__file__), "..", "..", "..", "projects", "compiler-rt")
+        if not os.path.exists(compilerRtPath):
+            self = args[0]
+            self.skipTest("skip if compiler-rt not found")
+        else:
+            func(*args, **kwargs)
+    return wrapper
+
+class _PlatformContext(object):
+    """Value object class which contains platform-specific options."""
+
+    def __init__(self, shlib_environment_var, shlib_prefix, shlib_extension):
+        self.shlib_environment_var = shlib_environment_var
+        self.shlib_prefix = shlib_prefix
+        self.shlib_extension = shlib_extension
+
 
 class Base(unittest2.TestCase):
     """
@@ -661,7 +1094,7 @@ class Base(unittest2.TestCase):
 
     # Keep track of the old current working directory.
     oldcwd = None
-    
+
     @staticmethod
     def compute_mydir(test_file):
         '''Subclasses should call this function to correctly calculate the required "mydir" attribute as follows: 
@@ -680,7 +1113,6 @@ class Base(unittest2.TestCase):
         Python unittest framework class setup fixture.
         Do current directory manipulation.
         """
-
         # Fail fast if 'mydir' attribute is not overridden.
         if not cls.mydir or len(cls.mydir) == 0:
             raise Exception("Subclasses must override the 'mydir' attribute.")
@@ -691,9 +1123,34 @@ class Base(unittest2.TestCase):
         # Change current working directory if ${LLDB_TEST} is defined.
         # See also dotest.py which sets up ${LLDB_TEST}.
         if ("LLDB_TEST" in os.environ):
+            full_dir = os.path.join(os.environ["LLDB_TEST"], cls.mydir)
             if traceAlways:
-                print >> sys.stderr, "Change dir to:", os.path.join(os.environ["LLDB_TEST"], cls.mydir)
+                print >> sys.stderr, "Change dir to:", full_dir
             os.chdir(os.path.join(os.environ["LLDB_TEST"], cls.mydir))
+
+        if debug_confirm_directory_exclusivity:
+            import lock
+            cls.dir_lock = lock.Lock(os.path.join(full_dir, ".dirlock"))
+            try:
+                cls.dir_lock.try_acquire()
+                # write the class that owns the lock into the lock file
+                cls.dir_lock.handle.write(cls.__name__)
+            except IOError as ioerror:
+                # nothing else should have this directory lock
+                # wait here until we get a lock
+                cls.dir_lock.acquire()
+                # read the previous owner from the lock file
+                lock_id = cls.dir_lock.handle.read()
+                print >> sys.stderr, "LOCK ERROR: {} wants to lock '{}' but it is already locked by '{}'".format(cls.__name__, full_dir, lock_id)
+                raise ioerror
+
+        # Set platform context.
+        if platformIsDarwin():
+            cls.platformContext = _PlatformContext('DYLD_LIBRARY_PATH', 'lib', 'dylib')
+        elif getPlatform() == "linux" or getPlatform() == "freebsd":
+            cls.platformContext = _PlatformContext('LD_LIBRARY_PATH', 'lib', 'so')
+        else:
+            cls.platformContext = None
 
     @classmethod
     def tearDownClass(cls):
@@ -718,6 +1175,10 @@ class Base(unittest2.TestCase):
                     exc_type, exc_value, exc_tb = sys.exc_info()
                     traceback.print_exception(exc_type, exc_value, exc_tb)
 
+        if debug_confirm_directory_exclusivity:
+            cls.dir_lock.release()
+            del cls.dir_lock
+
         # Restore old working directory.
         if traceAlways:
             print >> sys.stderr, "Restore dir to:", cls.oldcwd
@@ -734,6 +1195,55 @@ class Base(unittest2.TestCase):
         else:
             return True
 
+    def enableLogChannelsForCurrentTest(self):
+        if len(lldbtest_config.channels) == 0:
+            return
+
+        # if debug channels are specified in lldbtest_config.channels,
+        # create a new set of log files for every test
+        log_basename = self.getLogBasenameForCurrentTest()
+
+        # confirm that the file is writeable
+        host_log_path = "{}-host.log".format(log_basename)
+        open(host_log_path, 'w').close()
+
+        log_enable = "log enable -Tpn -f {} ".format(host_log_path)
+        for channel_with_categories in lldbtest_config.channels:
+            channel_then_categories = channel_with_categories.split(' ', 1)
+            channel = channel_then_categories[0]
+            if len(channel_then_categories) > 1:
+                categories = channel_then_categories[1]
+            else:
+                categories = "default"
+
+            if channel == "gdb-remote":
+                # communicate gdb-remote categories to debugserver
+                os.environ["LLDB_DEBUGSERVER_LOG_FLAGS"] = categories
+
+            self.ci.HandleCommand(log_enable + channel_with_categories, self.res)
+            if not self.res.Succeeded():
+                raise Exception('log enable failed (check LLDB_LOG_OPTION env variable)')
+
+        # Communicate log path name to debugserver & lldb-server
+        server_log_path = "{}-server.log".format(log_basename)
+        open(server_log_path, 'w').close()
+        os.environ["LLDB_DEBUGSERVER_LOG_FILE"] = server_log_path
+
+        # Communicate channels to lldb-server
+        os.environ["LLDB_SERVER_LOG_CHANNELS"] = ":".join(lldbtest_config.channels)
+
+        if len(lldbtest_config.channels) == 0:
+            return
+
+    def disableLogChannelsForCurrentTest(self):
+        # close all log files that we opened
+        for channel_and_categories in lldbtest_config.channels:
+            # channel format - <channel-name> [<category0> [<category1> ...]]
+            channel = channel_and_categories.split(' ', 1)[0]
+            self.ci.HandleCommand("log disable " + channel, self.res)
+            if not self.res.Succeeded():
+                raise Exception('log disable failed (check LLDB_LOG_OPTION env variable)')
+
     def setUp(self):
         """Fixture for unittest test case setup.
 
@@ -747,14 +1257,12 @@ class Base(unittest2.TestCase):
         else:
             self.libcxxPath = None
 
-        if "LLDB_EXEC" in os.environ:
-            self.lldbExec = os.environ["LLDB_EXEC"]
+        if "LLDBMI_EXEC" in os.environ:
+            self.lldbMiExec = os.environ["LLDBMI_EXEC"]
         else:
-            self.lldbExec = None
-        if "LLDB_HERE" in os.environ:
-            self.lldbHere = os.environ["LLDB_HERE"]
-        else:
-            self.lldbHere = None
+            self.lldbMiExec = None
+            self.dont_do_lldbmi_test = True
+
         # If we spawn an lldb process for test (via pexpect), do not load the
         # init file unless told otherwise.
         if "NO_LLDBINIT" in os.environ and "NO" == os.environ["NO_LLDBINIT"]:
@@ -780,6 +1288,19 @@ class Base(unittest2.TestCase):
                     pass
                 else:
                     self.skipTest("non python api test")
+        except AttributeError:
+            pass
+
+        # lldb-mi only test is decorated with @lldbmi_test,
+        # which also sets the "__lldbmi_test__" attribute of the
+        # function object to True.
+        try:
+            if lldb.just_do_lldbmi_test:
+                testMethod = getattr(self, self._testMethodName)
+                if getattr(testMethod, "__lldbmi_test__", False):
+                    pass
+                else:
+                    self.skipTest("non lldb-mi test")
         except AttributeError:
             pass
 
@@ -821,7 +1342,11 @@ class Base(unittest2.TestCase):
 
         # Create a string buffer to record the session info, to be dumped into a
         # test case specific file if test failure is encountered.
-        self.session = StringIO.StringIO()
+        self.log_basename = self.getLogBasenameForCurrentTest()
+
+        session_file = "{}.log".format(self.log_basename)
+        unbuffered = 0 # 0 is the constant for unbuffered
+        self.session = open(session_file, "w", unbuffered)
 
         # Optimistically set __errored__, __failed__, __expected__ to False
         # initially.  If the test errored/failed, the session info
@@ -842,11 +1367,28 @@ class Base(unittest2.TestCase):
         # See HideStdout(self).
         self.sys_stdout_hidden = False
 
-        # set environment variable names for finding shared libraries
-        if sys.platform.startswith("darwin"):
-            self.dylibPath = 'DYLD_LIBRARY_PATH'
-        elif sys.platform.startswith("linux") or sys.platform.startswith("freebsd"):
-            self.dylibPath = 'LD_LIBRARY_PATH'
+        if self.platformContext:
+            # set environment variable names for finding shared libraries
+            self.dylibPath = self.platformContext.shlib_environment_var
+
+        # Create the debugger instance if necessary.
+        try:
+            self.dbg = lldb.DBG
+        except AttributeError:
+            self.dbg = lldb.SBDebugger.Create()
+
+        if not self.dbg:
+            raise Exception('Invalid debugger instance')
+
+        # Retrieve the associated command interpreter instance.
+        self.ci = self.dbg.GetCommandInterpreter()
+        if not self.ci:
+            raise Exception('Could not get the command interpreter')
+
+        # And the result object.
+        self.res = lldb.SBCommandReturnObject()
+
+        self.enableLogChannelsForCurrentTest()
 
     def runHooks(self, child=None, child_prompt=None, use_cmd_api=False):
         """Perform the run hooks to bring lldb debugger to the desired state.
@@ -881,8 +1423,7 @@ class Base(unittest2.TestCase):
     def cleanupSubprocesses(self):
         # Ensure any subprocesses are cleaned up
         for p in self.subprocesses:
-            if p.poll() == None:
-                p.terminate()
+            p.terminate()
             del p
         del self.subprocesses[:]
         # Ensure any forked processes are cleaned up
@@ -890,7 +1431,7 @@ class Base(unittest2.TestCase):
             if os.path.exists("/proc/" + str(pid)):
                 os.kill(pid, signal.SIGTERM)
 
-    def spawnSubprocess(self, executable, args=[]):
+    def spawnSubprocess(self, executable, args=[], install_remote=True):
         """ Creates a subprocess.Popen object with the specified executable and arguments,
             saves it in self.subprocesses, and returns the object.
             NOTE: if using this function, ensure you also call:
@@ -899,11 +1440,8 @@ class Base(unittest2.TestCase):
 
             otherwise the test suite will leak processes.
         """
-
-        # Don't display the stdout if not in TraceOn() mode.
-        proc = Popen([executable] + args,
-                     stdout = open(os.devnull) if not self.TraceOn() else None,
-                     stdin = PIPE)
+        proc = _RemoteProcess(install_remote) if lldb.remote_platform else _LocalProcess(self.TraceOn())
+        proc.launch(executable, args)
         self.subprocesses.append(proc)
         return proc
 
@@ -980,12 +1518,10 @@ class Base(unittest2.TestCase):
             with recording(self, traceAlways) as sbuf:
                 print >> sbuf, "Adding tearDown hook:", getsource_if_available(hook)
             self.hooks.append(hook)
+        
+        return self
 
-    def tearDown(self):
-        """Fixture for unittest test case teardown."""
-        #import traceback
-        #traceback.print_stack()
-
+    def deletePexpectChild(self):
         # This is for the case of directly spawning 'lldb' and interacting with it
         # using pexpect.
         if self.child and self.child.isalive():
@@ -999,18 +1535,39 @@ class Base(unittest2.TestCase):
                 self.child.sendline('settings set interpreter.prompt-on-quit false')
                 self.child.sendline('quit')
                 self.child.expect(pexpect.EOF)
-            except ValueError, ExceptionPexpect:
+            except (ValueError, pexpect.ExceptionPexpect):
                 # child is already terminated
                 pass
+            except OSError as exception:
+                import errno
+                if exception.errno != errno.EIO:
+                    # unexpected error
+                    raise
+                # child is already terminated
+                pass
+            finally:
+                # Give it one final blow to make sure the child is terminated.
+                self.child.close()
 
-            # Give it one final blow to make sure the child is terminated.
-            self.child.close()
+    def tearDown(self):
+        """Fixture for unittest test case teardown."""
+        #import traceback
+        #traceback.print_stack()
+
+        self.deletePexpectChild()
 
         # Check and run any hook functions.
         for hook in reversed(self.hooks):
             with recording(self, traceAlways) as sbuf:
                 print >> sbuf, "Executing tearDown hook:", getsource_if_available(hook)
-            hook()
+            import inspect
+            hook_argc = len(inspect.getargspec(hook).args)
+            if hook_argc == 0 or getattr(hook,'im_self',None):
+                hook()
+            elif hook_argc == 1:
+                hook(self)
+            else:
+                hook() # try the plain call and hope it works
 
         del self.hooks
 
@@ -1023,6 +1580,8 @@ class Base(unittest2.TestCase):
             if self.dicts:
                 for dict in reversed(self.dicts):
                     self.cleanup(dictionary=dict)
+
+        self.disableLogChannelsForCurrentTest()
 
         # Decide whether to dump the session info.
         self.dumpSessionInfo()
@@ -1057,7 +1616,7 @@ class Base(unittest2.TestCase):
             if bugnumber == None:
                 print >> sbuf, "expected failure"
             else:
-                print >> sbuf, "expected failure (problem id:" + str(bugnumber) + ")"	
+                print >> sbuf, "expected failure (problem id:" + str(bugnumber) + ")"
 
     def markSkippedTest(self):
         """Callback invoked when a test is skipped."""
@@ -1078,7 +1637,36 @@ class Base(unittest2.TestCase):
             if bugnumber == None:
                 print >> sbuf, "unexpected success"
             else:
-                print >> sbuf, "unexpected success (problem id:" + str(bugnumber) + ")"	
+                print >> sbuf, "unexpected success (problem id:" + str(bugnumber) + ")"
+
+    def getRerunArgs(self):
+        return " -f %s.%s" % (self.__class__.__name__, self._testMethodName)
+
+    def getLogBasenameForCurrentTest(self, prefix=None):
+        """
+        returns a partial path that can be used as the beginning of the name of multiple
+        log files pertaining to this test
+
+        <session-dir>/<arch>-<compiler>-<test-file>.<test-class>.<test-method>
+        """
+        dname = os.path.join(os.environ["LLDB_TEST"],
+                     os.environ["LLDB_SESSION_DIRNAME"])
+        if not os.path.isdir(dname):
+            os.mkdir(dname)
+
+        compiler = self.getCompiler()
+
+        if compiler[1] == ':':
+            compiler = compiler[2:]
+
+        fname = "{}-{}-{}".format(self.id(), self.getArchitecture(), "_".join(compiler.split(os.path.sep)))
+        if len(fname) > 200:
+            fname = "{}-{}-{}".format(self.id(), self.getArchitecture(), compiler.split(os.path.sep)[-1])
+
+        if prefix is not None:
+            fname = "{}-{}".format(prefix, fname)
+
+        return os.path.join(dname, fname)
 
     def dumpSessionInfo(self):
         """
@@ -1100,6 +1688,9 @@ class Base(unittest2.TestCase):
         # formatted tracebacks.
         #
         # See http://docs.python.org/library/unittest.html#unittest.TestResult.
+
+        # output tracebacks into session
+        pairs = []
         if self.__errored__:
             pairs = lldb.test_result.errors
             prefix = 'Error'
@@ -1112,36 +1703,52 @@ class Base(unittest2.TestCase):
         elif self.__skipped__:
             prefix = 'SkippedTest'
         elif self.__unexpected__:
-            prefix = "UnexpectedSuccess"
+            prefix = 'UnexpectedSuccess'
         else:
-            # Simply return, there's no session info to dump!
-            return
+            prefix = 'Success'
 
         if not self.__unexpected__ and not self.__skipped__:
             for test, traceback in pairs:
                 if test is self:
                     print >> self.session, traceback
 
+        # put footer (timestamp/rerun instructions) into session
         testMethod = getattr(self, self._testMethodName)
         if getattr(testMethod, "__benchmarks_test__", False):
             benchmarks = True
         else:
             benchmarks = False
 
-        dname = os.path.join(os.environ["LLDB_TEST"],
-                             os.environ["LLDB_SESSION_DIRNAME"])
-        if not os.path.isdir(dname):
-            os.mkdir(dname)
-        fname = os.path.join(dname, "%s-%s-%s-%s.log" % (prefix, self.getArchitecture(), "_".join(self.getCompiler().split('/')), self.id()))
-        with open(fname, "w") as f:
-            import datetime
-            print >> f, "Session info generated @", datetime.datetime.now().ctime()
-            print >> f, self.session.getvalue()
-            print >> f, "To rerun this test, issue the following command from the 'test' directory:\n"
-            print >> f, "./dotest.py %s -v %s -f %s.%s" % (self.getRunOptions(),
-                                                           ('+b' if benchmarks else '-t'),
-                                                           self.__class__.__name__,
-                                                           self._testMethodName)
+        import datetime
+        print >> self.session, "Session info generated @", datetime.datetime.now().ctime()
+        print >> self.session, "To rerun this test, issue the following command from the 'test' directory:\n"
+        print >> self.session, "./dotest.py %s -v %s %s" % (self.getRunOptions(),
+                                                 ('+b' if benchmarks else '-t'),
+                                                 self.getRerunArgs())
+        self.session.close()
+        del self.session
+
+        # process the log files
+        log_files_for_this_test = glob.glob(self.log_basename + "*")
+
+        if prefix != 'Success' or lldbtest_config.log_success:
+            # keep all log files, rename them to include prefix
+            dst_log_basename = self.getLogBasenameForCurrentTest(prefix)
+            for src in log_files_for_this_test:
+                if os.path.isfile(src):
+                    dst = src.replace(self.log_basename, dst_log_basename)
+                    if os.name == "nt" and os.path.isfile(dst):
+                        # On Windows, renaming a -> b will throw an exception if b exists.  On non-Windows platforms
+                        # it silently replaces the destination.  Ultimately this means that atomic renames are not
+                        # guaranteed to be possible on Windows, but we need this to work anyway, so just remove the
+                        # destination first if it already exists.
+                        os.remove(dst)
+
+                    os.rename(src, dst)
+        else:
+            # success!  (and we don't want log files) delete log files
+            for log_file in log_files_for_this_test:
+                os.unlink(log_file)
 
     # ====================================================
     # Config. methods supported through a plugin interface
@@ -1151,12 +1758,43 @@ class Base(unittest2.TestCase):
     def getArchitecture(self):
         """Returns the architecture in effect the test suite is running with."""
         module = builder_module()
-        return module.getArchitecture()
+        arch = module.getArchitecture()
+        if arch == 'amd64':
+            arch = 'x86_64'
+        return arch
+
+    def getLldbArchitecture(self):
+        """Returns the architecture of the lldb binary."""
+        if not hasattr(self, 'lldbArchitecture'):
+
+            # spawn local process
+            command = [
+                lldbtest_config.lldbExec,
+                "-o",
+                "file " + lldbtest_config.lldbExec,
+                "-o",
+                "quit"
+            ]
+
+            output = check_output(command)
+            str = output.decode("utf-8");
+
+            for line in str.splitlines():
+                m = re.search("Current executable set to '.*' \\((.*)\\)\\.", line)
+                if m:
+                    self.lldbArchitecture = m.group(1)
+                    break
+
+        return self.lldbArchitecture
 
     def getCompiler(self):
         """Returns the compiler in effect the test suite is running with."""
         module = builder_module()
         return module.getCompiler()
+
+    def getCompilerBinary(self):
+        """Returns the compiler binary the test suite is running with."""
+        return self.getCompiler().split()[0]
 
     def getCompilerVersion(self):
         """ Returns a string that represents the compiler version.
@@ -1165,13 +1803,21 @@ class Base(unittest2.TestCase):
         from lldbutil import which
         version = 'unknown'
 
-        compiler = self.getCompiler()
+        compiler = self.getCompilerBinary()
         version_output = system([[which(compiler), "-v"]])[1]
         for line in version_output.split(os.linesep):
             m = re.search('version ([0-9\.]+)', line)
             if m:
                 version = m.group(1)
         return version
+
+    def platformIsDarwin(self):
+        """Returns true if the OS triple for the selected platform is any valid apple OS"""
+        return platformIsDarwin()
+
+    def getPlatform(self):
+        """Returns the target platform the test suite is running on."""
+        return getPlatform()
 
     def isIntelCompiler(self):
         """ Returns true if using an Intel (ICC) compiler, false otherwise. """
@@ -1213,6 +1859,17 @@ class Base(unittest2.TestCase):
 
         return False
 
+    def expectedArch(self, archs):
+        """Returns True iff any element of archs is a sub-string of the current architecture."""
+        if (archs == None):
+            return True
+
+        for arch in archs:
+            if arch in self.getArchitecture():
+                return True
+
+        return False
+
     def getRunOptions(self):
         """Command line option for -A and -C to run this test again, called from
         self.dumpSessionInfo()."""
@@ -1232,7 +1889,7 @@ class Base(unittest2.TestCase):
 
     def getstdlibFlag(self):
         """ Returns the proper -stdlib flag, or empty if not required."""
-        if sys.platform.startswith("darwin") or sys.platform.startswith("freebsd"):
+        if self.platformIsDarwin() or self.getPlatform() == "freebsd":
             stdlibflag = "-stdlib=libc++"
         else:
             stdlibflag = ""
@@ -1263,10 +1920,15 @@ class Base(unittest2.TestCase):
                  'LD_EXTRAS' : "%s -Wl,-rpath,%s" % (dsym, self.lib_dir),
                 }
         elif sys.platform.startswith('freebsd') or sys.platform.startswith("linux") or os.environ.get('LLDB_BUILD_TYPE') == 'Makefile':
-            d = {'CXX_SOURCES' : sources, 
+            d = {'CXX_SOURCES' : sources,
                  'EXE' : exe_name,
                  'CFLAGS_EXTRAS' : "%s %s -I%s" % (stdflag, stdlibflag, os.path.join(os.environ["LLDB_SRC"], "include")),
                  'LD_EXTRAS' : "-L%s -llldb" % self.lib_dir}
+        elif sys.platform.startswith('win'):
+            d = {'CXX_SOURCES' : sources,
+                 'EXE' : exe_name,
+                 'CFLAGS_EXTRAS' : "%s %s -I%s" % (stdflag, stdlibflag, os.path.join(os.environ["LLDB_SRC"], "include")),
+                 'LD_EXTRAS' : "-L%s -lliblldb" % self.implib_dir}
         if self.TraceOn():
             print "Building LLDB Driver (%s) from sources %s" % (exe_name, sources)
 
@@ -1277,7 +1939,7 @@ class Base(unittest2.TestCase):
 
         stdflag = self.getstdFlag()
 
-        if sys.platform.startswith("darwin"):
+        if self.platformIsDarwin():
             dsym = os.path.join(self.lib_dir, 'LLDB.framework', 'LLDB')
             d = {'DYLIB_CXX_SOURCES' : sources,
                  'DYLIB_NAME' : lib_name,
@@ -1285,11 +1947,16 @@ class Base(unittest2.TestCase):
                  'FRAMEWORK_INCLUDES' : "-F%s" % self.lib_dir,
                  'LD_EXTRAS' : "%s -Wl,-rpath,%s -dynamiclib" % (dsym, self.lib_dir),
                 }
-        elif sys.platform.startswith('freebsd') or sys.platform.startswith("linux") or os.environ.get('LLDB_BUILD_TYPE') == 'Makefile':
+        elif self.getPlatform() == 'freebsd' or self.getPlatform() == 'linux' or os.environ.get('LLDB_BUILD_TYPE') == 'Makefile':
             d = {'DYLIB_CXX_SOURCES' : sources,
                  'DYLIB_NAME' : lib_name,
                  'CFLAGS_EXTRAS' : "%s -I%s -fPIC" % (stdflag, os.path.join(os.environ["LLDB_SRC"], "include")),
                  'LD_EXTRAS' : "-shared -L%s -llldb" % self.lib_dir}
+        elif self.getPlatform() == 'windows':
+            d = {'DYLIB_CXX_SOURCES' : sources,
+                 'DYLIB_NAME' : lib_name,
+                 'CFLAGS_EXTRAS' : "%s -I%s -fPIC" % (stdflag, os.path.join(os.environ["LLDB_SRC"], "include")),
+                 'LD_EXTRAS' : "-shared -l%s\liblldb.lib" % self.implib_dir}
         if self.TraceOn():
             print "Building LLDB Library (%s) from sources %s" % (lib_name, sources)
 
@@ -1325,14 +1992,41 @@ class Base(unittest2.TestCase):
         if not module.buildDwarf(self, architecture, compiler, dictionary, clean):
             raise Exception("Don't know how to build binary with dwarf")
 
-    def getBuildFlags(self, use_cpp11=True, use_libcxx=False, use_libstdcxx=False, use_pthreads=True):
+    def signBinary(self, binary_path):
+        if sys.platform.startswith("darwin"):
+            codesign_cmd = "codesign --force --sign lldb_codesign %s" % (binary_path)
+            call(codesign_cmd, shell=True)
+
+    def findBuiltClang(self):
+        """Tries to find and use Clang from the build directory as the compiler (instead of the system compiler)."""
+        paths_to_try = [
+          "llvm-build/Release+Asserts/x86_64/Release+Asserts/bin/clang",
+          "llvm-build/Debug+Asserts/x86_64/Debug+Asserts/bin/clang",
+          "llvm-build/Release/x86_64/Release/bin/clang",
+          "llvm-build/Debug/x86_64/Debug/bin/clang",
+        ]
+        lldb_root_path = os.path.join(os.path.dirname(__file__), "..")
+        for p in paths_to_try:
+            path = os.path.join(lldb_root_path, p)
+            if os.path.exists(path):
+                return path
+
+        # Tries to find clang at the same folder as the lldb
+        path = os.path.join(os.path.dirname(lldbtest_config.lldbExec), "clang")
+        if os.path.exists(path):
+            return path
+        
+        return os.environ["CC"]
+
+    def getBuildFlags(self, use_cpp11=True, use_libcxx=False, use_libstdcxx=False):
         """ Returns a dictionary (which can be provided to build* functions above) which
             contains OS-specific build flags.
         """
         cflags = ""
+        ldflags = ""
 
         # On Mac OS X, unless specifically requested to use libstdc++, use libc++
-        if not use_libstdcxx and sys.platform.startswith('darwin'):
+        if not use_libstdcxx and self.platformIsDarwin():
             use_libcxx = True
 
         if use_libcxx and self.libcxxPath:
@@ -1349,13 +2043,10 @@ class Base(unittest2.TestCase):
                 cflags += "c++0x"
             else:
                 cflags += "c++11"
-        if sys.platform.startswith("darwin") or sys.platform.startswith("freebsd"):
+        if self.platformIsDarwin() or self.getPlatform() == "freebsd":
             cflags += " -stdlib=libc++"
         elif "clang" in self.getCompiler():
             cflags += " -stdlib=libstdc++"
-
-        if use_pthreads:
-            ldflags = "-lpthread"
 
         return {'CFLAGS_EXTRAS' : cflags,
                 'LD_EXTRAS' : ldflags,
@@ -1384,7 +2075,7 @@ class Base(unittest2.TestCase):
             return self.lib_dir
 
     def getLibcPlusPlusLibs(self):
-        if sys.platform.startswith('freebsd'):
+        if self.getPlatform() == 'freebsd' or self.getPlatform() == 'linux':
             return ['libc++.so.1']
         else:
             return ['libc++.1.dylib','libc++abi.dylib']
@@ -1509,15 +2200,6 @@ class TestBase(Base):
         if "LLDB_TIME_WAIT_NEXT_LAUNCH" in os.environ:
             self.timeWaitNextLaunch = float(os.environ["LLDB_TIME_WAIT_NEXT_LAUNCH"])
 
-        # Create the debugger instance if necessary.
-        try:
-            self.dbg = lldb.DBG
-        except AttributeError:
-            self.dbg = lldb.SBDebugger.Create()
-
-        if not self.dbg:
-            raise Exception('Invalid debugger instance')
-
         #
         # Warning: MAJOR HACK AHEAD!
         # If we are running testsuite remotely (by checking lldb.lldbtest_remote_sandbox),
@@ -1559,17 +2241,64 @@ class TestBase(Base):
             lldb.pre_flight(self)
 
         if lldb.remote_platform:
-            #remote_test_dir = os.path.join(lldb.remote_platform_working_dir, self.mydir)
-            remote_test_dir = os.path.join(lldb.remote_platform_working_dir, 
-                                           self.getArchitecture(), 
-                                           str(self.test_number), 
-                                           self.mydir)
+            remote_test_dir = lldbutil.join_remote_paths(
+                    lldb.remote_platform_working_dir,
+                    self.getArchitecture(),
+                    str(self.test_number),
+                    self.mydir)
             error = lldb.remote_platform.MakeDirectory(remote_test_dir, 0700)
             if error.Success():
                 lldb.remote_platform.SetWorkingDirectory(remote_test_dir)
             else:
                 print "error: making remote directory '%s': %s" % (remote_test_dir, error)
     
+    def registerSharedLibrariesWithTarget(self, target, shlibs):
+        '''If we are remotely running the test suite, register the shared libraries with the target so they get uploaded, otherwise do nothing
+        
+        Any modules in the target that have their remote install file specification set will
+        get uploaded to the remote host. This function registers the local copies of the
+        shared libraries with the target and sets their remote install locations so they will
+        be uploaded when the target is run.
+        '''
+        if not shlibs or not self.platformContext:
+            return None
+
+        shlib_environment_var = self.platformContext.shlib_environment_var
+        shlib_prefix = self.platformContext.shlib_prefix
+        shlib_extension = '.' + self.platformContext.shlib_extension
+
+        working_dir = self.get_process_working_directory()
+        environment = ['%s=%s' % (shlib_environment_var, working_dir)]
+        # Add any shared libraries to our target if remote so they get
+        # uploaded into the working directory on the remote side
+        for name in shlibs:
+            # The path can be a full path to a shared library, or a make file name like "Foo" for
+            # "libFoo.dylib" or "libFoo.so", or "Foo.so" for "Foo.so" or "libFoo.so", or just a
+            # basename like "libFoo.so". So figure out which one it is and resolve the local copy
+            # of the shared library accordingly
+            if os.path.exists(name):
+                local_shlib_path = name # name is the full path to the local shared library
+            else:
+                # Check relative names
+                local_shlib_path = os.path.join(os.getcwd(), shlib_prefix + name + shlib_extension)
+                if not os.path.exists(local_shlib_path):
+                    local_shlib_path = os.path.join(os.getcwd(), name + shlib_extension)
+                    if not os.path.exists(local_shlib_path):
+                        local_shlib_path = os.path.join(os.getcwd(), name)
+
+                # Make sure we found the local shared library in the above code
+                self.assertTrue(os.path.exists(local_shlib_path))
+
+            # Add the shared library to our target
+            shlib_module = target.AddModule(local_shlib_path, None, None, None)
+            if lldb.remote_platform:
+                # We must set the remote install location if we want the shared library
+                # to get uploaded to the remote target
+                remote_shlib_path = lldbutil.append_to_process_working_directory(os.path.basename(local_shlib_path))
+                shlib_module.SetRemoteInstallFileSpec(lldb.SBFileSpec(remote_shlib_path, False))
+
+        return environment
+
     # utility methods that tests can use to access the current objects
     def target(self):
         if not self.dbg:
@@ -1604,8 +2333,6 @@ class TestBase(Base):
         #import traceback
         #traceback.print_stack()
 
-        Base.tearDown(self)
-
         # Delete the target(s) from the debugger as a general cleanup step.
         # This includes terminating the process for each target, if any.
         # We'd like to reuse the debugger for our next test without incurring
@@ -1625,6 +2352,11 @@ class TestBase(Base):
         if lldb.post_flight:
             lldb.post_flight(self)
 
+        # Do this last, to make sure it's in reverse order from how we setup.
+        Base.tearDown(self)
+
+        # This must be the last statement, otherwise teardown hooks or other
+        # lines might depend on this still being active.
         del self.dbg
 
     def switch_to_thread_with_stop_reason(self, stop_reason):
@@ -1709,8 +2441,9 @@ class TestBase(Base):
                     print >> sbuf, "Command '" + cmd + "' failed!"
 
         if check:
-            self.assertTrue(self.res.Succeeded(),
-                            msg if msg else CMD_MSG(cmd))
+            self.assertTrue(
+                self.res.Succeeded(),
+                cmd_failure_message(cmd, self.res, msg))
 
     def match (self, str, patterns, msg=None, trace=False, error=False, matching=True, exe=True):
         """run command in str, and match the result against regexp in patterns returning the match object for the first matching pattern
