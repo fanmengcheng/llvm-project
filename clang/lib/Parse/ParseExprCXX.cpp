@@ -1126,6 +1126,15 @@ ExprResult Parser::ParseLambdaExpressionAfterIntroducer(
   TemplateParameterDepthRAII CurTemplateDepthTracker(TemplateParameterDepth);
   Actions.PushLambdaScope();    
 
+  ParsedAttributes Attr(AttrFactory);
+  SourceLocation DeclLoc = Tok.getLocation();
+  SourceLocation DeclEndLoc = DeclLoc;
+  if (getLangOpts().CUDA) {
+    // In CUDA code, GNU attributes are allowed to appear immediately after the
+    // "[...]", even if there is no "(...)" before the lambda body.
+    MaybeParseGNUAttributes(Attr, &DeclEndLoc);
+  }
+
   TypeResult TrailingReturnType;
   if (Tok.is(tok::l_paren)) {
     ParseScope PrototypeScope(this,
@@ -1133,13 +1142,11 @@ ExprResult Parser::ParseLambdaExpressionAfterIntroducer(
                               Scope::FunctionDeclarationScope |
                               Scope::DeclScope);
 
-    SourceLocation DeclEndLoc;
     BalancedDelimiterTracker T(*this, tok::l_paren);
     T.consumeOpen();
     SourceLocation LParenLoc = T.getOpenLocation();
 
     // Parse parameter-declaration-clause.
-    ParsedAttributes Attr(AttrFactory);
     SmallVector<DeclaratorChunk::ParamInfo, 16> ParamInfo;
     SourceLocation EllipsisLoc;
     
@@ -1245,12 +1252,10 @@ ExprResult Parser::ParseLambdaExpressionAfterIntroducer(
     Diag(Tok, diag::err_lambda_missing_parens)
       << TokKind
       << FixItHint::CreateInsertion(Tok.getLocation(), "() ");
-    SourceLocation DeclLoc = Tok.getLocation();
-    SourceLocation DeclEndLoc = DeclLoc;
+    DeclEndLoc = DeclLoc;
 
     // GNU-style attributes must be parsed before the mutable specifier to be
     // compatible with GCC.
-    ParsedAttributes Attr(AttrFactory);
     MaybeParseGNUAttributes(Attr, &DeclEndLoc);
 
     // Parse 'mutable', if it's there.
@@ -1296,8 +1301,35 @@ ExprResult Parser::ParseLambdaExpressionAfterIntroducer(
                                                DeclLoc, DeclEndLoc, D,
                                                TrailingReturnType),
                   Attr, DeclEndLoc);
+  } else if (getLangOpts().CUDA) {
+    // CUDA code may have attributes, which we need to add if they weren't added
+    // in one of the if statements above.
+    SourceLocation NoLoc;
+    D.AddTypeInfo(DeclaratorChunk::getFunction(/*hasProto=*/true,
+                                               /*isAmbiguous=*/false,
+                                               /*LParenLoc=*/NoLoc,
+                                               /*Params=*/nullptr,
+                                               /*NumParams=*/0,
+                                               /*EllipsisLoc=*/NoLoc,
+                                               /*RParenLoc=*/NoLoc,
+                                               /*TypeQuals=*/0,
+                                               /*RefQualifierIsLValueRef=*/true,
+                                               /*RefQualifierLoc=*/NoLoc,
+                                               /*ConstQualifierLoc=*/NoLoc,
+                                               /*VolatileQualifierLoc=*/NoLoc,
+                                               /*RestrictQualifierLoc=*/NoLoc,
+                                               /*MutableLoc=*/NoLoc,
+                                               EST_None,
+                                               /*ESpecRange=*/SourceRange(),
+                                               /*Exceptions=*/nullptr,
+                                               /*ExceptionRanges=*/nullptr,
+                                               /*NumExceptions=*/0,
+                                               /*NoexceptExpr=*/nullptr,
+                                               /*ExceptionSpecTokens=*/nullptr,
+                                               DeclLoc, DeclEndLoc, D,
+                                               TrailingReturnType),
+                  Attr, DeclEndLoc);
   }
-  
 
   // FIXME: Rename BlockScope -> ClosureScope if we decide to continue using
   // it.
