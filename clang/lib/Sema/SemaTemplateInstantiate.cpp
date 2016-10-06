@@ -2190,6 +2190,8 @@ bool Sema::InstantiateInClassInitializer(
              Pattern->getInClassInitStyle() &&
          "pattern and instantiation disagree about init style");
 
+  // XXX here?
+
   // Error out if we haven't parsed the initializer of the pattern yet because
   // we are waiting for the closing brace of the outer class.
   Expr *OldInit = Pattern->getInClassInitializer();

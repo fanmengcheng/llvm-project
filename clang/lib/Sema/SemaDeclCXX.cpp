@@ -12305,6 +12305,8 @@ Sema::BuildCXXConstructExpr(SourceLocation ConstructLoc, QualType DeclInitType,
 ExprResult Sema::BuildCXXDefaultInitExpr(SourceLocation Loc, FieldDecl *Field) {
   assert(Field->hasInClassInitializer());
 
+  // XXX Here??
+
   // If we already have the in-class initializer nothing needs to be done.
   if (Field->getInClassInitializer())
     return CXXDefaultInitExpr::Create(Context, Loc, Field);
