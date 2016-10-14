@@ -326,20 +326,29 @@ bool Sema::inferCUDATargetForImplicitSpecialMember(CXXRecordDecl *ClassDecl,
     }
   }
 
+  auto AddHostAttr = [&] {
+    if (!MemberDecl->hasAttr<CUDAHostAttr>())
+      MemberDecl->addAttr(CUDAHostAttr::CreateImplicit(Context));
+  };
+  auto AddDeviceAttr = [&] {
+    if (!MemberDecl->hasAttr<CUDADeviceAttr>())
+      MemberDecl->addAttr(CUDADeviceAttr::CreateImplicit(Context));
+  };
+
   if (InferredTarget.hasValue()) {
     if (InferredTarget.getValue() == CFT_Device) {
-      MemberDecl->addAttr(CUDADeviceAttr::CreateImplicit(Context));
+      AddDeviceAttr();
     } else if (InferredTarget.getValue() == CFT_Host) {
-      MemberDecl->addAttr(CUDAHostAttr::CreateImplicit(Context));
+      AddHostAttr();
     } else {
-      MemberDecl->addAttr(CUDADeviceAttr::CreateImplicit(Context));
-      MemberDecl->addAttr(CUDAHostAttr::CreateImplicit(Context));
+      AddHostAttr();
+      AddDeviceAttr();
     }
   } else {
     // If no target was inferred, mark this member as __host__ __device__;
     // it's the least restrictive option that can be invoked from any target.
-    MemberDecl->addAttr(CUDADeviceAttr::CreateImplicit(Context));
-    MemberDecl->addAttr(CUDAHostAttr::CreateImplicit(Context));
+    AddHostAttr();
+    AddDeviceAttr();
   }
 
   return false;
