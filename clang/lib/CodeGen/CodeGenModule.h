@@ -1022,6 +1022,10 @@ public:
                               CGCalleeInfo CalleeInfo, AttributeListType &PAL,
                               unsigned &CallingConv, bool AttrOnCallSite);
 
+  /// Adds attributes to F according to our CodeGenOptions and LangOptions, as
+  /// though we had emitted it ourselves.
+  void AddDefaultFnAttrs(llvm::Function &F);
+
   // Fills in the supplied string map with the set of target features for the
   // passed in function.
   void getFunctionFeatureMap(llvm::StringMap<bool> &FeatureMap,
@@ -1304,6 +1308,12 @@ private:
   /// Check whether we can use a "simpler", more core exceptions personality
   /// function.
   void SimplifyPersonality();
+
+  /// Helper function for ConstructAttributeList and AddDefaultFnAttrs.
+  /// Constructs an AttrList for a function with the given properties.
+  void ConstructDefaultFnAttrList(StringRef Name, bool HasOptnone,
+                                  bool AttrOnCallSite,
+                                  llvm::AttrBuilder &FuncAttrs);
 };
 }  // end namespace CodeGen
 }  // end namespace clang
