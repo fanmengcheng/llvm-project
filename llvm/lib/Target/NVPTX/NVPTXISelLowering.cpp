@@ -1041,6 +1041,43 @@ NVPTXTargetLowering::getPreferredVectorAction(EVT VT) const {
   return TargetLoweringBase::getPreferredVectorAction(VT);
 }
 
+SDValue NVPTXTargetLowering::getSqrtEstimate(SDValue Operand, SelectionDAG &DAG,
+                                             int Enabled, int &ExtraSteps,
+                                             bool &UseOneConst,
+                                             bool Reciprocal) const {
+  if (!(Enabled == ReciprocalEstimate::Enabled ||
+        (Enabled == ReciprocalEstimate::Unspecified && !usePrecSqrtF32())))
+    return SDValue();
+
+  EVT VT = Operand.getValueType();
+  bool Ftz = useF32FTZ(DAG.getMachineFunction());
+  unsigned IID;
+  if (Reciprocal) {
+    if (VT == MVT::f32)
+      IID = Ftz ? Intrinsic::nvvm_rsqrt_approx_ftz_f
+                : Intrinsic::nvvm_rsqrt_approx_f;
+    else if (VT == MVT::f64)
+      IID = Intrinsic::nvvm_rsqrt_approx_d;
+    else
+      return SDValue();
+  } else {
+    if (VT == MVT::f32)
+      IID = Ftz ? Intrinsic::nvvm_sqrt_approx_ftz_f
+                : Intrinsic::nvvm_sqrt_approx_f;
+    else
+      return SDValue();
+  }
+
+  // TODO: We should probably lower approx sqrt(f64) as 1/rsqrt.
+
+  if (ExtraSteps == ReciprocalEstimate::Unspecified)
+    ExtraSteps = 0;
+
+  SDLoc DL(Operand);
+  return DAG.getNode(ISD::INTRINSIC_WO_CHAIN, DL, VT,
+                     DAG.getConstant(IID, DL, MVT::i32), Operand);
+}
+
 SDValue
 NVPTXTargetLowering::LowerGlobalAddress(SDValue Op, SelectionDAG &DAG) const {
   SDLoc dl(Op);
