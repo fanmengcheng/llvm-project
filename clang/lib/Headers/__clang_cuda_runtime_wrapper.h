@@ -100,10 +100,46 @@
 #undef __CUDACC__
 #define __CUDABE__
 
-// CUDA headers use __nvvm_memcpy and __nvvm_memset which Clang does
-// not have at the moment. Emulate them with a builtin memcpy/memset.
+// CUDA headers use __nvvm_memcpy and __nvvm_memset, which Clang does not have
+// at the moment. Emulate them with a builtin memcpy/memset.
 #define __nvvm_memcpy(s, d, n, a) __builtin_memcpy(s, d, n)
 #define __nvvm_memset(d, c, n, a) __builtin_memset(d, c, n)
+
+// The following NVVM builtins have been removed from clang and LLVM entirely,
+// as they correspond exactly to existing clang builtins.  They're emulated here
+// so we don't break the CUDA headers (and any user code that might have used
+// them).
+#define __nvvm_brev32(__a) __builtin_bitreverse32(__a)
+#define __nvvm_brev64(__a) __builtin_bitreverse64(__a)
+#define __nvvm_clz_i(__a) __builtin_ctlz(__a)
+#define __nvvm_clz_ll(__a) __builtin_ctlzll(__a)
+#define __nvvm_popc_i(__a) __builtin_popcount(__a)
+#define __nvvm_popc_ll(__a) __builtin_popcountll(__a)
+#define __nvvm_abs_i(__a) __builtin_abs(__a)
+#define __nvvm_abs_ll(__a) __builtin_llabs(__a)
+inline int __nvvm_max_i(int __a, int __b) { return __a >= __b ? __a : __b; }
+inline unsigned int __nvvm_max_ui(unsigned int __a, unsigned int __b) {
+  return __a >= __b ? __a : __b;
+}
+inline long long __nvvm_max_i(long long __a, long long __b) {
+  return __a >= __b ? __a : __b;
+}
+inline unsigned long long __nvvm_max_ui(unsigned long long __a,
+                                        unsigned long long __b) {
+  return __a >= __b ? __a : __b;
+}
+inline int __nvvm_min_i(int __a, int __b) { return __a < __b ? __a : __b; }
+inline unsigned int __nvvm_min_ui(unsigned int __a, unsigned int __b) {
+  return __a < __b ? __a : __b;
+}
+inline long long __nvvm_min_i(long long __a, long long __b) {
+  return __a < __b ? __a : __b;
+}
+inline unsigned long long __nvvm_min_ui(unsigned long long __a,
+                                        unsigned long long __b) {
+  return __a < __b ? __a : __b;
+}
+inline float __nvvm_h2f(short __a) __asm("llvm.convert.from.fp16");
 
 #include "crt/device_runtime.h"
 #include "crt/host_runtime.h"

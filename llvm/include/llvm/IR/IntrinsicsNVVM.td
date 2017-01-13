@@ -18,16 +18,6 @@ def llvm_anyi64ptr_ty     : LLVMAnyPointerType<llvm_i64_ty>;     // (space)i64*
 //
 
 let TargetPrefix = "nvvm" in {
-  def int_nvvm_clz_i : GCCBuiltin<"__nvvm_clz_i">,
-      Intrinsic<[llvm_i32_ty], [llvm_i32_ty], [IntrNoMem]>;
-  def int_nvvm_clz_ll : GCCBuiltin<"__nvvm_clz_ll">,
-      Intrinsic<[llvm_i32_ty], [llvm_i64_ty], [IntrNoMem]>;
-
-  def int_nvvm_popc_i : GCCBuiltin<"__nvvm_popc_i">,
-      Intrinsic<[llvm_i32_ty], [llvm_i32_ty], [IntrNoMem]>;
-  def int_nvvm_popc_ll : GCCBuiltin<"__nvvm_popc_ll">,
-      Intrinsic<[llvm_i32_ty], [llvm_i64_ty], [IntrNoMem]>;
-
   def int_nvvm_prmt : GCCBuiltin<"__nvvm_prmt">,
       Intrinsic<[llvm_i32_ty], [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
         [IntrNoMem, Commutative]>;
@@ -35,34 +25,6 @@ let TargetPrefix = "nvvm" in {
 //
 // Min Max
 //
-
-  def int_nvvm_min_i : GCCBuiltin<"__nvvm_min_i">,
-      Intrinsic<[llvm_i32_ty], [llvm_i32_ty, llvm_i32_ty],
-        [IntrNoMem, Commutative]>;
-  def int_nvvm_min_ui : GCCBuiltin<"__nvvm_min_ui">,
-      Intrinsic<[llvm_i32_ty], [llvm_i32_ty, llvm_i32_ty],
-        [IntrNoMem, Commutative]>;
-
-  def int_nvvm_min_ll : GCCBuiltin<"__nvvm_min_ll">,
-      Intrinsic<[llvm_i64_ty], [llvm_i64_ty, llvm_i64_ty],
-        [IntrNoMem, Commutative]>;
-  def int_nvvm_min_ull : GCCBuiltin<"__nvvm_min_ull">,
-      Intrinsic<[llvm_i64_ty], [llvm_i64_ty, llvm_i64_ty],
-        [IntrNoMem, Commutative]>;
-
-  def int_nvvm_max_i : GCCBuiltin<"__nvvm_max_i">,
-      Intrinsic<[llvm_i32_ty], [llvm_i32_ty, llvm_i32_ty],
-        [IntrNoMem, Commutative]>;
-  def int_nvvm_max_ui : GCCBuiltin<"__nvvm_max_ui">,
-      Intrinsic<[llvm_i32_ty], [llvm_i32_ty, llvm_i32_ty],
-        [IntrNoMem, Commutative]>;
-
-  def int_nvvm_max_ll : GCCBuiltin<"__nvvm_max_ll">,
-      Intrinsic<[llvm_i64_ty], [llvm_i64_ty, llvm_i64_ty],
-        [IntrNoMem, Commutative]>;
-  def int_nvvm_max_ull : GCCBuiltin<"__nvvm_max_ull">,
-      Intrinsic<[llvm_i64_ty], [llvm_i64_ty, llvm_i64_ty],
-        [IntrNoMem, Commutative]>;
 
   def int_nvvm_fmin_f : GCCBuiltin<"__nvvm_fmin_f">,
       Intrinsic<[llvm_float_ty], [llvm_float_ty, llvm_float_ty],
@@ -201,15 +163,6 @@ let TargetPrefix = "nvvm" in {
         [IntrNoMem, Commutative]>;
 
 //
-// Brev
-//
-
-  def int_nvvm_brev32 : GCCBuiltin<"__nvvm_brev32">,
-      Intrinsic<[llvm_i32_ty], [llvm_i32_ty], [IntrNoMem]>;
-  def int_nvvm_brev64 : GCCBuiltin<"__nvvm_brev64">,
-      Intrinsic<[llvm_i64_ty], [llvm_i64_ty], [IntrNoMem]>;
-
-//
 // Sad
 //
 
@@ -242,16 +195,10 @@ let TargetPrefix = "nvvm" in {
 // Abs
 //
 
-  def int_nvvm_abs_i : GCCBuiltin<"__nvvm_abs_i">,
-      Intrinsic<[llvm_i32_ty], [llvm_i32_ty], [IntrNoMem]>;
-  def int_nvvm_abs_ll : GCCBuiltin<"__nvvm_abs_ll">,
-      Intrinsic<[llvm_i64_ty], [llvm_i64_ty], [IntrNoMem]>;
-
   def int_nvvm_fabs_ftz_f : GCCBuiltin<"__nvvm_fabs_ftz_f">,
       Intrinsic<[llvm_float_ty], [llvm_float_ty], [IntrNoMem]>;
   def int_nvvm_fabs_f : GCCBuiltin<"__nvvm_fabs_f">,
       Intrinsic<[llvm_float_ty], [llvm_float_ty], [IntrNoMem]>;
-
   def int_nvvm_fabs_d : GCCBuiltin<"__nvvm_fabs_d">,
       Intrinsic<[llvm_double_ty], [llvm_double_ty], [IntrNoMem]>;
 
