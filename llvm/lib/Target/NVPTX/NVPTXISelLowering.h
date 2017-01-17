@@ -510,6 +510,11 @@ public:
   TargetLoweringBase::LegalizeTypeAction
   getPreferredVectorAction(EVT VT) const override;
 
+  // XXX comments
+  int getDivF32Level() const;
+  bool usePrecSqrtF32() const;
+  bool useF32FTZ(const MachineFunction &MF) const;
+
   bool allowFMA(MachineFunction &MF, CodeGenOpt::Level OptLevel) const;
   bool allowUnsafeFPMath(MachineFunction &MF) const;
 
