@@ -10061,10 +10061,8 @@ Overview:
 
 The '``llvm.sqrt``' intrinsics return the sqrt of the specified operand,
 returning the same value as the libm '``sqrt``' functions would. Unlike
-``sqrt`` in libm, however, ``llvm.sqrt`` has undefined behavior for
-negative numbers other than -0.0 (which allows for better optimization,
-because there is no need to worry about errno being set).
-``llvm.sqrt(-0.0)`` is defined to return -0.0 like IEEE sqrt.
+``sqrt`` in libm, however, ``llvm.sqrt`` returns ``undef`` for negative numbers
+other than -0.0.  ``llvm.sqrt(-0.0)`` is defined to return -0.0 like IEEE sqrt.
 
 Arguments:
 """"""""""
